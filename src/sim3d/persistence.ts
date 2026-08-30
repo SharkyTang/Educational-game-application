@@ -1,9 +1,12 @@
-import { createInitialSimState, validateSimState, type SimState } from "./domain";
+import { createFirstDayState, migrateLegacySimState, validateLegacySimState, validateSimState, type SimState } from "./domain";
 
 /** Deliberately separate from the older 2D storage namespace; never migrate/delete it. */
-export const SIM_STORAGE_KEY = "english-high-street:sim3d:v3";
+export const SIM_STORAGE_KEY = "english-high-street:sim3d:v4";
 export const SIM_BACKUP_KEY = `${SIM_STORAGE_KEY}:backup`;
 export const SIM_WRITER_LOCK = `${SIM_STORAGE_KEY}:writer`;
+/** These old keys are read-only migration sources, never overwritten or removed. */
+export const SIM_LEGACY_STORAGE_KEY = "english-high-street:sim3d:v3";
+export const SIM_LEGACY_BACKUP_KEY = `${SIM_LEGACY_STORAGE_KEY}:backup`;
 
 export interface StorageLike {
   getItem(key: string): string | null;
@@ -12,7 +15,7 @@ export interface StorageLike {
 
 export interface SimLoadResult {
   state: SimState;
-  source: "primary" | "backup" | "new";
+  source: "primary" | "backup" | "legacy" | "legacy-backup" | "new";
   warning?: string;
 }
 
@@ -51,14 +54,22 @@ function parseSnapshot(raw: string | null): SimState | undefined {
   }
 }
 
+function parseLegacySnapshot(raw: string | null): SimState | undefined {
+  if (raw === null) return undefined;
+  try {
+    const value: unknown = JSON.parse(raw);
+    return validateLegacySimState(value) ? migrateLegacySimState(value) : undefined;
+  } catch { return undefined }
+}
+
 /** Read-only recovery: retain corrupt snapshots for diagnosis until the next explicit save. */
 export function loadSimState(storage: StorageLike = browserStorage()): SimLoadResult {
   // Storage access errors are not hidden: the caller must tell the player saves are unavailable.
   const primaryRaw = storage.getItem(SIM_STORAGE_KEY);
-  return loadSnapshot(primaryRaw, storage.getItem(SIM_BACKUP_KEY));
+  return loadSnapshot(primaryRaw, storage.getItem(SIM_BACKUP_KEY), storage.getItem(SIM_LEGACY_STORAGE_KEY), storage.getItem(SIM_LEGACY_BACKUP_KEY));
 }
 
-function loadSnapshot(primaryRaw: string | null, backupRaw: string | null): SimLoadResult {
+function loadSnapshot(primaryRaw: string | null, backupRaw: string | null, legacyRaw: string | null, legacyBackupRaw: string | null): SimLoadResult {
   const primary = parseSnapshot(primaryRaw);
   if (primary) return { state: primary, source: "primary" };
 
@@ -68,11 +79,17 @@ function loadSnapshot(primaryRaw: string | null, backupRaw: string | null): SimL
     source: "backup",
     warning: "当前存档不可用，已恢复上一份有效快照；最近一次操作可能需要重做。",
   };
+  const legacy = parseLegacySnapshot(legacyRaw);
+  const legacyBackup = legacy ? undefined : parseLegacySnapshot(legacyBackupRaw);
+  if (legacy || legacyBackup) return {
+    state: (legacy ?? legacyBackup)!, source: legacy ? "legacy" : "legacy-backup",
+    warning: `${primaryRaw !== null || backupRaw !== null ? "当前首日存档不可恢复，已回到保留的旧 3D 进度；之后的采购与营业进度可能丢失。" : legacyBackup ? "旧 3D 主存档不可用，已从旧备份迁移；最近一次操作可能需要重做。" : "已迁移旧 3D 试玩进度。"}货物、现金和交易均保留，旧档未修改；不会额外发放首日本金。`,
+  };
   return {
-    state: createInitialSimState(),
+    state: createFirstDayState(),
     source: "new",
-    ...(primaryRaw !== null || backupRaw !== null
-      ? { warning: "没有找到可恢复的有效 3D 存档，已开启新的试玩；旧存档未被删除。" }
+    ...(primaryRaw !== null || backupRaw !== null || legacyRaw !== null || legacyBackupRaw !== null
+      ? { warning: "没有找到可恢复的有效 3D 存档，已开启新的首日；旧存档未被删除。" }
       : {}),
   };
 }
@@ -83,8 +100,9 @@ export function parseImportedSimState(raw: string): SimState {
   let value: unknown;
   try { value = JSON.parse(raw) }
   catch { throw new Error("文件不是可读取的 JSON，当前进度未改变。") }
-  if (!validateSimState(value)) throw new Error("存档的版本、库存或金额校验未通过，当前进度未改变。旧版 2D 存档不能直接导入此小样。");
-  return value;
+  if (validateSimState(value)) return value;
+  if (validateLegacySimState(value)) return migrateLegacySimState(value);
+  throw new Error("存档的版本、库存或金额校验未通过，当前进度未改变。旧版 2D 存档不能直接导入此小样。");
 }
 
 /**
@@ -95,6 +113,7 @@ export class SimSaveSession {
   private writable = false;
   private loaded = false;
   private expectedRaw: string | null = null;
+  private expectedLegacy: { primary: string | null; backup: string | null } | null = null;
   private releaseLock: (() => void) | null = null;
   private resolveAdmission: ((allowed: boolean) => void) | null = null;
   private requesting: Promise<boolean> | null = null;
@@ -153,8 +172,10 @@ export class SimSaveSession {
   /** Refresh only while intentionally acquiring/continuing, never silently merge live inventory. */
   load(): SimLoadResult {
     const raw = this.storage.getItem(SIM_STORAGE_KEY);
-    const result = loadSnapshot(raw, this.storage.getItem(SIM_BACKUP_KEY));
+    const legacy = { primary: this.storage.getItem(SIM_LEGACY_STORAGE_KEY), backup: this.storage.getItem(SIM_LEGACY_BACKUP_KEY) };
+    const result = loadSnapshot(raw, this.storage.getItem(SIM_BACKUP_KEY), legacy.primary, legacy.backup);
     this.expectedRaw = raw;
+    this.expectedLegacy = result.source === "legacy" || result.source === "legacy-backup" ? legacy : null;
     this.loaded = true;
     return result;
   }
@@ -166,12 +187,18 @@ export class SimSaveSession {
       this.release();
       throw new SimSaveConflictError();
     }
+    if (this.expectedLegacy && (this.storage.getItem(SIM_LEGACY_STORAGE_KEY) !== this.expectedLegacy.primary
+      || this.storage.getItem(SIM_LEGACY_BACKUP_KEY) !== this.expectedLegacy.backup)) {
+      this.release();
+      throw new SimSaveConflictError("旧版试玩页面刚刚修改了迁移源，已停止写入。请关闭旧页面后重新读取进度再迁移。");
+    }
   }
 
   save(state: SimState): void {
     this.assertCurrent();
     saveSimState(state, this.storage);
     this.expectedRaw = JSON.stringify(state);
+    this.expectedLegacy = null;
   }
 
   /** A storage event from another page freezes this page before its next interaction. */
@@ -187,6 +214,7 @@ export class SimSaveSession {
     this.generation += 1;
     this.writable = false;
     this.loaded = false;
+    this.expectedLegacy = null;
     this.resolveAdmission?.(false);
     this.resolveAdmission = null;
     this.requesting = null;

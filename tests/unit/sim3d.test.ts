@@ -5,6 +5,7 @@ import {
   canUnlockAdvancedUpgrade,
   capacityFor,
   countAt,
+  createFirstDayState,
   createInitialSimState,
   getCheckoutTotal,
   getObjective,
@@ -284,9 +285,14 @@ describe("3D customer, scanning and transactional payment", () => {
     expectConserved(state);
   });
 
-  it("never replenishes automatically between customers or after selling all eight goods", () => {
+  it("never replenishes automatically between customers, across days or after selling all eight legacy goods", () => {
     let state = stockAll();
     for (let customer = 1; customer <= 4; customer += 1) {
+      if (customer === 4) {
+        expect(reduceSim(state, { type: "NEXT_CUSTOMER" }).changed).toBe(false);
+        state = act(state, { type: "SETTLE_DAY" });
+        state = act(state, { type: "START_NEXT_DAY" });
+      }
       state = completeSale(state);
       expect(state.customer.number).toBe(customer);
       expect(countAt(state, "milk", "sold")).toBe(customer);
@@ -296,7 +302,7 @@ describe("3D customer, scanning and transactional payment", () => {
     expect(state.cashPence).toBe(1600);
     expect(reduceSim(state, { type: "NEXT_CUSTOMER" }).changed).toBe(false);
     expect(reduceSim(state, { type: "TAKE_ITEM", itemId: "milk-1" }).changed).toBe(false);
-    expect(getObjective(state)).toContain("售完");
+    expect(getObjective(state)).toContain("订购");
   });
 
   it("ordinary capacity upgrade uses money only, costs exactly once and creates no stock", () => {
@@ -381,7 +387,7 @@ describe("3D isolated local snapshots and recovery", () => {
   it("cold-starts without touching legacy saves and round-trips the whole held world", () => {
     const storage = new MemoryStorage();
     storage.data.set("legacy-2d-save", "do-not-touch");
-    expect(loadSimState(storage)).toEqual({ state: createInitialSimState(), source: "new" });
+    expect(loadSimState(storage)).toEqual({ state: createFirstDayState(), source: "new" });
     let state = act(createInitialSimState(), { type: "PICK_CRATE", crateId: "milk-crate" });
     state = act(state, { type: "STOCK", productId: "milk", slot: 0 });
     state = act(state, { type: "SAVE_POSE", pose: { x: 0, z: 2.2, yaw: 0.5, pitch: 0.1 } });

@@ -58,7 +58,7 @@
 .s3-guide:empty { display: none; }
 .s3-reticle { position: absolute; top: 50%; left: 50%; width: 5px; height: 5px; border: 1px solid #fffdef; border-radius: 50%; background: #fffde8cf; box-shadow: 0 0 3px 1px #263d3566; transform: translate(-50%, -50%); }
 .s3-reticle-active { width: 11px; height: 11px; border-width: 2px; background: transparent; }
-.s3-capture { position: absolute; top: 23%; left: 50%; display: flex; flex-direction: column; gap: 3px; align-items: center; min-height: 45px; padding: 9px 18px; border: 1px solid #ecebd99c; border-radius: 6px; color: #fffced; background: #294437e8; transform: translateX(-50%); pointer-events: auto; font-size: 13px !important; white-space: nowrap; }
+.s3-capture { display: inline-flex; gap: 9px; align-items: center; min-height: 32px; margin-bottom: 6px; padding: 5px 12px; border: 1px solid #ecebd99c; border-radius: 6px; color: #fffced; background: #294437e8; pointer-events: auto; font-size: 11px !important; }
 .s3-capture span { opacity: 0.75; font-size: 10px; }
 .s3-action-area { position: absolute; bottom: 38px; left: 50%; width: max-content; max-width: calc(100% - 32px); transform: translateX(-50%); text-align: center; pointer-events: auto; }
 .s3-held { display: inline-block; margin-bottom: 8px !important; padding: 5px 12px; border-radius: 5px; color: #fffbea; background: #233d31e8; font-size: 11px; }
@@ -88,6 +88,14 @@
 .s3-receipt-total { display: flex; justify-content: space-between; align-items: center; margin: 2px 0 9px; padding-top: 11px; border-top: 1px dashed #afb79c; }
 .s3-receipt-total strong { font-family: Georgia, "Times New Roman", serif; font-size: 22px; font-weight: 500; }
 .s3-receipt .s3-muted { font-size: 10px; }
+.s3-customer-actions { display: flex; flex-wrap: wrap; gap: 6px; margin: 9px 0 5px; }
+.s3-customer-actions .s3-secondary-button { min-height: 36px; padding: 6px 10px; font-size: 11px !important; gap: 5px; }
+#s3-customer-audio-status { margin-bottom: 10px; }
+.s3-business-nav { display: flex; gap: 5px; margin-top: 8px; }
+.s3-business-nav button { flex: 1; display: inline-flex; justify-content: center; align-items: center; gap: 5px; min-height: 37px; padding: 6px 7px; border: 1px solid #d6dac7; border-radius: 5px; background: #fff9edef; color: #31503f; font-size: 11px; white-space: nowrap; }
+.s3-business-nav kbd { padding: 0 3px; font-size: 9px; }
+.s3-business-nav button:hover { background: #e4ecd6; }
+.s3-business-nav .s3-upgrade-ready { border-color: #aa8033; background: #f9e7b8; color: #674719; }
 
 .s3-start { position: absolute; inset: 0; display: flex; align-items: center; padding: 36px clamp(24px, 5vw, 90px); background: #1c34261a; }
 .s3-start-card { width: min(440px, 100%); padding: 29px 32px 24px; border: 1px solid #faf6e18a; border-radius: 12px; background: #fff9edea; box-shadow: 0 12px 50px #173b2421; }
@@ -137,6 +145,25 @@
 .s3-pause-heading .s3-primary-button { flex-shrink: 0; }
 .s3-pause-alert { margin-top: 12px !important; padding: 10px 12px; border: 1px solid #cf987f; border-radius: 5px; color: #793e2d; background: #f8e4d5; font-size: 11px; line-height: 1.7; }
 .s3-pause-notice { margin-top: 12px !important; padding: 10px 12px; border: 1px solid #c1cfac; border-radius: 5px; color: #395c3e; background: #e7eddb; font-size: 11px; line-height: 1.7; }
+.s3-management-tabs { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 6px; margin: 18px 0 15px; padding: 5px; border: 1px solid #d2d8c2; border-radius: 8px; background: #eaf0df; }
+.s3-management-tabs button { min-height: 38px; padding: 6px 8px; border: 1px solid transparent; border-radius: 5px; color: #5a6c55; background: transparent; font-size: 12px; }
+.s3-management-tabs button[aria-pressed="true"] { border-color: #d0d7bf; color: #2f503b; background: #fffdf2; box-shadow: 0 2px 5px #2941310d; font-weight: 650; }
+.s3-management-panel { padding: 17px 19px 18px; border: 1px solid #d9ddc9; border-radius: 8px; background: #fffdf5; }
+.s3-management-panel h3 { margin: 4px 0 11px; font-size: 20px; font-weight: 600; letter-spacing: -0.02em; }
+.s3-purchase-options { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; margin: 16px 0; }
+.s3-purchase-options button { min-height: 69px; padding: 9px 6px; border: 1px solid #cdd5bd; border-radius: 6px; color: #3a5b40; background: #f5f7ec; font-size: 16px; font-weight: 600; }
+.s3-purchase-options small { display: block; margin-top: 4px; font-size: 10px; font-weight: 400; }
+.s3-purchase-options button[aria-pressed="true"] { border: 2px solid #45684a; padding: 8px 5px; background: #e5edd8; }
+.s3-account-lines { margin: 15px 0; font-size: 12px; }
+.s3-account-lines > div { display: flex; justify-content: space-between; gap: 18px; padding: 8px 0; border-bottom: 1px solid #e2e5d6; }
+.s3-account-lines dt { color: #6f7c63; }
+.s3-account-lines dd { margin: 0; color: #2d5036; font-variant-numeric: tabular-nums; text-align: right; }
+.s3-account-lines .s3-account-result { margin: 5px 0; border-bottom-color: #afc3a0; font-size: 15px; font-weight: 650; }
+.s3-inline-reason { margin: 11px 0 13px !important; color: #6e6644; font-size: 11px; line-height: 1.8; }
+.s3-capacity-comparison { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin: 20px 0; padding: 18px 12px; border-radius: 7px; color: #566b4a; background: #edf1e2; font-size: 11px; }
+.s3-capacity-comparison strong { padding: 0 4px; color: #315439; font: 400 32px/1.1 Georgia, serif; }
+.s3-capacity-complete { justify-content: center; }
+.s3-upgrade-badge { display: inline-block; margin-left: 12px; color: #6a7d5c; font-size: 11px; }
 .s3-pause-section { margin-top: 14px; border-top: 1px solid #d6dac7; }
 .s3-pause-section summary { display: flex; align-items: center; justify-content: space-between; padding: 13px 0; font-size: 13px; font-weight: 600; cursor: pointer; }
 .s3-pause-section summary::after { content: "展开"; margin-left: auto; padding-left: 9px; color: #7e8672; font-size: 10px; font-weight: 400; }
@@ -191,14 +218,19 @@
   .s3-wallet { min-width: 85px; padding: 7px 10px; }
   .s3-wallet strong { font-size: 23px; }
   .s3-wallet > span:last-child { font-size: 9px; }
-  .s3-guide { top: 177px; max-width: calc(100% - 44px); font-size: 10px; }
-  .s3-capture { top: 30%; max-width: calc(100% - 40px); }
+  .s3-guide { top: 230px; max-width: calc(100% - 44px); font-size: 10px; }
   .s3-receipt { top: 112px; right: 15px; width: 195px; max-height: 35vh; overflow-y: auto; }
   .s3-receipt summary { padding: 9px 11px; font-size: 11px; }
   .s3-receipt-body { padding: 1px 11px 10px; }
   .s3-receipt-row { gap: 4px; }
   .s3-receipt-row strong { font-size: 11px; }
   .s3-customer-line { font-size: 15px; }
+  .s3-business-nav { flex-wrap: wrap; gap: 4px; }
+  .s3-business-nav button { min-height: 32px; padding: 5px 7px; font-size: 10px; }
+  .s3-customer-actions { gap: 5px; }
+  .s3-customer-actions .s3-secondary-button { min-height: 34px; padding: 5px 8px; font-size: 10px !important; }
+  .s3-management-panel { padding: 15px; }
+  .s3-management-panel h3 { font-size: 18px; }
   .s3-action-area { bottom: 32px; max-width: calc(100% - 24px); }
   .s3-action-card { padding: 7px 8px 8px; }
   .s3-action-buttons { gap: 5px; }
@@ -237,6 +269,9 @@
   .s3-pause-heading h2 { font-size: 20px; }
   .s3-pause-heading .s3-primary-button { min-height: 38px; padding: 8px 12px; font-size: 11px !important; }
   .s3-settings-grid { grid-template-columns: 1fr 128px; }
+  .s3-purchase-options { gap: 5px; }
+  .s3-purchase-options small { font-size: 9px; }
+  .s3-management-tabs button { padding: 6px 4px; font-size: 11px; }
 }
 
 /* In the narrow Codex side panel, keep the physical product above its word card. */

@@ -1,7 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createInitialSimState, reduceSim, type PlayerPose, type SimState } from "../../src/sim3d/domain";
+import { capacityFor, countAt, createFirstDayState, createInitialSimState, reduceSim, validateSimState, type PlayerPose, type SimCommand, type SimState } from "../../src/sim3d/domain";
 import { SIM_BACKUP_KEY, SIM_STORAGE_KEY, type SimLockManager, type StorageLike } from "../../src/sim3d/persistence";
 import type { WorldCallbacks } from "../../src/sim3d/world";
+import { SPEECH_CLIPS } from "../../src/sim3d/speechClips";
 
 const doubles = vi.hoisted(() => {
   class World {
@@ -17,6 +18,7 @@ const doubles = vi.hoisted(() => {
     readonly setReducedMotion = vi.fn();
     readonly inspect = vi.fn();
     readonly requestPointerLock = vi.fn();
+    readonly setCursorFree = vi.fn();
     readonly setState = vi.fn();
     readonly restorePose = vi.fn();
     constructor(_canvas: HTMLCanvasElement, state: SimState, callbacks: WorldCallbacks) {
@@ -59,20 +61,32 @@ class ElementDouble extends EventTarget {
   open = false;
   checked = false;
   value = "";
-  src = "";
+  private source = "";
   volume = 1;
+  muted = false;
+  defaultPlaybackRate = 1;
+  playbackRate = 1;
   currentTime = 0;
   paused = true;
   onplaying: (() => void) | null = null;
   onended: (() => void) | null = null;
   onerror: (() => void) | null = null;
+  onloadedmetadata: (() => void) | null = null;
   readonly play = vi.fn(async () => { this.paused = false });
   readonly pause = vi.fn(() => { this.paused = true });
   files: Array<{ name: string; size: number; text: () => Promise<string> }> | null = null;
   readonly classList = { toggle: vi.fn() };
   readonly focus = vi.fn();
   readonly elements = new Map<string, ElementDouble>();
+  readonly attributes = new Map<string, string>();
   private markup = "";
+  get src(): string { return this.source }
+  set src(value: string) {
+    this.source = value;
+    // Loading a new media resource resets the current rate to its default.
+    // This reproduces the real Chromium regression that a plain field missed.
+    this.playbackRate = this.defaultPlaybackRate;
+  }
   get innerHTML(): string { return this.markup }
   set innerHTML(markup: string) {
     this.markup = markup;
@@ -80,6 +94,7 @@ class ElementDouble extends EventTarget {
     for (const match of markup.matchAll(/<[a-z][a-z\d-]*\b([^>]*\bid="([^"]+)"[^>]*)>/gi)) {
       const attributes = match[1]!;
       const element = new ElementDouble();
+      for (const attribute of attributes.matchAll(/([\w-]+)="([^"]*)"/g)) element.setAttribute(attribute[1]!, attribute[2]!);
       element.hidden = /\bhidden(?:\s|$)/.test(attributes);
       element.disabled = /\bdisabled(?:\s|$)/.test(attributes);
       element.open = /\bopen(?:\s|$)/.test(attributes);
@@ -90,6 +105,8 @@ class ElementDouble extends EventTarget {
   }
   querySelector(selector: string): ElementDouble | null { return this.elements.get(selector.slice(1)) ?? null }
   querySelectorAll(): ElementDouble[] { return [] }
+  setAttribute(name: string, value: string): void { this.attributes.set(name, value) }
+  getAttribute(name: string): string | null { return this.attributes.get(name) ?? null }
   click(): void { if (!this.disabled) this.dispatchEvent(new Event("click")) }
   close(): void { this.open = false }
   showModal(): void { this.open = true }
@@ -123,6 +140,7 @@ beforeEach(() => {
 
 afterEach(async () => {
   await Promise.all(apps.map((app) => app.dispose()));
+  vi.restoreAllMocks();
   vi.unstubAllGlobals();
 });
 
@@ -136,6 +154,73 @@ function paidSnapshot(): SimState {
   for (let index = 0; index < 3; index += 1) state = reduceSim(state, { type: "CUSTOMER_ADVANCE" }).state;
   for (const itemId of ["milk-1", "bread-1"]) state = reduceSim(state, { type: "SCAN", itemId }).state;
   return reduceSim(state, { type: "PAY", success: true }).state;
+}
+
+function act(state: SimState, command: SimCommand): SimState {
+  const result = reduceSim(state, command);
+  expect(result.changed, `${command.type}: ${result.message ?? ""}`).toBe(true);
+  expect(validateSimState(result.state)).toBe(true);
+  return result.state;
+}
+
+function stockedFirstDay(pairs: 3 | 4 = 3): SimState {
+  let state = act(createFirstDayState(), { type: "PURCHASE_STOCK", pairs: 3, orderId: "first-day-three" });
+  if (pairs === 4) state = act(state, { type: "PURCHASE_STOCK", pairs: 1, orderId: "one-extra-pair" });
+  for (const productId of ["milk", "bread"] as const) {
+    for (let slot = 0; slot < pairs; slot += 1) {
+      const item = state.items.find((entry) => entry.productId === productId && entry.location.kind === "crate")!;
+      state = act(state, { type: "TAKE_ITEM", itemId: item.id });
+      state = act(state, { type: "STOCK", productId, slot });
+    }
+  }
+  return state;
+}
+
+function completeOrder(state: SimState, leave = true): SimState {
+  state = act(state, { type: state.customer.phase === "outside" ? "OPEN_STORE" : "NEXT_CUSTOMER" });
+  for (let step = 0; step < 3; step += 1) state = act(state, { type: "CUSTOMER_ADVANCE" });
+  for (const item of state.items.filter((entry) => entry.location.kind === "checkout")) state = act(state, { type: "SCAN", itemId: item.id });
+  state = act(state, { type: "PAY", success: true });
+  return leave ? act(state, { type: "CUSTOMER_ADVANCE" }) : state;
+}
+
+function beforeCheckout(paidCustomers = 0): SimState {
+  let state = stockedFirstDay();
+  for (let count = 0; count < paidCustomers; count += 1) state = completeOrder(state);
+  state = act(state, { type: state.customer.phase === "outside" ? "OPEN_STORE" : "NEXT_CUSTOMER" });
+  state = act(state, { type: "CUSTOMER_ADVANCE" });
+  return act(state, { type: "CUSTOMER_ADVANCE" });
+}
+
+function savedState(): SimState {
+  const value: unknown = JSON.parse(storage.getItem(SIM_STORAGE_KEY)!);
+  expect(validateSimState(value)).toBe(true);
+  return value as SimState;
+}
+
+async function readyGame(state = createFirstDayState()) {
+  expect(validateSimState(state)).toBe(true);
+  storage.setItem(SIM_STORAGE_KEY, JSON.stringify(state));
+  const view = mount();
+  const loading = view.app.init();
+  await settle();
+  const world = doubles.World.instances.at(-1)!;
+  world.complete();
+  await loading;
+  view.element("s3-start-button").click();
+  await settle();
+  const audio = view.element("s3-word-audio");
+  // Test each subsequent event independently from Start's priming/restored greeting.
+  audio.play.mockClear();
+  world.requestPointerLock.mockClear();
+  world.setCursorFree.mockClear();
+  return { ...view, world, audio };
+}
+
+function key(code: string): Event {
+  const event = Object.assign(new Event("keydown", { cancelable: true }), { code, repeat: false, ctrlKey: false, metaKey: false, altKey: false, isComposing: false });
+  windowDouble.dispatchEvent(event);
+  return event;
 }
 
 describe("3D application startup and lifecycle", () => {
@@ -266,25 +351,16 @@ describe("3D application startup and lifecycle", () => {
   });
 
   it("stops speech on focus loss and visibility loss even while inspecting an item", async () => {
-    const speech = { cancel: vi.fn() };
-    Object.assign(windowDouble, { speechSynthesis: speech });
-    vi.stubGlobal("speechSynthesis", speech);
-    const view = mount();
-    const loading = view.app.init();
-    await settle();
-    const world = doubles.World.instances[0]!;
-    world.complete();
-    await loading;
-    view.element("s3-start-button").click();
-    world.callbacks.onTarget({ id: "milk-crate", kind: "crate", crateId: "milk-crate", productId: "milk", label: "牛奶", action: "抱起货箱", inspectable: true, distance: 1 });
-    world.callbacks.onInspect();
+    const view = await inspectWord();
+    view.element("s3-speak-word").click();
+    view.audio.onplaying?.();
     expect(view.element("s3-inspection").hidden).toBe(false);
-    speech.cancel.mockClear();
+    view.audio.pause.mockClear();
     windowDouble.dispatchEvent(new Event("blur"));
-    expect(speech.cancel).toHaveBeenCalledOnce();
+    expect(view.audio.pause).toHaveBeenCalledOnce();
     documentDouble.hidden = true;
     documentDouble.dispatchEvent(new Event("visibilitychange"));
-    expect(speech.cancel).toHaveBeenCalledTimes(2);
+    expect(view.audio.pause).toHaveBeenCalledTimes(2);
     expect(view.element("s3-inspection").hidden).toBe(false);
   });
 
@@ -313,7 +389,7 @@ describe("3D application startup and lifecycle", () => {
     await settle();
     expect(view.element("s3-start-button").disabled).toBe(false);
     expect(view.element("s3-start-note").textContent).toContain("£4.00");
-    expect(view.element("s3-start-note").textContent).toContain("2 件已售出");
+    expect(view.element("s3-start-note").textContent).toContain("不另加本金");
     expect(JSON.parse(storage.getItem(SIM_STORAGE_KEY)!)).toEqual(paidSnapshot());
     expect(storage.getItem(SIM_BACKUP_KEY)).toBe(original);
   });
@@ -346,6 +422,9 @@ describe("3D application startup and lifecycle", () => {
 });
 
 async function inspectWord(productId: "milk" | "bread" = "milk") {
+  // The product-inspection regression uses a real legacy grant fixture, not the
+  // default first day (whose crates are intentionally empty before procurement).
+  storage.setItem(SIM_STORAGE_KEY, JSON.stringify(createInitialSimState()));
   const view = mount();
   const loading = view.app.init();
   await settle();
@@ -353,6 +432,9 @@ async function inspectWord(productId: "milk" | "bread" = "milk") {
   world.complete();
   await loading;
   view.element("s3-start-button").click();
+  await settle();
+  // Exclude the deliberately muted Start-click audio priming from word-play assertions.
+  view.element("s3-word-audio").play.mockClear();
   world.callbacks.onTarget({ id: `${productId}-crate`, kind: "crate", crateId: `${productId}-crate`, productId, label: productId, action: "抱起货箱", inspectable: true, distance: 1 });
   world.callbacks.onInspect();
   return { ...view, world, audio: view.element("s3-word-audio") };
@@ -405,14 +487,16 @@ describe("built-in British word recordings", () => {
     expect(view.audio.play).toHaveBeenCalledOnce();
   });
 
-  it("does not play a word recording as a substitute for an unavailable phrase", async () => {
-    const view = await inspectWord();
+  it.each(["milk", "bread"] as const)("uses a dedicated local %s phrase without system voices", async (productId) => {
+    const view = await inspectWord(productId);
     view.element("s3-speak-phrase").click();
-    expect(view.audio.play).not.toHaveBeenCalled();
-    expect(view.element("s3-speech-status").textContent).toBe("这段搭配暂无可用朗读，单词可正常听。");
-    view.element("s3-read-customer").click();
-    expect(view.audio.play).not.toHaveBeenCalled();
-    expect(view.element("s3-speech-status").textContent).toContain("这句顾客话暂无可用朗读");
+    expect(view.audio.play).toHaveBeenCalledOnce();
+    expect(view.audio.src).toBe(`/assets/sim3d/audio/${productId}-phrase.wav`);
+    expect(view.audio.playbackRate).toBe(1);
+    expect(view.element("s3-speech-status").textContent).toContain("正在准备本地英式合成语音");
+    view.audio.onplaying?.();
+    view.audio.onended?.();
+    expect(view.element("s3-speech-status").textContent).toContain("语音播放结束");
   });
 
   it("honours a muted volume setting instead of starting an inaudible recording", async () => {
@@ -426,5 +510,367 @@ describe("built-in British word recordings", () => {
     view.element("s3-speak-word").click();
     expect(view.audio.play).not.toHaveBeenCalled();
     expect(view.element("s3-speech-status").textContent).toContain("音量当前为 0");
+  });
+});
+
+describe("cursor access and directly reachable business panels", () => {
+  it("uses Tab to free the pointer without pausing, and a second intentional Tab requests look control", async () => {
+    const view = await readyGame();
+    view.world.callbacks.onPointerMode?.("locked");
+    expect(key("Tab").defaultPrevented).toBe(true);
+    expect(view.world.setCursorFree).toHaveBeenLastCalledWith(true);
+    expect(view.element("s3-pause").open).toBe(false);
+    expect(view.world.setActive).toHaveBeenLastCalledWith(true);
+    view.world.callbacks.onPointerMode?.("free");
+    expect(view.element("s3-drag-hint").textContent).toContain("鼠标可点击");
+    expect(view.element("s3-capture").hidden).toBe(false);
+    key("Tab");
+    expect(view.world.setCursorFree).toHaveBeenLastCalledWith(false);
+    view.element("s3-capture").click();
+    expect(view.world.requestPointerLock).toHaveBeenCalledOnce();
+  });
+
+  it.each([["KeyB", "supply"], ["KeyU", "upgrade"]] as const)("opens %s directly and returns with clickable pointer", async (code, section) => {
+    const view = await readyGame();
+    view.world.callbacks.onPointerMode?.("locked");
+    expect(key(code).defaultPrevented).toBe(true);
+    expect(view.element("s3-pause").open).toBe(true);
+    expect(view.element(`s3-panel-${section}`).hidden).toBe(false);
+    expect(view.element(`s3-tab-${section}`).getAttribute("aria-pressed")).toBe("true");
+    expect(view.world.setCursorFree).toHaveBeenLastCalledWith(true);
+    expect(view.world.setActive).toHaveBeenLastCalledWith(false);
+    view.world.callbacks.onPointerMode?.("free");
+    view.element("s3-resume").click();
+    expect(view.element("s3-pause").open).toBe(false);
+    expect(view.world.setActive).toHaveBeenLastCalledWith(true);
+    expect(view.world.requestPointerLock).not.toHaveBeenCalled();
+    expect(view.element("s3-capture").hidden).toBe(false);
+  });
+
+  it("keeps drag fallback available and does not capture the pointer after closing inspection", async () => {
+    const view = await inspectWord();
+    view.world.requestPointerLock.mockClear();
+    view.world.callbacks.onPointerMode?.("drag");
+    view.element("s3-close-inspect").click();
+    expect(view.element("s3-capture").hidden).toBe(true);
+    expect(view.element("s3-drag-hint").hidden).toBe(false);
+    expect(view.element("s3-drag-hint").textContent).toContain("拖动观察");
+    expect(view.world.requestPointerLock).not.toHaveBeenCalled();
+    view.element("s3-open-supply").click();
+    expect(view.element("s3-pause").open).toBe(true);
+  });
+});
+
+describe("automatic customer voice and manual replay wiring", () => {
+  it("primes the same local media element muted during Start and restores it without claiming speech success", async () => {
+    const view = mount();
+    const loading = view.app.init();
+    await settle();
+    doubles.World.instances[0]!.complete();
+    await loading;
+    const audio = view.element("s3-word-audio");
+    audio.play.mockImplementationOnce(async () => {
+      expect(audio.muted).toBe(true);
+      expect(audio.src).toBe(SPEECH_CLIPS.greeting.src);
+      audio.paused = false;
+    });
+    view.element("s3-start-button").click();
+    await settle();
+    expect(audio.play).toHaveBeenCalledOnce();
+    expect(audio.muted).toBe(false);
+    expect(audio.paused).toBe(true);
+    expect(view.element("s3-customer-audio-status").textContent).not.toContain("播放结束");
+  });
+
+  it.each([0, 2])("speaks the correct checkout request after %i paid orders and releases the cursor", async (paidCustomers) => {
+    const view = await readyGame(beforeCheckout(paidCustomers));
+    view.world.callbacks.onPointerMode?.("locked");
+    view.world.callbacks.onCustomerArrive();
+    const clip = paidCustomers === 2 ? SPEECH_CLIPS.cardRepeat : SPEECH_CLIPS.card;
+    expect(savedState().customer.phase).toBe("checkout");
+    expect(view.audio.src).toBe(clip.src);
+    expect(view.audio.play).toHaveBeenCalledOnce();
+    expect(view.audio.muted).toBe(false);
+    expect(view.element("s3-customer-line").textContent).toContain(clip.text);
+    expect(view.element("s3-customer-zh").textContent).toBe(clip.zh);
+    expect(view.element("s3-receipt").open).toBe(true);
+    expect(view.world.setCursorFree).toHaveBeenLastCalledWith(true);
+    expect(view.element("s3-pause").open).toBe(false);
+    view.audio.onplaying?.();
+    view.audio.onended?.();
+    expect(view.element("s3-customer-audio-status").textContent).toContain("播放结束");
+    expect(key("KeyR").defaultPrevented).toBe(true);
+    expect(view.audio.play).toHaveBeenCalledTimes(2);
+    expect(view.audio.src).toBe(clip.src);
+    expect(savedState().transactions).toHaveLength(paidCustomers);
+  });
+
+  it("turns automatic speech off without removing subtitles, pointer release or manual R replay", async () => {
+    const view = await readyGame(beforeCheckout());
+    view.element("s3-pause-button").click();
+    view.element("s3-auto-speech").checked = false;
+    view.element("s3-auto-speech").dispatchEvent(new Event("input"));
+    view.element("s3-resume").click();
+    view.world.callbacks.onCustomerArrive();
+    expect(view.audio.play).not.toHaveBeenCalled();
+    expect(view.element("s3-customer-line").textContent).toContain(SPEECH_CLIPS.card.text);
+    expect(view.element("s3-customer-audio-status").textContent).toContain("字幕始终保留");
+    expect(view.world.setCursorFree).toHaveBeenLastCalledWith(true);
+    expect(JSON.parse(storage.getItem("english-high-street:sim3d:settings:v1")!).autoSpeech).toBe(false);
+    key("KeyR");
+    expect(view.audio.play).toHaveBeenCalledOnce();
+    expect(view.audio.src).toBe(SPEECH_CLIPS.card.src);
+  });
+
+  it("reports rejected autoplay honestly, ignores false completion and allows explicit replay", async () => {
+    const view = await readyGame(beforeCheckout());
+    view.audio.play.mockRejectedValueOnce(new Error("NotAllowedError"));
+    view.world.callbacks.onCustomerArrive();
+    view.audio.onended?.();
+    expect(view.element("s3-customer-audio-status").textContent).not.toContain("播放结束");
+    await settle();
+    view.audio.onplaying?.();
+    view.audio.onended?.();
+    expect(view.element("s3-customer-audio-status").textContent).toContain("语音未能播放");
+    expect(view.element("s3-customer-line").textContent).toContain(SPEECH_CLIPS.card.text);
+    expect(savedState().cashPence).toBe(510);
+    view.element("s3-read-customer").click();
+    view.audio.onplaying?.();
+    view.audio.onended?.();
+    expect(view.element("s3-customer-audio-status").textContent).toContain("播放结束");
+    expect(view.audio.play).toHaveBeenCalledTimes(2);
+  });
+
+  it("plays a polite repeat request followed only after real completion by the slower customer sentence", async () => {
+    const view = await readyGame(beforeCheckout());
+    view.world.callbacks.onCustomerArrive();
+    view.audio.play.mockClear();
+    view.element("s3-repeat-customer").click();
+    expect(view.audio.src).toBe(SPEECH_CLIPS.repeatRequest.src);
+    expect(view.audio.playbackRate).toBe(1);
+    expect(view.element("s3-customer-line").textContent).toContain(SPEECH_CLIPS.repeatRequest.text);
+    view.audio.onended?.();
+    expect(view.audio.play).toHaveBeenCalledOnce();
+    view.audio.onplaying?.();
+    view.audio.onended?.();
+    expect(view.audio.play).toHaveBeenCalledTimes(2);
+    expect(view.audio.src).toBe(SPEECH_CLIPS.card.src);
+    expect(view.audio.defaultPlaybackRate).toBe(0.84);
+    expect(view.audio.playbackRate).toBe(0.84);
+    view.audio.playbackRate = 1;
+    view.audio.onloadedmetadata?.();
+    expect(view.audio.playbackRate).toBe(0.84);
+    expect(view.element("s3-customer-line").textContent).toContain(`顾客：“${SPEECH_CLIPS.card.text}”`);
+    expect(view.element("s3-customer-zh").textContent).toContain("这次慢一点说");
+    expect(savedState().transactions).toHaveLength(0);
+  });
+
+  it("does not let stale metadata from an earlier clip overwrite a newer playback rate", async () => {
+    const view = await readyGame(beforeCheckout());
+    view.world.callbacks.onCustomerArrive();
+    const regularMetadata = view.audio.onloadedmetadata;
+    view.element("s3-repeat-customer").click();
+    view.audio.onplaying?.();
+    view.audio.onended?.();
+    const slowerMetadata = view.audio.onloadedmetadata;
+    expect(view.audio.playbackRate).toBe(0.84);
+    regularMetadata?.();
+    expect(view.audio.playbackRate).toBe(0.84);
+    key("KeyR");
+    expect(view.audio.defaultPlaybackRate).toBe(1);
+    expect(view.audio.playbackRate).toBe(1);
+    slowerMetadata?.();
+    expect(view.audio.playbackRate).toBe(1);
+    view.element("s3-pause-button").click();
+    expect(view.audio.onloadedmetadata).toBeNull();
+    slowerMetadata?.();
+    expect(view.audio.playbackRate).toBe(1);
+  });
+
+  it("restores the customer subtitles when R interrupts a repeat request and ignores the request's stale completion", async () => {
+    const view = await readyGame(beforeCheckout());
+    view.world.callbacks.onCustomerArrive();
+    view.audio.play.mockClear();
+    view.element("s3-repeat-customer").click();
+    view.audio.onplaying?.();
+    const interruptedRequestEnd = view.audio.onended;
+    expect(view.audio.src).toBe(SPEECH_CLIPS.repeatRequest.src);
+    expect(view.element("s3-customer-line").textContent).toContain(SPEECH_CLIPS.repeatRequest.text);
+    expect(view.element("s3-customer-zh").textContent).toBe(SPEECH_CLIPS.repeatRequest.zh);
+
+    key("KeyR");
+    expect(view.audio.src).toBe(SPEECH_CLIPS.card.src);
+    expect(view.audio.playbackRate).toBe(1);
+    expect(view.element("s3-customer-line").textContent).toContain(SPEECH_CLIPS.card.text);
+    expect(view.element("s3-customer-line").textContent).not.toContain(SPEECH_CLIPS.repeatRequest.text);
+    expect(view.element("s3-customer-zh").textContent).toBe(SPEECH_CLIPS.card.zh);
+
+    interruptedRequestEnd?.();
+    expect(view.audio.play).toHaveBeenCalledTimes(2);
+    expect(view.audio.src).toBe(SPEECH_CLIPS.card.src);
+    expect(view.audio.playbackRate).toBe(1);
+    expect(view.element("s3-customer-line").textContent).toContain(SPEECH_CLIPS.card.text);
+    expect(view.element("s3-customer-zh").textContent).toBe(SPEECH_CLIPS.card.zh);
+    view.audio.onplaying?.();
+    view.audio.onended?.();
+    expect(view.element("s3-customer-audio-status").textContent).toContain("播放结束");
+    expect(view.audio.play).toHaveBeenCalledTimes(2);
+  });
+
+  it("cancels a pending slower reply when the player pauses before the request finishes", async () => {
+    const view = await readyGame(beforeCheckout());
+    view.world.callbacks.onCustomerArrive();
+    view.audio.play.mockClear();
+    view.element("s3-repeat-customer").click();
+    view.audio.onplaying?.();
+    const lateEnd = view.audio.onended;
+    view.element("s3-pause-button").click();
+    lateEnd?.();
+    expect(view.audio.play).toHaveBeenCalledOnce();
+    expect(view.audio.paused).toBe(true);
+    expect(view.element("s3-pause").open).toBe(true);
+  });
+});
+
+describe("first-day management event wiring and persistence", () => {
+  it("buys three pairs for £6.90 through the visible panel and ignores duplicate clicks after return", async () => {
+    const view = await readyGame();
+    view.element("s3-open-supply").click();
+    expect(view.element("s3-panel-supply").hidden).toBe(false);
+    expect(view.element("s3-buy-three").getAttribute("aria-pressed")).toBe("true");
+    expect(view.element("s3-supply-total").textContent).toBe("−£6.90");
+    expect(view.element("s3-supply-after").textContent).toBe("£5.10");
+    expect(view.element("s3-purchase").disabled).toBe(false);
+    view.element("s3-purchase").click();
+    view.element("s3-purchase").click();
+    const state = savedState();
+    expect(state.cashPence).toBe(510);
+    expect(state.purchases).toHaveLength(1);
+    expect(state.items).toHaveLength(6);
+    expect(countAt(state, "milk", "crate")).toBe(3);
+    expect(countAt(state, "bread", "crate")).toBe(3);
+    expect(view.world.setState).toHaveBeenLastCalledWith(state);
+    expect(view.element("s3-pause").open).toBe(false);
+    expect(view.world.requestPointerLock).not.toHaveBeenCalled();
+    expect(view.element("s3-toast").textContent).toContain("进货到账");
+  });
+
+  it("disables unaffordable purchases with an explicit reason, and a smaller selection restores availability", async () => {
+    const view = await readyGame();
+    key("KeyB");
+    view.element("s3-buy-six").click();
+    expect(view.element("s3-buy-six").getAttribute("aria-pressed")).toBe("true");
+    expect(view.element("s3-purchase").disabled).toBe(true);
+    expect(view.element("s3-supply-error").textContent).toContain("资金不足");
+    expect(view.element("s3-supply-total").textContent).toBe("−£13.80");
+    const before = storage.getItem(SIM_STORAGE_KEY);
+    view.element("s3-purchase").click();
+    expect(storage.getItem(SIM_STORAGE_KEY)).toBe(before);
+    view.element("s3-buy-one").click();
+    expect(view.element("s3-purchase").disabled).toBe(false);
+    expect(view.element("s3-supply-total").textContent).toBe("−£2.30");
+  });
+
+  it("makes a funded £8 upgrade directly reachable, charges exactly once and creates no merchandise", async () => {
+    const view = await readyGame();
+    expect(view.element("s3-open-upgrade").getAttribute("aria-label")).toContain("资金足够");
+    key("KeyU");
+    expect(view.element("s3-panel-upgrade").hidden).toBe(false);
+    expect(view.element("s3-upgrade").disabled).toBe(false);
+    expect(view.element("s3-upgrade-status").textContent).toContain("不需要答题解锁");
+    view.element("s3-upgrade").click();
+    view.element("s3-upgrade").click();
+    const state = savedState();
+    expect(state.cashPence).toBe(400);
+    expect(state.upgraded).toBe(true);
+    expect(capacityFor(state)).toBe(8);
+    expect(state.items).toEqual([]);
+    expect(state.inspectedProducts).toEqual([]);
+    expect(view.element("s3-upgrade").disabled).toBe(true);
+    expect(view.element("s3-capacity-now").textContent).toBe("8");
+    expect(view.element("s3-day-investment").textContent).toBe("£8.00");
+    expect(view.element("s3-cash").textContent).toBe("£4.00");
+  });
+
+  it("explains an insufficient upgrade balance instead of hiding the entry", async () => {
+    const state = act(createFirstDayState(), { type: "PURCHASE_STOCK", orderId: "starter", pairs: 3 });
+    const view = await readyGame(state);
+    view.element("s3-open-upgrade").click();
+    expect(view.element("s3-panel-upgrade").hidden).toBe(false);
+    expect(view.element("s3-upgrade").disabled).toBe(true);
+    expect(view.element("s3-upgrade-status").textContent).toContain("还差 £2.90");
+    view.element("s3-upgrade").click();
+    expect(savedState().cashPence).toBe(510);
+    expect(savedState().upgraded).toBe(false);
+  });
+
+  it("waits for departure, settles once, expands and retains cash plus unsold inventory on the next day", async () => {
+    let state = stockedFirstDay(4);
+    state = completeOrder(completeOrder(state));
+    state = completeOrder(state, false);
+    const view = await readyGame(state);
+    view.element("s3-open-day").click();
+    expect(view.element("s3-settle-day").disabled).toBe(true);
+    expect(view.element("s3-day-reason").textContent).toContain("正在离店");
+    expect(view.element("s3-day-revenue").textContent).toBe("£12.00");
+    expect(view.element("s3-day-cogs").textContent).toBe("£6.90");
+    expect(view.element("s3-day-profit").textContent).toBe("£5.10");
+    expect(view.element("s3-day-procurement").textContent).toBe("£9.20");
+    expect(view.element("s3-day-inventory").textContent).toBe("2 件 / £2.30");
+    view.element("s3-settle-day").click();
+    expect(savedState().settlements).toEqual([]);
+    view.element("s3-resume").click();
+    view.world.callbacks.onCustomerArrive();
+    view.element("s3-open-day").click();
+    expect(view.element("s3-settle-day").disabled).toBe(false);
+    view.element("s3-settle-day").click();
+    view.element("s3-settle-day").click();
+    expect(savedState().day.phase).toBe("settled");
+    expect(savedState().cashPence).toBe(1480);
+    expect(savedState().settlements).toHaveLength(1);
+    expect(view.element("s3-day-title").textContent).toContain("日结完成");
+    expect(view.element("s3-next-day").hidden).toBe(false);
+    view.element("s3-day-to-upgrade").click();
+    view.element("s3-upgrade").click();
+    expect(savedState().cashPence).toBe(680);
+    expect(savedState().settlements[0]?.upgradeSpendPence).toBe(800);
+    view.element("s3-tab-day").click();
+    const beforeNextDay = savedState();
+    view.element("s3-next-day").click();
+    const nextDay = savedState();
+    expect(nextDay.day).toMatchObject({ number: 2, phase: "preparing", openingCashPence: 680, openingStockUnits: 2, openingInventoryValuePence: 230 });
+    expect(nextDay.items).toEqual(beforeNextDay.items);
+    expect(nextDay.transactions).toEqual(beforeNextDay.transactions);
+    expect(nextDay.cashPence).toBe(680);
+    expect(nextDay.upgraded).toBe(true);
+    expect(view.element("s3-panel-supply").hidden).toBe(false);
+    expect(view.element("s3-day-revenue").textContent).toBe("£0.00");
+    expect(view.element("s3-day-investment").textContent).toBe("£0.00");
+    expect(view.element("s3-cash").textContent).toBe("£6.80");
+    expect(view.element("s3-phase").textContent).toContain("第 2 天");
+  });
+
+  it.each([1, 3])("automatically follows %i paid orders with the next guest or the day report, never a fourth guest", async (paidCustomers) => {
+    let now = 1000;
+    vi.spyOn(performance, "now").mockImplementation(() => now);
+    let state = stockedFirstDay();
+    for (let count = 0; count < paidCustomers; count += 1) state = completeOrder(state);
+    const view = await readyGame(state);
+    for (let frame = 0; frame < 2; frame += 1) {
+      now += 1200;
+      view.world.callbacks.onFrame?.(60, state.playerPose);
+    }
+    if (paidCustomers === 1) {
+      expect(savedState().customer).toEqual({ number: 2, phase: "to-milk" });
+      expect(view.audio.src).toBe(SPEECH_CLIPS.greeting.src);
+      expect(view.audio.play).toHaveBeenCalledOnce();
+      expect(view.element("s3-pause").open).toBe(false);
+    } else {
+      expect(savedState().customer).toEqual({ number: 3, phase: "complete" });
+      expect(view.element("s3-pause").open).toBe(true);
+      expect(view.element("s3-panel-day").hidden).toBe(false);
+      expect(view.element("s3-settle-day").disabled).toBe(false);
+      expect(view.audio.play).not.toHaveBeenCalled();
+    }
   });
 });

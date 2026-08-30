@@ -1,4 +1,4 @@
-/** The first-person S0 uses a separate, conserved inventory from the legacy 2D game. */
+/** First-person shop inventory and first-day economy, separate from the legacy 2D game. */
 export const PRODUCT_IDS = ["milk", "bread"] as const;
 export type ProductId = (typeof PRODUCT_IDS)[number];
 export type CrateId = "milk-crate" | "bread-crate";
@@ -27,6 +27,12 @@ export const SAFE_DROP_POINTS: readonly Position[] = [
 ];
 export const WORLD_BOUNDS = { minX: -3.4, maxX: 3.4, minZ: -4.6, maxZ: 4.6 } as const;
 export const UPGRADE_COST_PENCE = 800;
+export const INITIAL_CAPITAL_PENCE = 1200;
+export const CRATE_CAPACITY = 8;
+export const DAY_CUSTOMER_TARGET = 3;
+export const PURCHASE_PAIR_COST_PENCE = PRODUCTS.milk.costPence + PRODUCTS.bread.costPence;
+export const PURCHASE_PAIR_OPTIONS = [1, 3, 6] as const;
+export type PurchasePairs = (typeof PURCHASE_PAIR_OPTIONS)[number];
 
 export type ReturnLocation =
   | { kind: "crate"; crateId: CrateId }
@@ -49,8 +55,7 @@ export interface SimTransaction {
   itemIds: string[];
   amountPence: number;
 }
-export interface SimState {
-  schemaVersion: 3;
+interface SimWorldState {
   revision: number;
   items: SimItem[];
   crates: SimCrate[];
@@ -63,6 +68,62 @@ export interface SimState {
   cashPence: number;
   upgraded: boolean;
   playerPose: PlayerPose;
+}
+/** Exact old S0 snapshot shape. Migration must retain these fields, not manufacture capital. */
+export interface LegacySimState extends SimWorldState { schemaVersion: 3 }
+export interface SimPurchase {
+  id: string;
+  dayNumber: number;
+  pairs: PurchasePairs;
+  itemIds: string[];
+  amountPence: number;
+}
+export interface SimDay {
+  number: number;
+  phase: "preparing" | "open" | "settled";
+  targetCustomers: 3;
+  transactionStart: number;
+  purchaseStart: number;
+  openingCashPence: number;
+  openingInventoryValuePence: number;
+  openingStockUnits: number;
+}
+export interface SimDaySummary {
+  dayNumber: number;
+  paidCustomers: number;
+  targetCustomers: 3;
+  openingCashPence: number;
+  revenuePence: number;
+  procurementPence: number;
+  costOfGoodsPence: number;
+  grossProfitPence: number;
+  upgradeSpendPence: number;
+  closingCashPence: number;
+  remainingStockUnits: number;
+  remainingInventoryValuePence: number;
+}
+export interface SimSettlement extends SimDaySummary {
+  transactionStart: number;
+  transactionEnd: number;
+  purchaseStart: number;
+  purchaseEnd: number;
+  openingInventoryValuePence: number;
+  openingStockUnits: number;
+}
+export interface SimState extends SimWorldState {
+  schemaVersion: 4;
+  /** Only these two fixed, auditable opening balances are accepted. */
+  openingKind: "first-day" | "legacy-s0";
+  day: SimDay;
+  purchases: SimPurchase[];
+  upgradeDay: number | null;
+  settlements: SimSettlement[];
+}
+export interface PurchaseOffer {
+  pairs: PurchasePairs;
+  costPence: number;
+  allowed: boolean;
+  reason?: string;
 }
 
 export type SimCommand =
@@ -79,6 +140,9 @@ export type SimCommand =
   | { type: "NEXT_CUSTOMER" }
   | { type: "CANCEL_CUSTOMER" }
   | { type: "BUY_UPGRADE" }
+  | { type: "PURCHASE_STOCK"; orderId: string; pairs: PurchasePairs }
+  | { type: "SETTLE_DAY" }
+  | { type: "START_NEXT_DAY" }
   | { type: "SAVE_POSE"; pose: PlayerPose };
 export interface SimResult { state: SimState; changed: boolean; message?: string }
 
@@ -91,7 +155,7 @@ const positionEquals = (a: Position, b: Position): boolean => Math.abs(a.x - b.x
 
 export function capacityFor(state: Pick<SimState, "upgraded">): number { return state.upgraded ? 8 : 4 }
 
-export function createInitialSimState(): SimState {
+function createLegacyInitialState(): LegacySimState {
   return {
     schemaVersion: 3,
     revision: 0,
@@ -115,6 +179,41 @@ export function createInitialSimState(): SimState {
   };
 }
 
+function firstDay(openingKind: SimState["openingKind"]): SimDay {
+  return {
+    number: 1, phase: "preparing", targetCustomers: DAY_CUSTOMER_TARGET,
+    transactionStart: 0, purchaseStart: 0,
+    openingCashPence: openingKind === "first-day" ? INITIAL_CAPITAL_PENCE : 0,
+    openingInventoryValuePence: openingKind === "first-day" ? 0 : PURCHASE_PAIR_COST_PENCE * 4,
+    openingStockUnits: openingKind === "first-day" ? 0 : 8,
+  };
+}
+
+/** Retained as a deterministic S0 regression fixture; new games use createFirstDayState. */
+export function createInitialSimState(): SimState {
+  return migrateLegacySimState(createLegacyInitialState());
+}
+
+export function createFirstDayState(): SimState {
+  const world = createLegacyInitialState();
+  return {
+    ...world, schemaVersion: 4, items: [], cashPence: INITIAL_CAPITAL_PENCE,
+    openingKind: "first-day", day: firstDay("first-day"), purchases: [], upgradeDay: null, settlements: [],
+  };
+}
+
+/** S0 trial goods are an opening grant; all old cash, sales, scan and held state remain intact. */
+export function migrateLegacySimState(value: unknown): SimState {
+  if (!validateLegacySimState(value)) throw new Error("旧版 3D 存档校验失败，不能迁移这份库存或金额。");
+  const legacy = structuredClone(value);
+  const day = firstDay("legacy-s0");
+  day.phase = legacy.customer.phase === "outside" ? "preparing" : "open";
+  return {
+    ...legacy, schemaVersion: 4, openingKind: "legacy-s0", day,
+    purchases: [], upgradeDay: legacy.upgraded ? 1 : null, settlements: [],
+  };
+}
+
 export function countAt(state: SimState, productId: ProductId, kind: ItemLocation["kind"]): number {
   return state.items.filter((item) => item.productId === productId && item.location.kind === kind).length;
 }
@@ -124,13 +223,96 @@ export function getCheckoutTotal(state: SimState): number {
     .reduce((total, item) => total + PRODUCTS[item.productId].pricePence, 0);
 }
 
+function unsoldItems(state: SimState, productId?: ProductId): SimItem[] {
+  return state.items.filter((item) => item.location.kind !== "sold" && (!productId || item.productId === productId));
+}
+
+function inventoryValue(items: SimItem[]): number {
+  return items.reduce((sum, item) => sum + PRODUCTS[item.productId].costPence, 0);
+}
+
+function purchaseItemIds(orderId: string, pairs: PurchasePairs): string[] {
+  return PRODUCT_IDS.flatMap((productId) => Array.from({ length: pairs }, (_, index) => `${productId}-purchase-${orderId}-${index + 1}`));
+}
+
+const validOrderId = (id: unknown): id is string => typeof id === "string" && /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,79}$/.test(id);
+const validPairs = (pairs: unknown): pairs is PurchasePairs => PURCHASE_PAIR_OPTIONS.some((option) => option === pairs);
+
+/** A paired delivery always preserves both product types needed for a payable order. */
+export function getPurchaseOffer(state: SimState, pairs: PurchasePairs): PurchaseOffer {
+  const costPence = validPairs(pairs) ? pairs * PURCHASE_PAIR_COST_PENCE : 0;
+  const denied = (reason: string): PurchaseOffer => ({ pairs, costPence, allowed: false, reason });
+  if (!validPairs(pairs)) return denied("每次可订购 1、3 或 6 份组合货；每份含 1 盒牛奶和 1 袋面包。");
+  if (state.day.phase === "settled") return denied("今天已经日结，请先开始次日再进货。");
+  if (state.cashPence < costPence) return denied(`资金不足，需要 £${(costPence / 100).toFixed(2)}；可以选择较小的一份补货。`);
+  for (const productId of PRODUCT_IDS) {
+    const held = state.held;
+    // A hand-held item reserves its exact crate return space until placed elsewhere.
+    const reserved = held.kind === "item" && held.returnTo.kind === "crate" && held.returnTo.crateId === crateIdFor(productId) ? 1 : 0;
+    if (countAt(state, productId, "crate") + reserved + pairs > CRATE_CAPACITY) {
+      return denied(`${PRODUCTS[productId].nameZh}箱最多容纳 ${CRATE_CAPACITY} 件，请先上架或卖出部分商品。`);
+    }
+    // Keep room to cancel an unpaid basket safely even after shelf replenishment.
+    if (unsoldItems(state, productId).length + pairs > CRATE_CAPACITY + capacityFor(state)) {
+      return denied(`${PRODUCTS[productId].nameZh}暂存空间不足，请先完成当前交易或卖出部分商品。`);
+    }
+  }
+  return { pairs, costPence, allowed: true };
+}
+
+function summaryForRange(
+  state: SimState, day: SimDay, transactionEnd: number, purchaseEnd: number,
+): SimDaySummary {
+  const transactions = state.transactions.slice(day.transactionStart, transactionEnd);
+  const purchases = state.purchases.slice(day.purchaseStart, purchaseEnd);
+  const itemById = new Map(state.items.map((item) => [item.id, item]));
+  const costOfGoodsPence = transactions.reduce((total, transaction) => total + transaction.itemIds.reduce((cost, id) => {
+    const item = itemById.get(id);
+    return cost + (item ? PRODUCTS[item.productId].costPence : Number.NaN);
+  }, 0), 0);
+  const revenuePence = transactions.reduce((total, transaction) => total + transaction.amountPence, 0);
+  const procurementPence = purchases.reduce((total, purchase) => total + purchase.amountPence, 0);
+  const upgradeSpendPence = state.upgradeDay === day.number ? UPGRADE_COST_PENCE : 0;
+  return {
+    dayNumber: day.number, paidCustomers: transactions.length, targetCustomers: DAY_CUSTOMER_TARGET,
+    openingCashPence: day.openingCashPence, revenuePence, procurementPence, costOfGoodsPence,
+    grossProfitPence: revenuePence - costOfGoodsPence, upgradeSpendPence,
+    closingCashPence: day.openingCashPence + revenuePence - procurementPence - upgradeSpendPence,
+    remainingStockUnits: day.openingStockUnits + purchases.reduce((sum, purchase) => sum + purchase.itemIds.length, 0)
+      - transactions.reduce((sum, sale) => sum + sale.itemIds.length, 0),
+    remainingInventoryValuePence: day.openingInventoryValuePence + procurementPence - costOfGoodsPence,
+  };
+}
+
+/** Purchase expense is cash flow; gross profit subtracts sold-goods cost, not all unsold stock. */
+export function getDaySummary(state: SimState): SimDaySummary {
+  return summaryForRange(state, state.day, state.transactions.length, state.purchases.length);
+}
+
+export function canSettleDay(state: SimState): boolean {
+  return state.day.phase === "open" && getDaySummary(state).paidCustomers >= DAY_CUSTOMER_TARGET
+    && state.customer.phase === "complete" && state.scannedIds.length === 0
+    && !state.items.some((item) => item.location.kind === "basket" || item.location.kind === "checkout");
+}
+
+function settlementFor(state: SimState): SimSettlement {
+  return {
+    ...getDaySummary(state), transactionStart: state.day.transactionStart, transactionEnd: state.transactions.length,
+    purchaseStart: state.day.purchaseStart, purchaseEnd: state.purchases.length,
+    openingInventoryValuePence: state.day.openingInventoryValuePence, openingStockUnits: state.day.openingStockUnits,
+  };
+}
+
 export function getObjective(state: SimState): string {
+  if (state.day.phase === "settled") return `第 ${state.day.number} 天已日结。可以查看收支、用资金扩充货架，或开始次日继续营业。`;
+  if (canSettleDay(state)) return `今天已完成 ${DAY_CUSTOMER_TARGET} 单收款！打开经营面板，日结后查看毛利与库存，再决定扩容。`;
   if (state.customer.phase === "outside") {
     const held = state.held;
     const crate = held.kind === "crate" ? state.crates.find((entry) => entry.id === held.crateId) : undefined;
     const item = held.kind === "item" ? state.items.find((entry) => entry.id === held.itemId) : undefined;
     const heldProduct = crate?.productId ?? item?.productId;
     if (crate && !state.items.some((entry) => entry.location.kind === "crate" && entry.location.crateId === crate.id)) {
+      if (!unsoldItems(state, crate.productId).length) return "货箱是空的，打开经营面板订购牛奶与面包组合货；首单建议 3 份。";
       return "货箱已经空了，走近安全卸货点按 G 放下，再搬下一箱货。";
     }
     if (heldProduct) {
@@ -141,6 +323,7 @@ export function getObjective(state: SimState): string {
       return `把手里的${product.nameZh}摆上${heldProduct === "milk" ? "牛奶冰柜" : "面包架"}，看向货架按 E，逐件上架${crate ? `（箱内剩 ${remaining} 件）` : ""}。`;
     }
     const missing = PRODUCT_IDS.find((id) => countAt(state, id, "shelf") < 1);
+    if (missing && !unsoldItems(state, missing).length) return "先打开经营面板进货：每份含 1 盒牛奶和 1 袋面包，首单建议 3 份，共 £6.90。";
     if (missing) return state.inspectedProducts.includes(missing)
       ? `搬起${PRODUCTS[missing].nameZh}货箱，把商品摆上${missing === "milk" ? "牛奶冰柜" : "面包架"}。`
       : `搬起门边的${PRODUCTS[missing].nameZh}货箱，按 F 近看商品，再摆上货架。`;
@@ -152,8 +335,8 @@ export function getObjective(state: SimState): string {
   if (state.customer.phase === "to-checkout") return "顾客正在前往收银台，你也可以准备收银。";
   if (state.customer.phase === "checkout") return state.scannedIds.length < 2 ? "扫描台面上的两件商品。" : "商品已扫描，启用刷卡机完成收款。";
   if (state.customer.phase === "leaving") return "顾客正在离店，可以整理货架或补货。";
-  if (PRODUCT_IDS.every((id) => countAt(state, id, "sold") === 4)) return "试营业的商品已售完！可以继续逛店，或开始新一轮试玩。";
-  if (!state.upgraded && state.cashPence >= UPGRADE_COST_PENCE) return "已经赚够 £8，可购买普通容量升级，也可以继续接待顾客。";
+  if (PRODUCT_IDS.some((id) => unsoldItems(state, id).length === 0)) return "商品不足，打开经营面板订购组合货，再分别摆上牛奶冰柜和面包架。";
+  if (!state.upgraded && state.cashPence >= UPGRADE_COST_PENCE) return "资金已足够，按 U 可查看 £8 普通容量升级，也可以留钱进货。";
   return "补齐牛奶和面包，准备接待下一位顾客。";
 }
 
@@ -177,7 +360,7 @@ export function reduceSim(state: SimState, command: SimCommand): SimResult {
   const reject = (message: string): SimResult => ({ state, changed: false, message });
   const finish = (message?: string): SimResult => {
     next.revision += 1;
-    if (!validateSimState(next)) throw new Error(`S0 inventory invariant failed after ${command.type}`);
+    if (!validateSimState(next)) throw new Error(`3D inventory/economy invariant failed after ${command.type}`);
     return { state: next, changed: true, ...(message ? { message } : {}) };
   };
 
@@ -244,10 +427,15 @@ export function reduceSim(state: SimState, command: SimCommand): SimResult {
     }
     case "OPEN_STORE":
     case "NEXT_CUSTOMER": {
+      if (next.day.phase === "settled") return reject("今天已经日结，请先开始次日。");
+      if (command.type === "OPEN_STORE" && next.day.phase !== "preparing") return reject("今天已经开始营业。");
+      if (command.type === "NEXT_CUSTOMER" && next.day.phase !== "open") return reject("请先上架商品并打开营业牌。");
+      if (getDaySummary(next).paidCustomers >= DAY_CUSTOMER_TARGET) return reject("今天的三单已经完成，请等顾客离店后进行日结。");
       const expected = command.type === "OPEN_STORE" ? "outside" : "complete";
       if (next.customer.phase !== expected) return reject("请先完成当前顾客的流程。");
       if (PRODUCT_IDS.some((id) => countAt(next, id, "shelf") < 1)) return reject("先给牛奶和面包各补至少一件货。");
       if (command.type === "NEXT_CUSTOMER") next.customer.number += 1;
+      next.day.phase = "open";
       next.customer.phase = "to-milk";
       return finish("营业开始，一位邻居走进了小店。");
     }
@@ -263,7 +451,7 @@ export function reduceSim(state: SimState, command: SimCommand): SimResult {
       if (next.customer.phase === "to-checkout") {
         for (const item of next.items) if (item.location.kind === "basket") item.location = { kind: "checkout" };
         next.customer.phase = "checkout";
-        return finish("Card, please. · 顾客准备刷卡付款。");
+        return finish("顾客已到收银台，正准备刷卡付款。R 可重听，E 扫描商品。");
       }
       if (next.customer.phase === "leaving") {
         next.customer.phase = "complete";
@@ -306,7 +494,43 @@ export function reduceSim(state: SimState, command: SimCommand): SimResult {
       if (next.cashPence < UPGRADE_COST_PENCE) return reject("普通容量升级需要 £8，只检查资金，不要求英语等级。");
       next.cashPence -= UPGRADE_COST_PENCE;
       next.upgraded = true;
+      next.upgradeDay = next.day.number;
+      // Expansion after closing is still this day's investment, not tomorrow's hidden debit.
+      if (next.day.phase === "settled") next.settlements[next.settlements.length - 1] = settlementFor(next);
       return finish("普通容量升级成功，每种商品可放 8 件；升级不会凭空补货。");
+    }
+    case "PURCHASE_STOCK": {
+      if (!validOrderId(command.orderId)) return reject("进货单号不可用，请重新发起订货。");
+      const prior = next.purchases.find((purchase) => purchase.id === command.orderId);
+      if (prior) return reject(prior.pairs === command.pairs ? "这笔进货已经送达，不会再次扣钱或发货。" : "同一进货单号不能改成不同数量。");
+      const offer = getPurchaseOffer(next, command.pairs);
+      if (!offer.allowed) return reject(offer.reason ?? "当前无法进货。");
+      const itemIds = purchaseItemIds(command.orderId, command.pairs);
+      next.purchases.push({ id: command.orderId, dayNumber: next.day.number, pairs: command.pairs, itemIds, amountPence: offer.costPence });
+      for (const [index, id] of itemIds.entries()) {
+        const productId = index < command.pairs ? "milk" : "bread";
+        next.items.push({ id, productId, location: { kind: "crate", crateId: crateIdFor(productId) } });
+      }
+      next.cashPence -= offer.costPence;
+      return finish(`进货成功 -£${(offer.costPence / 100).toFixed(2)}：${command.pairs} 盒牛奶和 ${command.pairs} 袋面包已放入对应货箱。`);
+    }
+    case "SETTLE_DAY": {
+      if (next.day.phase === "settled") return reject("今天已经日结，不会重复结算或增加资金。");
+      if (!canSettleDay(next)) return reject(`先完成今天 ${DAY_CUSTOMER_TARGET} 单收款，并等最后一位顾客离店后再日结。`);
+      next.day.phase = "settled";
+      next.settlements.push(settlementFor(next));
+      return finish(`第 ${next.day.number} 天已日结，营业收入与采购支出已记录；资金不会在日结时重复入账。`);
+    }
+    case "START_NEXT_DAY": {
+      if (next.day.phase !== "settled") return reject("请先完成今天的营业与日结。");
+      const stock = unsoldItems(next);
+      next.day = {
+        number: next.day.number + 1, phase: "preparing", targetCustomers: DAY_CUSTOMER_TARGET,
+        transactionStart: next.transactions.length, purchaseStart: next.purchases.length,
+        openingCashPence: next.cashPence, openingInventoryValuePence: inventoryValue(stock), openingStockUnits: stock.length,
+      };
+      next.customer = { phase: "outside", number: next.customer.number + 1 };
+      return finish(`第 ${next.day.number} 天开始。资金、剩余商品和货架扩容全部保留，不会追加免费本金。`);
     }
     case "SAVE_POSE": {
       const pose = command.pose;
@@ -344,12 +568,13 @@ function validReturnLocation(value: unknown, productId: ProductId, capacity: num
   return value.kind === "shelf" && value.productId === productId && isInteger(value.slot) && value.slot >= 0 && value.slot < capacity;
 }
 
-/** Reject partial/foreign saves, duplicate ownership, fabricated goods and mismatched money. */
-export function validateSimState(value: unknown): value is SimState {
-  if (!isRecord(value) || value.schemaVersion !== 3 || !isInteger(value.revision) || value.revision < 0
+/** Shared physical ownership checks; S0 additionally requires its fixed eight-unit grant. */
+function validateWorldState(value: unknown, version: 3 | 4): value is SimState | LegacySimState {
+  const legacy = version === 3;
+  if (!isRecord(value) || value.schemaVersion !== version || !isInteger(value.revision) || value.revision < 0
     || typeof value.upgraded !== "boolean" || !isInteger(value.cashPence) || value.cashPence < 0 || !validPose(value.playerPose)) return false;
-  if (!Array.isArray(value.crates) || value.crates.length !== 2 || !Array.isArray(value.items) || value.items.length !== 8
-    || !Array.isArray(value.transactions) || value.transactions.length > 4 || !Array.isArray(value.scannedIds)
+  if (!Array.isArray(value.crates) || value.crates.length !== 2 || !Array.isArray(value.items) || (legacy && value.items.length !== 8)
+    || !Array.isArray(value.transactions) || (legacy && value.transactions.length > 4) || !Array.isArray(value.scannedIds)
     || !Array.isArray(value.inspectedProducts) || value.inspectedProducts.some((id) => !isProductId(id))
     || new Set(value.inspectedProducts).size !== value.inspectedProducts.length) return false;
   const crateIds = new Set<string>();
@@ -364,14 +589,15 @@ export function validateSimState(value: unknown): value is SimState {
     cratePositions.push(position);
   }
   if (!isRecord(value.customer) || !isInteger(value.customer.number) || value.customer.number < 1
-    || !["outside", "to-milk", "to-bread", "to-checkout", "checkout", "leaving", "complete"].includes(String(value.customer.phase))) return false;
+    || typeof value.customer.phase !== "string" || !["outside", "to-milk", "to-bread", "to-checkout", "checkout", "leaving", "complete"].includes(value.customer.phase)) return false;
   const capacity = value.upgraded ? 8 : 4;
   const itemIds = new Set<string>();
   const occupiedSlots = new Set<string>();
   const items: SimItem[] = [];
   for (const item of value.items) {
     if (!isRecord(item) || !isProductId(item.productId) || typeof item.id !== "string"
-      || ![1, 2, 3, 4].some((number) => item.id === `${item.productId}-${number}`) || itemIds.has(item.id) || !isRecord(item.location)) return false;
+      || (legacy && ![1, 2, 3, 4].some((number) => item.id === `${item.productId}-${number}`))
+      || item.id.length === 0 || item.id.length > 128 || itemIds.has(item.id) || !isRecord(item.location)) return false;
     const location = item.location;
     if (location.kind === "crate" || location.kind === "shelf") {
       if (!validReturnLocation(location, item.productId, capacity)) return false;
@@ -382,11 +608,11 @@ export function validateSimState(value: unknown): value is SimState {
       }
     } else if (location.kind === "sold") {
       if (typeof location.transactionId !== "string") return false;
-    } else if (!["hand", "basket", "checkout"].includes(String(location.kind))) return false;
+    } else if (typeof location.kind !== "string" || !["hand", "basket", "checkout"].includes(location.kind)) return false;
     itemIds.add(item.id);
     items.push(item as unknown as SimItem);
   }
-  if (!PRODUCT_IDS.every((productId) => items.filter((item) => item.productId === productId).length === 4)) return false;
+  if (legacy && !PRODUCT_IDS.every((productId) => items.filter((item) => item.productId === productId).length === 4)) return false;
   if (!isRecord(value.held)) return false;
   const handItems = items.filter((item) => item.location.kind === "hand");
   if (value.held.kind === "none") {
@@ -432,6 +658,123 @@ export function validateSimState(value: unknown): value is SimState {
     previousCustomerNumber = transaction.customerNumber;
   }
   if (items.some((item) => item.location.kind === "sold" && !soldIds.has(item.id))) return false;
-  if (value.customer.phase === "outside" && (value.customer.number !== 1 || value.transactions.length !== 0)) return false;
-  return value.cashPence === grossPence - (value.upgraded ? UPGRADE_COST_PENCE : 0);
+  if (legacy && value.customer.phase === "outside" && (value.customer.number !== 1 || value.transactions.length !== 0)) return false;
+  return !legacy || value.cashPence === grossPence - (value.upgraded ? UPGRADE_COST_PENCE : 0);
+}
+
+export function validateLegacySimState(value: unknown): value is LegacySimState {
+  return validateWorldState(value, 3);
+}
+
+const SUMMARY_FIELDS = [
+  "dayNumber", "paidCustomers", "targetCustomers", "openingCashPence", "revenuePence", "procurementPence",
+  "costOfGoodsPence", "grossProfitPence", "upgradeSpendPence", "closingCashPence", "remainingStockUnits", "remainingInventoryValuePence",
+] as const;
+
+/** The ledger proves each item source, purchase quantity, paid sale, daily carry and cash balance. */
+export function validateSimState(value: unknown): value is SimState {
+  if (!validateWorldState(value, 4) || value.schemaVersion !== 4) return false;
+  if (value.openingKind !== "first-day" && value.openingKind !== "legacy-s0") return false;
+  if (!isRecord(value.day) || !isInteger(value.day.number) || value.day.number < 1
+    || typeof value.day.phase !== "string" || !["preparing", "open", "settled"].includes(value.day.phase) || value.day.targetCustomers !== DAY_CUSTOMER_TARGET
+    || !isInteger(value.day.transactionStart) || value.day.transactionStart < 0 || value.day.transactionStart > value.transactions.length
+    || !Array.isArray(value.purchases) || !isInteger(value.day.purchaseStart) || value.day.purchaseStart < 0 || value.day.purchaseStart > value.purchases.length
+    || !Array.isArray(value.settlements)
+    || [value.day.openingCashPence, value.day.openingInventoryValuePence, value.day.openingStockUnits].some((amount) => !isInteger(amount) || amount < 0)) return false;
+  if (value.upgraded) {
+    if (!isInteger(value.upgradeDay) || value.upgradeDay < 1 || value.upgradeDay > value.day.number) return false;
+  } else if (value.upgradeDay !== null) return false;
+
+  const itemById = new Map(value.items.map((item) => [item.id, item]));
+  const sourceIds = new Set<string>();
+  const sourceDay = new Map<string, number>();
+  if (value.openingKind === "legacy-s0") {
+    for (const productId of PRODUCT_IDS) for (let number = 1; number <= 4; number += 1) {
+      const id = `${productId}-${number}`;
+      if (itemById.get(id)?.productId !== productId) return false;
+      sourceIds.add(id);
+      sourceDay.set(id, 1);
+    }
+  }
+  const purchaseIds = new Set<string>();
+  let purchaseDay = 1;
+  let purchaseSpendPence = 0;
+  for (const purchase of value.purchases) {
+    if (!isRecord(purchase) || !validOrderId(purchase.id) || purchaseIds.has(purchase.id) || !validPairs(purchase.pairs)
+      || !isInteger(purchase.dayNumber) || purchase.dayNumber < purchaseDay || purchase.dayNumber > value.day.number
+      || purchase.amountPence !== purchase.pairs * PURCHASE_PAIR_COST_PENCE || !Array.isArray(purchase.itemIds)) return false;
+    const expectedIds = purchaseItemIds(purchase.id, purchase.pairs);
+    if (purchase.itemIds.length !== expectedIds.length || purchase.itemIds.some((id, index) => id !== expectedIds[index])) return false;
+    for (const [index, id] of expectedIds.entries()) {
+      const expectedProduct = index < purchase.pairs ? "milk" : "bread";
+      if (sourceIds.has(id) || itemById.get(id)?.productId !== expectedProduct) return false;
+      sourceIds.add(id);
+      sourceDay.set(id, purchase.dayNumber);
+    }
+    purchaseIds.add(purchase.id);
+    purchaseDay = purchase.dayNumber;
+    purchaseSpendPence += purchase.amountPence;
+  }
+  if (sourceIds.size !== value.items.length || value.items.some((item) => !sourceIds.has(item.id))) return false;
+  for (const productId of PRODUCT_IDS) {
+    const held = value.held;
+    const reserved = held.kind === "item" && held.returnTo.kind === "crate" && held.returnTo.crateId === crateIdFor(productId) ? 1 : 0;
+    if (countAt(value, productId, "crate") + reserved > CRATE_CAPACITY
+      || unsoldItems(value, productId).length > CRATE_CAPACITY + capacityFor(value)) return false;
+  }
+  const opening = firstDay(value.openingKind);
+  const grossPence = value.transactions.reduce((sum, transaction) => sum + transaction.amountPence, 0);
+  const expectedCash = opening.openingCashPence + grossPence - purchaseSpendPence - (value.upgraded ? UPGRADE_COST_PENCE : 0);
+  if (!isInteger(expectedCash) || value.cashPence !== expectedCash) return false;
+
+  const expectedSettlementCount = value.day.number - (value.day.phase === "settled" ? 0 : 1);
+  if (value.settlements.length !== expectedSettlementCount) return false;
+  let transactionStart = 0;
+  let purchaseStart = 0;
+  let openingCashPence = opening.openingCashPence;
+  let openingInventoryValuePence = opening.openingInventoryValuePence;
+  let openingStockUnits = opening.openingStockUnits;
+  for (const [index, record] of value.settlements.entries()) {
+    const number = index + 1;
+    if (!isRecord(record) || record.dayNumber !== number || record.transactionStart !== transactionStart || record.purchaseStart !== purchaseStart
+      || !isInteger(record.transactionEnd) || record.transactionEnd < transactionStart || record.transactionEnd > value.transactions.length
+      || !isInteger(record.purchaseEnd) || record.purchaseEnd < purchaseStart || record.purchaseEnd > value.purchases.length
+      || record.openingInventoryValuePence !== openingInventoryValuePence || record.openingStockUnits !== openingStockUnits) return false;
+    const day: SimDay = {
+      number, phase: "settled", targetCustomers: DAY_CUSTOMER_TARGET, transactionStart, purchaseStart,
+      openingCashPence, openingInventoryValuePence, openingStockUnits,
+    };
+    const summary = summaryForRange(value, day, record.transactionEnd, record.purchaseEnd);
+    const maxPaid = value.openingKind === "legacy-s0" && number === 1 ? 4 : DAY_CUSTOMER_TARGET;
+    if (summary.paidCustomers < DAY_CUSTOMER_TARGET || summary.paidCustomers > maxPaid
+      || SUMMARY_FIELDS.some((field) => !isInteger(record[field]) || record[field] !== summary[field])
+      || summary.closingCashPence < 0 || summary.remainingStockUnits < 0 || summary.remainingInventoryValuePence < 0) return false;
+    if (value.purchases.slice(purchaseStart, record.purchaseEnd).some((purchase) => purchase.dayNumber !== number)) return false;
+    if (value.transactions.slice(transactionStart, record.transactionEnd)
+      .some((sale) => sale.itemIds.some((id) => (sourceDay.get(id) ?? Infinity) > number))) return false;
+    if (number === value.day.number && (value.day.transactionStart !== transactionStart || value.day.purchaseStart !== purchaseStart
+      || value.day.openingCashPence !== openingCashPence || value.day.openingStockUnits !== openingStockUnits
+      || value.day.openingInventoryValuePence !== openingInventoryValuePence)) return false;
+    transactionStart = record.transactionEnd;
+    purchaseStart = record.purchaseEnd;
+    openingCashPence = summary.closingCashPence;
+    openingStockUnits = summary.remainingStockUnits;
+    openingInventoryValuePence = summary.remainingInventoryValuePence;
+  }
+  if (value.day.phase !== "settled") {
+    if (value.day.transactionStart !== transactionStart || value.day.purchaseStart !== purchaseStart
+      || value.day.openingCashPence !== openingCashPence || value.day.openingStockUnits !== openingStockUnits
+      || value.day.openingInventoryValuePence !== openingInventoryValuePence
+      || value.purchases.slice(purchaseStart).some((purchase) => purchase.dayNumber !== value.day.number)) return false;
+  } else if (transactionStart !== value.transactions.length || purchaseStart !== value.purchases.length) return false;
+  const current = getDaySummary(value);
+  const maxPaid = value.openingKind === "legacy-s0" && value.day.number === 1 ? 4 : DAY_CUSTOMER_TARGET;
+  if (current.closingCashPence !== value.cashPence || current.remainingStockUnits !== unsoldItems(value).length
+    || current.remainingInventoryValuePence !== inventoryValue(unsoldItems(value)) || current.paidCustomers > maxPaid) return false;
+  if (value.day.phase === "preparing") {
+    if (value.customer.phase !== "outside" || current.paidCustomers !== 0) return false;
+  } else if (value.customer.phase === "outside") return false;
+  if (value.day.phase === "settled" && (value.customer.phase !== "complete" || current.paidCustomers < DAY_CUSTOMER_TARGET)) return false;
+  if (current.paidCustomers >= DAY_CUSTOMER_TARGET && !["leaving", "complete"].includes(value.customer.phase)) return false;
+  return true;
 }

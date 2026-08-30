@@ -6,9 +6,10 @@ import {
 } from "@babylonjs/core";
 import "@babylonjs/loaders/glTF";
 import { placeCustomerVisual } from "./modelPlacement";
+import { PointerAccess, type PointerMode } from "./pointerAccess";
 import { createCrate, createPlayerHands, createProduct, createShop, setCheckoutDisplay, setShelfCapacity, setShopSignState } from "./assets";
 import {
-  countAt, PRODUCTS, SAFE_DROP_POINTS, type CrateId, type CustomerPhase,
+  countAt, canSettleDay, PRODUCTS, SAFE_DROP_POINTS, type CrateId, type CustomerPhase,
   type PlayerPose, type Position, type ProductId, type SimState,
 } from "./domain";
 
@@ -35,6 +36,7 @@ export interface WorldCallbacks {
   onStatus: (text: string) => void;
   onFrame?: (fps: number, pose: PlayerPose) => void;
   onGuide?: (text: string) => void;
+  onPointerMode?: (mode: PointerMode) => void;
 }
 
 type Collider = { minX: number; maxX: number; minZ: number; maxZ: number };
@@ -97,7 +99,8 @@ export class ShopWorld {
   private frameClock = 0;
   private viewClock = 0;
   private poseClock = 0;
-  private pointerDenied = false;
+  private readonly pointerAccess = new PointerAccess();
+  private pointerRequestGeneration = 0;
   private canvasWasLost = false;
 
   constructor(
@@ -230,7 +233,7 @@ export class ShopWorld {
     for (const animation of this.customerAnimations) animation.stop();
     this.playCustomerAnimation(false);
     await this.scene.whenReadyAsync();
-    this.callbacks.onStatus("小店已准备好 · 首批 8 件商品免费用于试营业。");
+    this.callbacks.onStatus("小店已准备好 · 先查看进货单，再搬运商品开始营业。");
   }
 
   private tag(root: TransformNode | AbstractMesh, data: TargetData): void {
@@ -257,6 +260,13 @@ export class ShopWorld {
 
   private syncInventory(): void {
     const state = this.state;
+    const visibleIds = new Set(state.items.filter((item) => item.location.kind !== "sold").map((item) => item.id));
+    for (const [id, root] of this.products) {
+      if (visibleIds.has(id)) continue;
+      for (const mesh of root.getChildMeshes()) this.shadow.removeShadowCaster(mesh, false);
+      root.dispose(false, false);
+      this.products.delete(id);
+    }
     for (const crate of state.crates) {
       const root = this.crates.get(crate.id)!;
       const held = state.held.kind === "crate" && state.held.crateId === crate.id;
@@ -268,21 +278,32 @@ export class ShopWorld {
       this.tag(root, { id: crate.id, kind: "crate", crateId: crate.id, productId: crate.productId });
     }
     for (const item of state.items) {
-      const root = this.products.get(item.id)!;
+      if (item.location.kind === "sold") continue;
+      let root = this.products.get(item.id);
+      if (!root) {
+        root = createProduct(this.scene, item.productId, item.id);
+        this.products.set(item.id, root);
+        for (const mesh of root.getChildMeshes()) {
+          mesh.receiveShadows = true;
+          if (mesh.getTotalVertices() > 12 && !/glass|label|letter/i.test(mesh.name)) this.shadow.addShadowCaster(mesh, false);
+        }
+      }
       const location = item.location;
       root.parent = null;
       root.rotation.set(0, 0, 0);
       root.scaling.setAll(1);
-      root.setEnabled(location.kind !== "sold");
+      root.setEnabled(true);
       this.setViewModel(root, false);
       this.tag(root, { id: item.id, kind: "item", itemId: item.id, productId: item.productId });
       if (location.kind === "crate") {
         const crate = this.crates.get(location.crateId)!;
         const siblings = state.items.filter((entry) => entry.location.kind === "crate" && entry.location.crateId === location.crateId);
         const index = siblings.findIndex((entry) => entry.id === item.id);
+        const withinLayer = index % 4;
+        const layer = Math.floor(index / 4);
         root.parent = crate;
-        if (item.productId === "milk") root.position.set((index % 2 - .5) * .15, .025, (Math.floor(index / 2) - .5) * .14);
-        else root.position.set((index % 2 - .5) * .31, .025 + Math.floor(index / 2) * .045, (Math.floor(index / 2) - .5) * .18);
+        if (item.productId === "milk") root.position.set((withinLayer % 2 - .5) * .15, .025 + layer * .265, (Math.floor(withinLayer / 2) - .5) * .14);
+        else root.position.set((withinLayer % 2 - .5) * .31, .025 + layer * .16, (Math.floor(withinLayer / 2) - .5) * .18);
         const isHeld = state.held.kind === "crate" && state.held.crateId === location.crateId;
         this.setViewModel(root, isHeld);
         this.tag(root, { id: location.crateId, kind: "crate", crateId: location.crateId, productId: item.productId });
@@ -311,7 +332,7 @@ export class ShopWorld {
     this.hands.scaling.x = heldProduct === "bread" ? .70 / .46 : 1;
     const transaction = state.transactions.find((sale) => sale.customerNumber === state.customer.number);
     const paid = !!transaction && (state.customer.phase === "leaving" || state.customer.phase === "complete");
-    setShopSignState(this.scene, state.customer.phase !== "outside");
+    setShopSignState(this.scene, state.day.phase === "open");
     setCheckoutDisplay(this.scene, {
       scanned: paid ? 2 : state.scannedIds.length,
       totalPence: paid ? transaction.amountPence : state.items.filter((item) => state.scannedIds.includes(item.id)).reduce((total, item) => total + PRODUCTS[item.productId].pricePence, 0),
@@ -436,7 +457,10 @@ export class ShopWorld {
     }, options);
     document.addEventListener("pointerlockchange", () => {
       this.drag = null; this.keys.clear();
-      if (document.pointerLockElement !== this.canvas && this.active && !this.pointerDenied) this.callbacks.onPause();
+      const result = this.pointerAccess.changed(document.pointerLockElement === this.canvas, this.active);
+      this.callbacks.onPointerMode?.(result.mode);
+      if (result.release) document.exitPointerLock();
+      else if (result.pause) this.callbacks.onPause();
     }, options);
     document.addEventListener("pointerlockerror", () => this.enableDragLook(), options);
     this.canvas.addEventListener("mousedown", (event) => {
@@ -445,8 +469,9 @@ export class ShopWorld {
       if (this.inspectionProduct) { this.drag = { x: event.clientX, y: event.clientY }; return; }
       if (!this.active) return;
       if (document.pointerLockElement === this.canvas) this.callbacks.onInteract();
-      else if (this.pointerDenied) this.drag = { x: event.clientX, y: event.clientY };
-      else this.requestPointerLock();
+      // Free cursor stays free: a click on the scene only begins drag-look.
+      // Capturing it again requires the visible control or the Tab shortcut.
+      else this.drag = { x: event.clientX, y: event.clientY };
     }, options);
     window.addEventListener("mouseup", () => { this.drag = null; }, options);
     window.addEventListener("mousemove", (event) => {
@@ -467,25 +492,43 @@ export class ShopWorld {
   }
 
   private enableDragLook(): void {
-    this.pointerDenied = true;
-    this.callbacks.onStatus("浏览器未锁定鼠标：按住画面左键拖动视角，E 操作。也可用 I/J/K/L 转头。");
+    if (this.disposed) return;
+    const previous = this.pointerAccess.mode;
+    this.pointerAccess.rejected();
+    this.callbacks.onPointerMode?.("drag");
+    if (previous !== "drag") this.callbacks.onStatus("鼠标可直接点击界面；按住画面拖动视角，或用 I/J/K/L 转头，E 操作。");
   }
 
   requestPointerLock(): void {
     if (!this.active) return;
+    const generation = ++this.pointerRequestGeneration;
+    this.pointerAccess.requestLock();
     this.canvas.focus();
     if (!this.canvas.requestPointerLock) { this.enableDragLook(); return; }
     try {
       const request = this.canvas.requestPointerLock();
-      if (request && typeof request.catch === "function") void request.catch(() => this.enableDragLook());
+      if (request && typeof request.catch === "function") void request.catch(() => {
+        if (generation === this.pointerRequestGeneration && this.active) this.enableDragLook();
+      });
     } catch { this.enableDragLook(); }
+  }
+
+  setCursorFree(free: boolean): void {
+    if (!free) { this.requestPointerLock(); return; }
+    this.pointerRequestGeneration += 1;
+    const locked = document.pointerLockElement === this.canvas;
+    this.pointerAccess.releaseForUi(locked);
+    this.drag = null;
+    this.keys.clear();
+    this.callbacks.onPointerMode?.(this.pointerAccess.mode);
+    if (locked) document.exitPointerLock();
   }
 
   setActive(active: boolean): void {
     this.active = active;
     this.keys.clear(); this.drag = null;
     this.scene.animationsEnabled = active;
-    if (!active && document.pointerLockElement === this.canvas) document.exitPointerLock();
+    if (!active) this.setCursorFree(true);
     if (!active) this.callbacks.onTarget(null);
   }
 
@@ -606,7 +649,7 @@ export class ShopWorld {
       inspectable = false;
     } else if (data.kind === "open-sign") {
       label = "Open / Closed · 营业牌";
-      action = this.state.customer.phase === "outside" ? "开门营业" : this.state.customer.phase === "complete" ? "接待下一位顾客" : "正在营业";
+      action = this.state.day.phase === "settled" ? "查看日结 / 开始下一天" : canSettleDay(this.state) ? "结束营业并查看账目" : this.state.customer.phase === "outside" ? "开门营业" : this.state.customer.phase === "complete" ? "接待下一位顾客" : "正在营业";
       inspectable = false;
     } else {
       label = "Delivery · 安全卸货点";
@@ -639,6 +682,10 @@ export class ShopWorld {
     const state = this.state;
     let point: Position;
     let title: string;
+    if (state.day.phase === "settled" || canSettleDay(state)) {
+      this.callbacks.onGuide?.(state.day.phase === "settled" ? "今日已日结 · 点“营业 / 日结”开始下一天" : "三单已完成 · 点“营业 / 日结”查看今天的收支");
+      return;
+    }
     if (state.customer.phase === "checkout" || state.customer.phase === "to-checkout") {
       point = { x: -2.2, z: -1.0 }; title = "收银台内侧";
     } else if (state.held.kind === "crate") {
@@ -652,8 +699,15 @@ export class ShopWorld {
     } else if (state.customer.phase === "outside" || state.customer.phase === "complete") {
       const productId = (["milk", "bread"] as ProductId[]).find((id) => countAt(state, id, "shelf") === 0);
       if (productId) {
+        if (!state.items.some((item) => item.productId === productId && item.location.kind !== "sold")) {
+          this.callbacks.onGuide?.("按 B 进货 · 每份牛奶与面包 £2.30");
+          return;
+        }
         point = state.crates.find((crate) => crate.productId === productId)!.position;
         title = `${PRODUCTS[productId].nameZh}货箱 · 向下看`;
+      } else if (state.day.phase === "open") {
+        this.callbacks.onGuide?.("货架已备好 · 下一位顾客即将进店");
+        return;
       } else { point = { x: .65, z: -4.48 }; title = "门口营业牌"; }
     } else {
       point = { x: this.customer.position.x, z: this.customer.position.z };

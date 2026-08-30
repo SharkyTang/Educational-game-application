@@ -1,5 +1,23 @@
 # 素材来源记录
 
+## S1 首日本地语音（2026-08-31）
+
+本轮保留 S0 的模型、材质和两条真人单词音频，新增八条**英式合成短句**。它们是预先在本机生成的 WAV，不是运行时联网 TTS，不收取调用费用，也不是 macOS 系统 `say` 导出的声音。
+
+| 文件 / 资产 | 来源与许可 | 处理与用途 |
+| --- | --- | --- |
+| `audio/greeting.wav`、`card.wav`、`thanks.wav` | Piper / Cori medium；模型作者 Bryce Beattie 的[官方页面](https://brycebeattie.com/files/tts/)明确将该模型发布为 public domain | 英式女声合成；顾客入店问候、请求刷卡、付款后道谢 |
+| `audio/milk-phrase.wav`、`bread-phrase.wav` | 同一 Cori 模型 | `A carton of milk.` / `A loaf of bread.`，与原单词真人音频分开 |
+| `audio/repeat-request.wav`、`affirmative.wav`、`card-repeat.wav` | 同一 Cori 模型 | 请求重说、肯定回应与刷卡句变式；是否触发由应用流程控制，不因文件存在就宣称全部对话教学已实现 |
+| `audio/phrase-SOURCES.md`、`phrase-manifest.json` | 本项目记录；原始来源和第三方许可分别保留 | 台词、模型及文件哈希、格式、大小、时长、响度和复现说明 |
+| `scripts/generate-speech-clips.py` | 本项目制作脚本，离线调用 Piper 1.7.0（GPL-3.0-or-later） | 只用于制作；运行时与模型不随网页发布，脚本读取 `src/sim3d/speechClips.ts` 正本台词并校验模型哈希 |
+
+表中 `audio/` 均位于 `public/assets/sim3d/audio/`。八条 WAV 合计 **636,230 字节**，22,050 Hz、单声道、16 位 PCM；语速较模型默认值放慢，多句之间增加 0.22 秒停顿，轻微边缘淡入淡出并限制峰值。详细许可边界与复现记录见 [phrase-SOURCES.md](../public/assets/sim3d/audio/phrase-SOURCES.md)，精确身份见 [phrase-manifest.json](../public/assets/sim3d/audio/phrase-manifest.json)。
+
+Cori 模型约 63.5 MB，从作者官网给出的直链下载；模型、隔离 Python 环境和复现检查输出均在忽略的 `tmp/`，不会进入 GitHub 或浏览器包。不能把模型许可误写成对游戏整体的许可，也不能把这些合成句子署名给 Judith Franck。Piper 仅是离线制作工具，网页播放不加载该引擎。
+
+文件完整性/波形检查不等于声音自然度验收；后者由用户试听确认。自动播报、浏览器播放与鼠标点击的本轮结果单列在 [S1 首日验证记录](./S1_FIRST_DAY.md#验证记录)，不挪用 S0 结果。
+
 ## 第一人称 3D S0（2026-08-30）
 
 | 文件 / 资产 | 来源与许可 | 处理与用途 |

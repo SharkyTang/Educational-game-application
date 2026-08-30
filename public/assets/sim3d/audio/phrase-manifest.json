@@ -1,0 +1,110 @@
+{
+  "generatedBy": "scripts/generate-speech-clips.py",
+  "voice": "Cori medium, British English female, synthetic",
+  "sourceUrl": "https://sfo3.digitaloceanspaces.com/bkmdls/cori-med.onnx",
+  "modelSha256": "1899f98e5fb8310154f3c2973f4b8a929ba7245e722b3d3a85680b833d95f10d",
+  "configSha256": "4e4e862c06be95e268cb2edeb18eed39b4fc51c515d808ed3c51404f20e96fea",
+  "piperVersion": "1.7.0",
+  "onnxruntimeVersion": "1.19.2",
+  "numpyVersion": "2.0.2",
+  "seed": 31,
+  "lengthScale": 1.24,
+  "sentencePauseSeconds": 0.22,
+  "format": {
+    "container": "RIFF/WAVE",
+    "encoding": "PCM signed 16-bit little endian",
+    "sampleRate": 22050,
+    "channels": 1
+  },
+  "totalBytes": 636230,
+  "clips": [
+    {
+      "id": "greeting",
+      "text": "Hello!",
+      "zh": "你好！",
+      "file": "greeting.wav",
+      "bytes": 30764,
+      "durationSeconds": 0.697,
+      "sha256": "3de226c6f7e2a9e9eaeabcdaad1e9c94ca6d3754767bb96c4c2bd8486cbc2e5a",
+      "peakDbFS": -9.86,
+      "rmsDbFS": -23.12
+    },
+    {
+      "id": "card",
+      "text": "Can I pay by card, please?",
+      "zh": "请问可以刷卡吗？",
+      "file": "card.wav",
+      "bytes": 116780,
+      "durationSeconds": 2.647,
+      "sha256": "9916ad76f887f4c3bd3aad36de54151d4b2cb000857e1ad9d5ad2b3b9feed0f3",
+      "peakDbFS": -3.91,
+      "rmsDbFS": -19.16
+    },
+    {
+      "id": "thanks",
+      "text": "Thank you. Have a lovely day!",
+      "zh": "谢谢，祝你今天愉快！",
+      "file": "thanks.wav",
+      "bytes": 106514,
+      "durationSeconds": 2.414,
+      "sha256": "14c95a9f79f1ba8ac84048ce7c579f7d19cfc3854f3ac9021951b6a860c34610",
+      "peakDbFS": -3.0,
+      "rmsDbFS": -21.66
+    },
+    {
+      "id": "milkPhrase",
+      "text": "A carton of milk.",
+      "zh": "一盒牛奶。",
+      "file": "milk-phrase.wav",
+      "bytes": 55340,
+      "durationSeconds": 1.254,
+      "sha256": "014677904d36dd733aa9f0e4cf74704f63ad747b38902d7fb2f763f395c60868",
+      "peakDbFS": -4.08,
+      "rmsDbFS": -19.19
+    },
+    {
+      "id": "breadPhrase",
+      "text": "A loaf of bread.",
+      "zh": "一条面包。",
+      "file": "bread-phrase.wav",
+      "bytes": 65068,
+      "durationSeconds": 1.474,
+      "sha256": "e135afeadc8ea06189d1a0de6e93555fae5d1a08ef90660bfdf236d6368ad589",
+      "peakDbFS": -4.46,
+      "rmsDbFS": -19.78
+    },
+    {
+      "id": "repeatRequest",
+      "text": "Could you say that again, please?",
+      "zh": "请再说一遍，好吗？",
+      "file": "repeat-request.wav",
+      "bytes": 84524,
+      "durationSeconds": 1.916,
+      "sha256": "e626849753b18c232309139625d1b89ffd9ea20a52a18dfa3a5a1f15e52131a1",
+      "peakDbFS": -3.05,
+      "rmsDbFS": -18.68
+    },
+    {
+      "id": "affirmative",
+      "text": "Yes, of course.",
+      "zh": "好的，当然可以。",
+      "file": "affirmative.wav",
+      "bytes": 57388,
+      "durationSeconds": 1.3,
+      "sha256": "bb60ea4ae7c8fedbd4e79f9a967a5c0384a1262e538ad16f8d3837fc7df474ec",
+      "peakDbFS": -4.05,
+      "rmsDbFS": -18.97
+    },
+    {
+      "id": "cardRepeat",
+      "text": "Sorry, can I pay by card?",
+      "zh": "不好意思，我可以刷卡吗？",
+      "file": "card-repeat.wav",
+      "bytes": 119852,
+      "durationSeconds": 2.717,
+      "sha256": "dd092c53eea0ac67c4e47043a3bd4866b6e71a43b4543af4a4c57c24fd105bcd",
+      "peakDbFS": -5.74,
+      "rmsDbFS": -20.28
+    }
+  ]
+}
