@@ -107,7 +107,7 @@ async function pickUpAndReturnToCounter(
   });
 }
 
-test("completes Day 1, unlocks the dual-gate upgrade, and resumes the saved completion", async ({
+test("legacy 2D: completes Day 1, unlocks its historical dual-gate upgrade, and resumes completion", async ({
   page,
 }) => {
   test.setTimeout(60_000);
@@ -117,7 +117,7 @@ test("completes Day 1, unlocks the dual-gate upgrade, and resumes the saved comp
     if (message.type() === "error") runtimeErrors.push(message.text());
   });
 
-  await page.goto("/");
+  await page.goto("/?legacy=1");
 
   // Landing -> support mode.
   await expect(page.getByTestId("screen-landing")).toBeVisible();
