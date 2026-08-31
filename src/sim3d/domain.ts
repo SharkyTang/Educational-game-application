@@ -135,6 +135,8 @@ export interface SimSettlement extends SimDaySummary {
   openingStockUnits: number;
 }
 interface SimEconomyState extends SimWorldState {
+  /** Presentation-only random seed; absent in older v4 saves, which remain valid. */
+  customerSeed?: number;
   /** Only these two fixed, auditable opening balances are accepted. */
   openingKind: "first-day" | "legacy-s0";
   day: SimDay;
@@ -758,6 +760,7 @@ const SUMMARY_FIELDS = [
 /** The ledger proves each item source, purchase quantity, paid sale, daily carry and cash balance. */
 function validateEconomyState(value: unknown, version: 4 | 5): value is EconomySnapshot {
   if (!validateWorldState(value, version) || value.schemaVersion === 3) return false;
+  if (value.customerSeed !== undefined && (!isInteger(value.customerSeed) || value.customerSeed < 0 || value.customerSeed > 0xffffffff)) return false;
   if (value.openingKind !== "first-day" && value.openingKind !== "legacy-s0") return false;
   if (!isRecord(value.day) || !isInteger(value.day.number) || value.day.number < 1
     || typeof value.day.phase !== "string" || !["preparing", "open", "settled"].includes(value.day.phase) || value.day.targetCustomers !== DAY_CUSTOMER_TARGET

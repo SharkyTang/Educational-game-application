@@ -3,6 +3,7 @@ import { capacityFor, countAt, createFirstDayState, createInitialSimState, DELIV
 import { SIM_BACKUP_KEY, SIM_STORAGE_KEY, type SimLockManager, type StorageLike } from "../../src/sim3d/persistence";
 import type { InteractionTarget, WorldCallbacks } from "../../src/sim3d/world";
 import { SPEECH_CLIPS } from "../../src/sim3d/speechClips";
+import { customerProfileFor, customerSpeechFor, NEXT_CUSTOMER_SECONDS, type CustomerVoice } from "../../src/sim3d/customerSelection";
 
 const doubles = vi.hoisted(() => {
   class World {
@@ -197,6 +198,21 @@ function savedState(): SimState {
   const value: unknown = JSON.parse(storage.getItem(SIM_STORAGE_KEY)!);
   expect(validateSimState(value)).toBe(true);
   return value as SimState;
+}
+
+function stubCustomerEntropy(seed: number) {
+  const getRandomValues = vi.fn((words: Uint32Array): Uint32Array => { words[0] = seed; return words });
+  vi.stubGlobal("crypto", { getRandomValues, randomUUID: crypto.randomUUID.bind(crypto) });
+  return getRandomValues;
+}
+
+function checkoutWithLegacyPhrase(voice: CustomerVoice): SimState {
+  const base = beforeCheckout();
+  for (let seed = 0; seed < 512; seed += 1) {
+    const state = { ...base, customerSeed: seed };
+    if (customerProfileFor(state).voice === voice && customerSpeechFor(state, "checkout").text === SPEECH_CLIPS.card.text) return state;
+  }
+  throw new Error(`No ${voice} legacy-text collision fixture found in the bounded seed search.`);
 }
 
 async function readyGame(state = createFirstDayState()) {
@@ -591,13 +607,16 @@ describe("automatic customer voice and manual replay wiring", () => {
     expect(view.element("s3-customer-audio-status").textContent).not.toContain("播放结束");
   });
 
-  it.each([0, 2])("speaks the correct checkout request after %i paid orders and releases the cursor", async (paidCustomers) => {
+  it.each([0, 1, 2])("speaks the correct checkout request after %i paid orders and releases the cursor", async (paidCustomers) => {
     const view = await readyGame(beforeCheckout(paidCustomers));
     view.world.callbacks.onPointerMode?.("locked");
     view.world.callbacks.onCustomerArrive();
-    const clip = paidCustomers === 2 ? SPEECH_CLIPS.cardRepeat : SPEECH_CLIPS.card;
+    const clip = customerSpeechFor(savedState(), "checkout");
+    const profile = customerProfileFor(savedState());
     expect(savedState().customer.phase).toBe("checkout");
     expect(view.audio.src).toBe(clip.src);
+    expect(view.audio.src).toContain(`/customers/${profile.voice}/`);
+    expect(view.element("s3-customer-name").textContent).toBe(`${profile.name} · 第 ${paidCustomers + 1} 位顾客`);
     expect(view.audio.play).toHaveBeenCalledOnce();
     expect(view.audio.muted).toBe(false);
     expect(view.element("s3-customer-line").textContent).toContain(clip.text);
@@ -616,23 +635,25 @@ describe("automatic customer voice and manual replay wiring", () => {
 
   it("turns automatic speech off without removing subtitles, pointer release or manual R replay", async () => {
     const view = await readyGame(beforeCheckout());
+    const clip = customerSpeechFor(savedState(), "checkout");
     view.element("s3-pause-button").click();
     view.element("s3-auto-speech").checked = false;
     view.element("s3-auto-speech").dispatchEvent(new Event("input"));
     view.element("s3-resume").click();
     view.world.callbacks.onCustomerArrive();
     expect(view.audio.play).not.toHaveBeenCalled();
-    expect(view.element("s3-customer-line").textContent).toContain(SPEECH_CLIPS.card.text);
+    expect(view.element("s3-customer-line").textContent).toContain(clip.text);
     expect(view.element("s3-customer-audio-status").textContent).toContain("字幕始终保留");
     expect(view.world.setCursorFree).toHaveBeenLastCalledWith(true);
     expect(JSON.parse(storage.getItem("english-high-street:sim3d:settings:v1")!).autoSpeech).toBe(false);
     key("KeyR");
     expect(view.audio.play).toHaveBeenCalledOnce();
-    expect(view.audio.src).toBe(SPEECH_CLIPS.card.src);
+    expect(view.audio.src).toBe(clip.src);
   });
 
   it("reports rejected autoplay honestly, ignores false completion and allows explicit replay", async () => {
     const view = await readyGame(beforeCheckout());
+    const clip = customerSpeechFor(savedState(), "checkout");
     view.audio.play.mockRejectedValueOnce(new Error("NotAllowedError"));
     view.world.callbacks.onCustomerArrive();
     view.audio.onended?.();
@@ -641,17 +662,19 @@ describe("automatic customer voice and manual replay wiring", () => {
     view.audio.onplaying?.();
     view.audio.onended?.();
     expect(view.element("s3-customer-audio-status").textContent).toContain("语音未能播放");
-    expect(view.element("s3-customer-line").textContent).toContain(SPEECH_CLIPS.card.text);
+    expect(view.element("s3-customer-line").textContent).toContain(clip.text);
     expect(savedState().cashPence).toBe(510);
     view.element("s3-read-customer").click();
     view.audio.onplaying?.();
     view.audio.onended?.();
     expect(view.element("s3-customer-audio-status").textContent).toContain("播放结束");
     expect(view.audio.play).toHaveBeenCalledTimes(2);
+    expect(view.audio.src).toBe(clip.src);
   });
 
   it("plays a polite repeat request followed only after real completion by the slower customer sentence", async () => {
     const view = await readyGame(beforeCheckout());
+    const clip = customerSpeechFor(savedState(), "checkout");
     view.world.callbacks.onCustomerArrive();
     view.audio.play.mockClear();
     view.element("s3-repeat-customer").click();
@@ -663,19 +686,21 @@ describe("automatic customer voice and manual replay wiring", () => {
     view.audio.onplaying?.();
     view.audio.onended?.();
     expect(view.audio.play).toHaveBeenCalledTimes(2);
-    expect(view.audio.src).toBe(SPEECH_CLIPS.card.src);
+    expect(view.audio.src).toBe(clip.src);
     expect(view.audio.defaultPlaybackRate).toBe(0.84);
     expect(view.audio.playbackRate).toBe(0.84);
     view.audio.playbackRate = 1;
     view.audio.onloadedmetadata?.();
     expect(view.audio.playbackRate).toBe(0.84);
-    expect(view.element("s3-customer-line").textContent).toContain(`顾客：“${SPEECH_CLIPS.card.text}”`);
+    expect(view.element("s3-customer-line").textContent).toContain(`顾客：“${clip.text}”`);
+    expect(view.element("s3-customer-zh").textContent).toContain(clip.zh);
     expect(view.element("s3-customer-zh").textContent).toContain("这次慢一点说");
     expect(savedState().transactions).toHaveLength(0);
   });
 
   it("does not let stale metadata from an earlier clip overwrite a newer playback rate", async () => {
     const view = await readyGame(beforeCheckout());
+    const clip = customerSpeechFor(savedState(), "checkout");
     view.world.callbacks.onCustomerArrive();
     const regularMetadata = view.audio.onloadedmetadata;
     view.element("s3-repeat-customer").click();
@@ -688,6 +713,7 @@ describe("automatic customer voice and manual replay wiring", () => {
     key("KeyR");
     expect(view.audio.defaultPlaybackRate).toBe(1);
     expect(view.audio.playbackRate).toBe(1);
+    expect(view.audio.src).toBe(clip.src);
     slowerMetadata?.();
     expect(view.audio.playbackRate).toBe(1);
     view.element("s3-pause-button").click();
@@ -698,6 +724,7 @@ describe("automatic customer voice and manual replay wiring", () => {
 
   it("restores the customer subtitles when R interrupts a repeat request and ignores the request's stale completion", async () => {
     const view = await readyGame(beforeCheckout());
+    const clip = customerSpeechFor(savedState(), "checkout");
     view.world.callbacks.onCustomerArrive();
     view.audio.play.mockClear();
     view.element("s3-repeat-customer").click();
@@ -708,18 +735,18 @@ describe("automatic customer voice and manual replay wiring", () => {
     expect(view.element("s3-customer-zh").textContent).toBe(SPEECH_CLIPS.repeatRequest.zh);
 
     key("KeyR");
-    expect(view.audio.src).toBe(SPEECH_CLIPS.card.src);
+    expect(view.audio.src).toBe(clip.src);
     expect(view.audio.playbackRate).toBe(1);
-    expect(view.element("s3-customer-line").textContent).toContain(SPEECH_CLIPS.card.text);
+    expect(view.element("s3-customer-line").textContent).toContain(clip.text);
     expect(view.element("s3-customer-line").textContent).not.toContain(SPEECH_CLIPS.repeatRequest.text);
-    expect(view.element("s3-customer-zh").textContent).toBe(SPEECH_CLIPS.card.zh);
+    expect(view.element("s3-customer-zh").textContent).toBe(clip.zh);
 
     interruptedRequestEnd?.();
     expect(view.audio.play).toHaveBeenCalledTimes(2);
-    expect(view.audio.src).toBe(SPEECH_CLIPS.card.src);
+    expect(view.audio.src).toBe(clip.src);
     expect(view.audio.playbackRate).toBe(1);
-    expect(view.element("s3-customer-line").textContent).toContain(SPEECH_CLIPS.card.text);
-    expect(view.element("s3-customer-zh").textContent).toBe(SPEECH_CLIPS.card.zh);
+    expect(view.element("s3-customer-line").textContent).toContain(clip.text);
+    expect(view.element("s3-customer-zh").textContent).toBe(clip.zh);
     view.audio.onplaying?.();
     view.audio.onended?.();
     expect(view.element("s3-customer-audio-status").textContent).toContain("播放结束");
@@ -738,6 +765,289 @@ describe("automatic customer voice and manual replay wiring", () => {
     expect(view.audio.play).toHaveBeenCalledOnce();
     expect(view.audio.paused).toBe(true);
     expect(view.element("s3-pause").open).toBe(true);
+  });
+});
+
+describe("customer identity, dialogue continuity and saved seeds", () => {
+  it("keeps three visibly named customers and both voice sets consistent through greeting, scanning, payment and departure", async () => {
+    let now = 1000;
+    vi.spyOn(performance, "now").mockImplementation(() => now);
+    const view = await readyGame({ ...stockedFirstDay(), customerSeed: 31 });
+    const profileIds = new Set<string>();
+    const voices = new Set<CustomerVoice>();
+    const greetingIds = new Set<string>();
+    const checkoutIds = new Set<string>();
+    const thanksIds = new Set<string>();
+    view.world.callbacks.onTarget({ id: "open-sign", kind: "open-sign", label: "营业牌", action: "开门营业", inspectable: false, distance: 1 });
+    view.world.callbacks.onInteract();
+
+    for (let number = 1; number <= 3; number += 1) {
+      const shopping = savedState();
+      const profile = customerProfileFor(shopping);
+      const greeting = customerSpeechFor(shopping, "greeting");
+      profileIds.add(profile.id);
+      voices.add(profile.voice);
+      greetingIds.add(greeting.id);
+      expect(shopping.customer).toEqual({ number, phase: "to-milk" });
+      expect(view.element("s3-customer-name").textContent).toBe(`${profile.name} · 第 ${number} 位顾客`);
+      expect(view.element("s3-customer-line").textContent).toContain(greeting.text);
+      expect(view.element("s3-customer-zh").textContent).toBe(greeting.zh);
+      expect(view.audio.src).toBe(greeting.src);
+      expect(view.audio.src).toContain(`/customers/${profile.voice}/`);
+      expect(view.audio.play).toHaveBeenCalledOnce();
+
+      view.audio.play.mockClear();
+      view.world.callbacks.onCustomerArrive();
+      view.world.callbacks.onCustomerArrive();
+      expect(view.audio.play).not.toHaveBeenCalled(); // Walking between shelves is not a new greeting.
+      view.world.callbacks.onCustomerArrive();
+      const checkout = customerSpeechFor(savedState(), "checkout");
+      checkoutIds.add(checkout.id);
+      expect(savedState().customer.phase).toBe("checkout");
+      expect(customerProfileFor(savedState())).toEqual(profile);
+      expect(view.audio.src).toBe(checkout.src);
+      expect(view.element("s3-customer-line").textContent).toContain(checkout.text);
+      expect(view.element("s3-customer-zh").textContent).toBe(checkout.zh);
+      expect(view.audio.play).toHaveBeenCalledOnce();
+
+      view.world.callbacks.onTarget({ id: "counter", kind: "counter", label: "收银台", action: "扫码收款", inspectable: false, distance: 1 });
+      view.world.callbacks.onInteract();
+      view.world.callbacks.onInteract();
+      expect(savedState().scannedIds).toHaveLength(2);
+      expect(view.audio.play).toHaveBeenCalledOnce(); // Scanning must not select/repeat another checkout line.
+      expect(view.audio.src).toBe(checkout.src);
+      expect(view.element("s3-customer-line").textContent).toContain(checkout.text);
+      view.world.callbacks.onInteract();
+      const thanks = customerSpeechFor(savedState(), "thanks");
+      thanksIds.add(thanks.id);
+      expect(savedState().customer.phase).toBe("leaving");
+      expect(savedState().transactions).toHaveLength(number);
+      expect(savedState().cashPence).toBe(510 + number * 400);
+      expect(customerProfileFor(savedState())).toEqual(profile);
+      expect(view.audio.src).toBe(thanks.src);
+      expect(view.element("s3-customer-line").textContent).toContain(thanks.text);
+      expect(view.element("s3-customer-zh").textContent).toBe(thanks.zh);
+      expect(view.audio.play).toHaveBeenCalledTimes(2);
+      view.world.callbacks.onCustomerArrive();
+      expect(savedState().customer.phase).toBe("complete");
+      expect(view.audio.play).toHaveBeenCalledTimes(2); // Departure is not a second thank-you.
+      view.audio.play.mockClear();
+      now += 650;
+      view.world.callbacks.onFrame?.(60, shopping.playerPose);
+    }
+
+    expect(profileIds.size).toBe(3);
+    expect([...voices].sort()).toEqual(["female", "male"]);
+    expect(greetingIds.size).toBe(3);
+    expect(checkoutIds.size).toBe(3);
+    expect(thanksIds.size).toBe(3);
+    expect(savedState().customer).toEqual({ number: 3, phase: "complete" });
+    expect(view.element("s3-panel-day").hidden).toBe(false);
+    expect(view.element("s3-pause").open).toBe(true);
+    expect(view.audio.play).not.toHaveBeenCalled();
+  });
+
+  it.each(["female", "male"] as const)("uses the %s customer's own file when its text exactly matches a legacy clip, including replay and slow reply", async (voice) => {
+    const view = await readyGame(checkoutWithLegacyPhrase(voice));
+    view.world.callbacks.onCustomerArrive();
+    const state = savedState();
+    const clip = customerSpeechFor(state, "checkout");
+    expect(clip.text).toBe(SPEECH_CLIPS.card.text);
+    expect(clip.src).not.toBe(SPEECH_CLIPS.card.src);
+    expect(clip.src).toContain(`/customers/${voice}/`);
+    expect(view.audio.src).toBe(clip.src);
+    expect(view.audio.play).toHaveBeenCalledOnce();
+    const snapshot = storage.getItem(SIM_STORAGE_KEY);
+    key("KeyR");
+    view.element("s3-read-customer").click();
+    expect(view.audio.play).toHaveBeenCalledTimes(3);
+    expect(view.audio.src).toBe(clip.src);
+    expect(view.audio.playbackRate).toBe(1);
+    expect(view.element("s3-customer-line").textContent).toContain(clip.text);
+    expect(view.element("s3-customer-zh").textContent).toBe(clip.zh);
+    view.element("s3-repeat-customer").click();
+    expect(view.audio.src).toBe(SPEECH_CLIPS.repeatRequest.src); // The player's sentence still uses its dedicated recording.
+    view.audio.onplaying?.();
+    view.audio.onended?.();
+    expect(view.audio.play).toHaveBeenCalledTimes(5);
+    expect(view.audio.src).toBe(clip.src);
+    expect(view.audio.defaultPlaybackRate).toBe(0.84);
+    expect(view.audio.playbackRate).toBe(0.84);
+    expect(view.element("s3-customer-line").textContent).toContain(`顾客：“${clip.text}”`);
+    expect(view.element("s3-customer-zh").textContent).toBe(`${clip.zh} · 这次慢一点说`);
+    expect(customerSpeechFor(savedState(), "checkout")).toEqual(clip);
+    expect(storage.getItem(SIM_STORAGE_KEY)).toBe(snapshot);
+  });
+
+  it("draws a new seed after writer admission, first saves it on Start and retains it across reload and takeover", async () => {
+    const entropy = stubCustomerEntropy(0x1234abcd);
+    const view = mount();
+    expect(entropy).not.toHaveBeenCalled();
+    expect(storage.getItem(SIM_STORAGE_KEY)).toBeNull();
+    const loading = view.app.init();
+    await settle();
+    expect(locks.held).toBe(true);
+    expect(entropy).toHaveBeenCalledOnce();
+    expect(storage.getItem(SIM_STORAGE_KEY)).toBeNull(); // Loading alone is not a started game.
+    doubles.World.instances[0]!.complete();
+    await loading;
+    expect(storage.getItem(SIM_STORAGE_KEY)).toBeNull();
+    view.element("s3-start-button").click();
+    await settle();
+    const firstSnapshot = savedState();
+    expect(firstSnapshot.customerSeed).toBe(0x1234abcd);
+    expect(firstSnapshot.cashPence).toBe(1200);
+    expect(firstSnapshot.items).toEqual([]);
+    await view.app.dispose();
+
+    const restored = mount();
+    const restoredLoading = restored.app.init();
+    await settle();
+    doubles.World.instances[1]!.complete();
+    await restoredLoading;
+    restored.element("s3-start-button").click();
+    await settle();
+    expect(entropy).toHaveBeenCalledOnce();
+    expect(savedState().customerSeed).toBe(firstSnapshot.customerSeed);
+    expect(customerProfileFor(savedState())).toEqual(customerProfileFor(firstSnapshot));
+    expect(customerSpeechFor(savedState(), "greeting")).toEqual(customerSpeechFor(firstSnapshot, "greeting"));
+
+    const observer = mount();
+    const observerLoading = observer.app.init();
+    await settle();
+    doubles.World.instances.at(-1)!.complete();
+    await observerLoading;
+    expect(observer.element("s3-start-button").disabled).toBe(true);
+    expect(observer.element("s3-start-button").textContent).toBe("此页面只读");
+    expect(entropy).toHaveBeenCalledOnce();
+    await restored.app.dispose();
+    observer.element("s3-takeover").click();
+    await settle();
+    doubles.World.instances.at(-1)!.complete();
+    await settle();
+    observer.element("s3-start-button").click();
+    await settle();
+    expect(observer.element("s3-start").hidden).toBe(true);
+    expect(entropy).toHaveBeenCalledOnce();
+    expect(savedState().customerSeed).toBe(firstSnapshot.customerSeed);
+    expect(customerProfileFor(savedState())).toEqual(customerProfileFor(firstSnapshot));
+    expect(customerSpeechFor(savedState(), "greeting")).toEqual(customerSpeechFor(firstSnapshot, "greeting"));
+  });
+
+  it("does not draw or persist a seed on a read-only page with no existing snapshot", async () => {
+    const entropy = stubCustomerEntropy(0xfedcba98);
+    locks.held = true;
+    const view = mount();
+    const loading = view.app.init();
+    await settle();
+    doubles.World.instances[0]!.complete();
+    await loading;
+    view.element("s3-start-button").click();
+    expect(view.element("s3-start-button").disabled).toBe(true);
+    expect(view.element("s3-start-button").textContent).toBe("此页面只读");
+    expect(entropy).not.toHaveBeenCalled();
+    expect(storage.getItem(SIM_STORAGE_KEY)).toBeNull();
+    expect(storage.writes).toBe(0);
+  });
+
+  it.each([undefined, 0, 20260831])("retains seed %s, customer name and exact checkout voice after a real remount", async (seed) => {
+    const entropy = stubCustomerEntropy(0xabcdef01);
+    const state = beforeCheckout(1);
+    if (seed !== undefined) state.customerSeed = seed;
+    const view = await readyGame(state);
+    view.world.callbacks.onCustomerArrive();
+    const expectedState = savedState();
+    const clip = customerSpeechFor(expectedState, "checkout");
+    const profile = customerProfileFor(expectedState);
+    const name = `${profile.name} · 第 2 位顾客`;
+    expect(view.element("s3-customer-name").textContent).toBe(name);
+    expect(view.audio.src).toBe(clip.src);
+    await view.app.dispose();
+
+    const restored = mount();
+    const loading = restored.app.init();
+    await settle();
+    doubles.World.instances.at(-1)!.complete();
+    await loading;
+    restored.element("s3-start-button").click();
+    await settle();
+    expect(entropy).not.toHaveBeenCalled();
+    expect(savedState().customerSeed).toBe(seed);
+    expect(savedState().customer).toEqual(expectedState.customer);
+    expect(savedState().transactions).toEqual(expectedState.transactions);
+    expect(restored.element("s3-customer-name").textContent).toBe(name);
+    expect(restored.element("s3-customer-line").textContent).toContain(clip.text);
+    expect(restored.element("s3-customer-zh").textContent).toBe(clip.zh);
+    expect(restored.element("s3-word-audio").src).toBe(clip.src);
+    if (seed === undefined) {
+      expect(savedState()).not.toHaveProperty("customerSeed");
+      expect(clip).toEqual(customerSpeechFor({ ...expectedState, customerSeed: 31 }, "checkout"));
+    }
+  });
+
+  it.each([undefined, 0, 827381])("imports seed %s without redrawing it and restores the imported customer's identity and audio", async (seed) => {
+    const entropy = stubCustomerEntropy(0xdeadbeef);
+    const view = await readyGame({ ...beforeCheckout(), customerSeed: 88 });
+    view.element("s3-pause-button").click();
+    const original = storage.getItem(SIM_STORAGE_KEY);
+    const imported = act(beforeCheckout(2), { type: "CUSTOMER_ADVANCE" });
+    if (seed !== undefined) imported.customerSeed = seed;
+    const clip = customerSpeechFor(imported, "checkout");
+    const profile = customerProfileFor(imported);
+    const raw = JSON.stringify(imported);
+    const input = view.element("s3-import-file");
+    input.files = [{ name: "customer-seed.json", size: raw.length, text: async () => raw }];
+    input.dispatchEvent(new Event("change"));
+    await settle();
+    expect(storage.getItem(SIM_STORAGE_KEY)).toBe(original);
+    view.element("s3-import-confirm-button").click();
+    await settle();
+    doubles.World.instances.at(-1)!.complete();
+    await settle();
+    expect(savedState()).toEqual(imported);
+    expect(storage.getItem(SIM_BACKUP_KEY)).toBe(original);
+    view.element("s3-start-button").click();
+    await settle();
+    expect(entropy).not.toHaveBeenCalled();
+    expect(savedState().customerSeed).toBe(seed);
+    expect(view.element("s3-customer-name").textContent).toBe(`${profile.name} · 第 3 位顾客`);
+    expect(view.element("s3-customer-line").textContent).toContain(clip.text);
+    expect(view.element("s3-customer-zh").textContent).toBe(clip.zh);
+    expect(view.audio.src).toBe(clip.src);
+    key("KeyR");
+    expect(view.audio.src).toBe(clip.src);
+    expect(customerSpeechFor(savedState(), "checkout")).toEqual(clip);
+    if (seed === undefined) expect(savedState()).not.toHaveProperty("customerSeed");
+  });
+
+  it("generates a replacement seed only after restart confirmation and preserves the old seed in backup", async () => {
+    const entropy = stubCustomerEntropy(0x12345678);
+    const view = await readyGame({ ...beforeCheckout(1), customerSeed: 77 });
+    view.element("s3-pause-button").click();
+    const original = storage.getItem(SIM_STORAGE_KEY);
+    view.element("s3-restart").click();
+    expect(view.element("s3-restart-confirm").hidden).toBe(false);
+    expect(entropy).not.toHaveBeenCalled();
+    expect(storage.getItem(SIM_STORAGE_KEY)).toBe(original);
+    view.element("s3-restart-cancel").click();
+    expect(entropy).not.toHaveBeenCalled();
+    expect(storage.getItem(SIM_STORAGE_KEY)).toBe(original);
+    view.element("s3-restart").click();
+    view.element("s3-restart-confirm-button").click();
+    const fresh = savedState();
+    expect(entropy).toHaveBeenCalledOnce();
+    expect(fresh.customerSeed).toBe(0x12345678);
+    expect(fresh.customerSeed).not.toBe(77);
+    expect(fresh.customer).toEqual({ number: 1, phase: "outside" });
+    expect(fresh.cashPence).toBe(1200);
+    expect(fresh.transactions).toEqual([]);
+    expect(storage.getItem(SIM_BACKUP_KEY)).toBe(original);
+    expect(view.world.setState).toHaveBeenLastCalledWith(fresh);
+    expect(view.element("s3-start").hidden).toBe(false);
+    view.element("s3-start-button").click();
+    await settle();
+    expect(entropy).toHaveBeenCalledOnce();
+    expect(savedState().customerSeed).toBe(fresh.customerSeed);
   });
 });
 
@@ -869,13 +1179,17 @@ describe("first-day management event wiring and persistence", () => {
     let state = stockedFirstDay();
     for (let count = 0; count < paidCustomers; count += 1) state = completeOrder(state);
     const view = await readyGame(state);
-    for (let frame = 0; frame < 2; frame += 1) {
-      now += 1200;
-      view.world.callbacks.onFrame?.(60, state.playerPose);
-    }
+    expect(NEXT_CUSTOMER_SECONDS).toBe(0.65);
+    now += 649;
+    view.world.callbacks.onFrame?.(60, state.playerPose);
+    expect(savedState().customer.phase).toBe("complete");
+    expect(view.element("s3-pause").open).toBe(false);
+    expect(view.audio.play).not.toHaveBeenCalled();
+    now += 1;
+    view.world.callbacks.onFrame?.(60, state.playerPose);
     if (paidCustomers === 1) {
       expect(savedState().customer).toEqual({ number: 2, phase: "to-milk" });
-      expect(view.audio.src).toBe(SPEECH_CLIPS.greeting.src);
+      expect(view.audio.src).toBe(customerSpeechFor(savedState(), "greeting").src);
       expect(view.audio.play).toHaveBeenCalledOnce();
       expect(view.element("s3-pause").open).toBe(false);
     } else {
@@ -883,6 +1197,11 @@ describe("first-day management event wiring and persistence", () => {
       expect(view.element("s3-pause").open).toBe(true);
       expect(view.element("s3-panel-day").hidden).toBe(false);
       expect(view.element("s3-settle-day").disabled).toBe(false);
+      expect(view.audio.play).not.toHaveBeenCalled();
+      now += 10_000;
+      view.world.callbacks.onFrame?.(60, state.playerPose);
+      expect(savedState().customer).toEqual({ number: 3, phase: "complete" });
+      expect(savedState().transactions).toHaveLength(3);
       expect(view.audio.play).not.toHaveBeenCalled();
     }
   });

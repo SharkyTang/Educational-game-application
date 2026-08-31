@@ -1,5 +1,5 @@
 /**
- * Build the MIT Microsoft Rocketbox adult customer without adding app deps.
+ * Build the MIT Microsoft Rocketbox adult customers without adding app deps.
  *
  * Prerequisites: Node 22+, Pillow, and the official FBX2glTF 0.9.7 executable.
  * On macOS Apple Silicon this executable uses an existing Rosetta installation.
@@ -8,35 +8,109 @@
  * node scripts/prepare-customer.mjs --download  (fetch pinned source files first)
  * node scripts/prepare-customer.mjs --skip-convert (repack existing conversions)
  * node scripts/prepare-customer.mjs --verify-only (offline output checks)
+ * node scripts/prepare-customer.mjs --avatar male-01 --download
+ * Avatars: female-01 (default/legacy output), female-02, male-01, male-02.
  */
 
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const SOURCE = join(ROOT, "tmp/customer-source");
-const CONVERTED = join(SOURCE, "converted");
-const OUTPUT = join(ROOT, "public/assets/sim3d/customer.glb");
 const COMMIT = "0943055db6ec570bcef9f2c8b41c9e5467c808f9";
 const BASE = `https://raw.githubusercontent.com/microsoft/Microsoft-Rocketbox/${COMMIT}`;
 const CONVERTER = process.env.CUSTOMER_FBX2GLTF ?? join(SOURCE, "tools/FBX2glTF");
 const PYTHON = process.env.CUSTOMER_PYTHON ?? "python3";
 const MAX_BYTES = 8 * 1024 * 1024;
 const CONVERTER_INTEGRITY = "gKWlCZq0xA+wcqj+0R0KeD5yxtq0EqO9cmYNuJTEVeP1aKPRP3ZXoNGh4JPLmI50jkIqE0aC/7GjAmS1ZPeDmw==";
-const TEXTURE_BLOBS = {
-  body: "25852db0db1f44a0de0643ce1e09c88aef587e6f",
-  head: "0cdc62ab47da3dca01aff0bb179159865a559c63",
-  opacity: "de21a9e69c88e539da6a5050eaceadd026e99b62",
+const AVATARS = {
+  "female-01": {
+    sourceAvatar: "Female_Adult_01", texturePrefix: "f001", animationPrefix: "f",
+    modelSha: "59e6c03fa86691cda806ef5d5b040e462c0fb9c1",
+    textures: {
+      body: "25852db0db1f44a0de0643ce1e09c88aef587e6f",
+      head: "0cdc62ab47da3dca01aff0bb179159865a559c63",
+      opacity: "de21a9e69c88e539da6a5050eaceadd026e99b62",
+    },
+  },
+  "female-02": {
+    sourceAvatar: "Female_Adult_02", texturePrefix: "f002", animationPrefix: "f",
+    modelSha: "9a165315f36c7a34e339919f84419a9f0b90fa0a",
+    textures: {
+      body: "5eb8ee83281a7526544a80ddf9804507670eb049",
+      head: "8f59bb553f24d3581de68bcf4683695c014bcc0f",
+      opacity: "3d930c42ed476ab3f58548e5ee33e10ea9f02a27",
+    },
+  },
+  "male-01": {
+    sourceAvatar: "Male_Adult_01", texturePrefix: "m002", animationPrefix: "m",
+    modelSha: "fdaf4aa7d15054f1601740ea1a09cf111938d210",
+    textures: {
+      body: "818ec72b6c69655c5853ab0eb1efdd6ab40b2bf0",
+      head: "0becf592ac705b4a2be8a63aa164266ac2a09d9c",
+      opacity: "a4088df07a8896761bd209d304b12310f90e5003",
+    },
+  },
+  "male-02": {
+    sourceAvatar: "Male_Adult_02", texturePrefix: "m003", animationPrefix: "m",
+    modelSha: "26ff800005a7624afa37fc212d870ea4bf0b5a02",
+    textures: {
+      body: "23e54f1b4e06ca411aa166a016d77f7536316151",
+      head: "ec68799915ff8aa26cd18a85c09b1e86c51b17a4",
+      opacity: "8860d347a396261f06cbb2f620a28efffe11c334",
+    },
+  },
+};
+const avatarFlagIndex = process.argv.indexOf("--avatar");
+const avatarId = avatarFlagIndex < 0 ? "female-01" : process.argv[avatarFlagIndex + 1];
+const AVATAR = AVATARS[avatarId];
+if (!AVATAR) throw new Error(`Unknown --avatar ${avatarId}; choose ${Object.keys(AVATARS).join(", ")}`);
+const CONVERTED = join(SOURCE, avatarId === "female-01" ? "converted" : `converted-${avatarId}`);
+const OUTPUT = join(ROOT, `public/assets/sim3d/${avatarId === "female-01" ? "customer" : `customer-${avatarId}`}.glb`);
+const TEXTURE_BLOBS = AVATAR.textures;
+const ANIMATION_SHAS = {
+  f: { idle: "64d93cc3d5c38dc107d4dad23da70855a64ddb10", walk: "94d6f50765e0865eee6dd439b1ab0ca3511c784e" },
+  m: { idle: "735b406c2f19cf233f042bfe0424c2a15c053c95", walk: "f8816638330d02fb31920d46851188b920d66ab1" },
 };
 
 const DOWNLOADS = [
-  ["Female_Adult_01.fbx", `${BASE}/Assets/Avatars/Adults/Female_Adult_01/Export/Female_Adult_01.fbx`],
-  ["f_walk_neutral.max.fbx", `${BASE}/Assets/Animations/all_animations_max_motextr_xy/f_walk_neutral.max.fbx`],
-  ["f_idle_breathe_01.max.fbx", `${BASE}/Assets/Animations/all_animations_max_motextr_static/f_idle_breathe_01.max.fbx`],
+  [`${AVATAR.sourceAvatar}.fbx`, `${BASE}/Assets/Avatars/Adults/${AVATAR.sourceAvatar}/Export/${AVATAR.sourceAvatar}.fbx`, AVATAR.modelSha],
+  [`${AVATAR.animationPrefix}_walk_neutral.max.fbx`, `${BASE}/Assets/Animations/all_animations_max_motextr_xy/${AVATAR.animationPrefix}_walk_neutral.max.fbx`, ANIMATION_SHAS[AVATAR.animationPrefix].walk],
+  [`${AVATAR.animationPrefix}_idle_breathe_01.max.fbx`, `${BASE}/Assets/Animations/all_animations_max_motextr_static/${AVATAR.animationPrefix}_idle_breathe_01.max.fbx`, ANIMATION_SHAS[AVATAR.animationPrefix].idle],
 ];
+
+function textureBlobPath(part) {
+  return join(SOURCE, `${avatarId === "female-01" ? "" : `${AVATAR.texturePrefix}-`}${part}-blob.json`);
+}
+
+function gitBlobSha(bytes) {
+  return createHash("sha1").update(`blob ${bytes.length}\0`).update(bytes).digest("hex");
+}
+
+function decodeGitBlob(cached, expectedSha) {
+  const blob = JSON.parse(readFileSync(cached, "utf8"));
+  const bytes = Buffer.from(blob.content, "base64");
+  if (gitBlobSha(bytes) !== expectedSha || blob.sha !== expectedSha) {
+    throw new Error(`Git blob integrity mismatch: ${cached}`);
+  }
+  return bytes;
+}
+
+function verifySourceFbx() {
+  for (const [relative, , expectedSha] of DOWNLOADS) {
+    const file = join(SOURCE, relative);
+    const cached = join(SOURCE, `${relative}-blob.json`);
+    if (existsSync(cached) && (!existsSync(file) || gitBlobSha(readFileSync(file)) !== expectedSha)) {
+      writeFileSync(file, decodeGitBlob(cached, expectedSha));
+    }
+    if (gitBlobSha(readFileSync(file)) !== expectedSha) {
+      throw new Error(`Git blob integrity mismatch: ${relative}`);
+    }
+  }
+}
 
 function run(command, args) {
   const result = spawnSync(command, args, { cwd: ROOT, stdio: "inherit" });
@@ -44,29 +118,37 @@ function run(command, args) {
   if (result.status !== 0) throw new Error(`${command} failed with exit ${result.status}`);
 }
 
+function downloadFile(url, output) {
+  const partial = `${output}.part`;
+  run("curl", ["--fail", "--location", "--compressed", "--connect-timeout", "10", "--max-time", "45", "--output", partial, url]);
+  renameSync(partial, output);
+}
+
+function ensureGitBlob(cached, expectedSha) {
+  if (existsSync(cached)) {
+    try { decodeGitBlob(cached, expectedSha); return; } catch { /* Replace only invalid generated download caches. */ }
+  }
+  downloadFile(`https://api.github.com/repos/microsoft/Microsoft-Rocketbox/git/blobs/${expectedSha}`, cached);
+  decodeGitBlob(cached, expectedSha);
+}
+
 function download() {
-  for (const [relative, url] of DOWNLOADS) {
+  for (const [relative, , expectedSha] of DOWNLOADS) {
     const output = join(SOURCE, relative);
     mkdirSync(dirname(output), { recursive: true });
-    if (existsSync(output)) continue;
-    run("curl", ["--fail", "--location", "--retry", "2", "--output", output, url]);
+    if (existsSync(output) && gitBlobSha(readFileSync(output)) === expectedSha) continue;
+    const cached = join(SOURCE, `${relative}-blob.json`);
+    ensureGitBlob(cached, expectedSha);
+    writeFileSync(output, decodeGitBlob(cached, expectedSha));
   }
   for (const [part, sha] of Object.entries(TEXTURE_BLOBS)) {
-    const cached = join(SOURCE, `${part}-blob.json`);
-    if (!existsSync(cached)) {
-      run("curl", [
-        "--fail", "--location", "--compressed", "--retry", "2", "--output", cached,
-        `https://api.github.com/repos/microsoft/Microsoft-Rocketbox/git/blobs/${sha}`,
-      ]);
-    }
+    const cached = textureBlobPath(part);
+    ensureGitBlob(cached, sha);
   }
   if (!existsSync(CONVERTER)) {
     mkdirSync(dirname(CONVERTER), { recursive: true });
     const archive = join(SOURCE, "tools/fbx2gltf-0.9.7.tgz");
-    run("curl", [
-      "--fail", "--location", "--retry", "2", "--output", archive,
-      "https://registry.npmjs.org/fbx2gltf/-/fbx2gltf-0.9.7.tgz",
-    ]);
+    downloadFile("https://registry.npmjs.org/fbx2gltf/-/fbx2gltf-0.9.7.tgz", archive);
     const integrity = createHash("sha512").update(readFileSync(archive)).digest("base64");
     if (integrity !== CONVERTER_INTEGRITY) throw new Error("FBX2glTF npm integrity mismatch");
     run("tar", ["-xzf", archive, "--strip-components=3", "-C", dirname(CONVERTER), "package/bin/Darwin/FBX2glTF"]);
@@ -77,13 +159,10 @@ function download() {
 function decodeTextureBlobs() {
   mkdirSync(join(SOURCE, "Textures"), { recursive: true });
   for (const [part, expectedSha] of Object.entries(TEXTURE_BLOBS)) {
-    const cached = join(SOURCE, `${part}-blob.json`);
+    const cached = textureBlobPath(part);
     if (!existsSync(cached)) continue;
-    const blob = JSON.parse(readFileSync(cached, "utf8"));
-    const bytes = Buffer.from(blob.content, "base64");
-    const sha = createHash("sha1").update(`blob ${bytes.length}\0`).update(bytes).digest("hex");
-    if (sha !== expectedSha || blob.sha !== expectedSha) throw new Error(`Git blob integrity mismatch: ${part}`);
-    writeFileSync(join(SOURCE, `Textures/f001_${part}_color.tga`), bytes);
+    const bytes = decodeGitBlob(cached, expectedSha);
+    writeFileSync(join(SOURCE, `Textures/${AVATAR.texturePrefix}_${part}_color.tga`), bytes);
   }
 }
 
@@ -196,7 +275,7 @@ function replaceMaterials(document) {
   const parts = ["body", "head", "opacity"];
   const imageBytes = parts.map((part) => {
     const extension = part === "opacity" ? "png" : "jpg";
-    return readFileSync(join(SOURCE, `prepared-textures/f001_${part}_color.${extension}`));
+    return readFileSync(join(SOURCE, `prepared-textures/${AVATAR.texturePrefix}_${part}_color.${extension}`));
   });
   document.images = parts.map((part) => ({
     name: `Rocketbox_${part}_1024`,
@@ -348,6 +427,8 @@ function verifyPreparedGlb(document, binary) {
     if (!condition) throw new Error(`Customer GLB validation: ${message}`);
   };
   check(document.asset.version === "2.0", "glTF version must be 2.0");
+  check(document.extras?.sourceAvatar === AVATAR.sourceAvatar, "source avatar does not match the selected output");
+  check(document.extras?.sourceCommit === COMMIT && document.extras?.license === "MIT", "pinned MIT source metadata is required");
   check(document.buffers.length === 1 && !document.buffers[0].uri, "one embedded buffer is required");
   check(document.buffers[0].byteLength <= binary.length, "binary chunk is truncated");
   check(!document.extensionsRequired?.length, "external decoder extensions are not allowed");
@@ -403,11 +484,12 @@ function main() {
   mkdirSync(CONVERTED, { recursive: true });
   if (process.argv.includes("--download")) download();
   if (!process.argv.includes("--skip-convert")) {
+    verifySourceFbx();
     decodeTextureBlobs();
-    run(PYTHON, [join(ROOT, "scripts/prepare-customer.py")]);
-    convertFbx("Female_Adult_01.fbx", "model.glb");
-    convertFbx("f_walk_neutral.max.fbx", "walk.glb");
-    convertFbx("f_idle_breathe_01.max.fbx", "idle.glb");
+    run(PYTHON, [join(ROOT, "scripts/prepare-customer.py"), "--texture-prefix", AVATAR.texturePrefix]);
+    convertFbx(`${AVATAR.sourceAvatar}.fbx`, "model.glb");
+    convertFbx(`${AVATAR.animationPrefix}_walk_neutral.max.fbx`, "walk.glb");
+    convertFbx(`${AVATAR.animationPrefix}_idle_breathe_01.max.fbx`, "idle.glb");
   }
 
   const model = loadGlb(join(CONVERTED, "model.glb"));
@@ -427,7 +509,7 @@ function main() {
   document.extras = {
     source: "microsoft/Microsoft-Rocketbox",
     sourceCommit: COMMIT,
-    sourceAvatar: "Female_Adult_01",
+    sourceAvatar: AVATAR.sourceAvatar,
     license: "MIT",
     animations: "idle and walk; horizontal root motion removed; root height variation retained",
   };
@@ -445,7 +527,8 @@ function main() {
     animations: animationSummary,
     verification,
   };
-  writeFileSync(join(SOURCE, "conversion-report.json"), `${JSON.stringify(summary, null, 2)}\n`);
+  const report = avatarId === "female-01" ? "conversion-report.json" : `conversion-report-${avatarId}.json`;
+  writeFileSync(join(SOURCE, report), `${JSON.stringify(summary, null, 2)}\n`);
   console.log(JSON.stringify(summary, null, 2));
 }
 

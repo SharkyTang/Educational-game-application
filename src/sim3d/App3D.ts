@@ -6,7 +6,8 @@ import {
 } from "./domain";
 import { loadSimState, parseImportedSimState, SimSaveConflictError, SimSaveSession, SIM_STORAGE_KEY } from "./persistence";
 import { ShopWorld, type InteractionTarget, type Quality } from "./world";
-import { SPEECH_CLIPS, type SpeechClipId } from "./speechClips";
+import { SPEECH_CLIPS } from "./speechClips";
+import { createCustomerSeed, customerProfileFor, customerSpeechFor, NEXT_CUSTOMER_SECONDS, type CustomerSpeechClip } from "./customerSelection";
 import { STREET_VENUES, getStreetProgress, getVenueProgress } from "./progression";
 import type { PointerMode } from "./pointerAccess";
 import "./styles.css";
@@ -116,7 +117,7 @@ export class App3D {
   private speechGeneration = 0;
   private dragLookFallback = false;
   private pointerMode: PointerMode = "free";
-  private customerClip: SpeechClipId = "greeting";
+  private customerClip: CustomerSpeechClip = customerSpeechFor(this.state, "greeting");
   private lastCustomerCue = "";
   private lastFrameAt = 0;
   private nextCustomerElapsed = 0;
@@ -170,7 +171,9 @@ export class App3D {
       const admitted = await this.saveSession.acquire();
       if (!isCurrent()) return;
       const snapshot = this.saveSession.load();
-      this.state = snapshot.state;
+      this.state = snapshot.source === "new" && admitted
+        ? { ...snapshot.state, customerSeed: createCustomerSeed() }
+        : snapshot.state;
       this.loadedSession = snapshot.source !== "new";
       this.loadWarning = snapshot.warning ?? "";
       this.writerWarning = admitted ? "" : "另一页面正在营业。此页面只读，不能修改进度或设置；关闭另一页面后，可以读取最新进度并接管。";
@@ -269,6 +272,7 @@ export class App3D {
           <details id="s3-receipt" class="s3-receipt" hidden>
             <summary><span id="s3-receipt-title">本单小票</span><span id="s3-receipt-summary">£4.00</span></summary>
             <div class="s3-receipt-body">
+              <p id="s3-customer-name" class="s3-muted"></p>
               <p id="s3-customer-line" class="s3-customer-line">“Hello!”</p>
               <p id="s3-customer-zh" class="s3-muted"></p>
               <div class="s3-customer-actions"><button id="s3-read-customer" class="s3-secondary-button" type="button">重听 <kbd>R</kbd></button><button id="s3-repeat-customer" class="s3-secondary-button" type="button">请再说一遍</button></div>
@@ -326,7 +330,7 @@ export class App3D {
             <p id="s3-speech-status" class="s3-inspect-note" aria-live="polite">观察外形和材质，试着把英文与实物对应。</p>
             <p class="s3-inspect-note">这次只记录接触，不计为独立掌握。</p>
           </div>
-          <div class="s3-inspection-bottom"><div class="s3-inspection-meta"><span>拖动商品，换个角度看</span><p class="s3-audio-credit">单词真人：Judith Franck / Shtooka · <a href="https://creativecommons.org/licenses/by/3.0/us/" target="_blank" rel="noopener noreferrer">CC BY 3.0 US</a> · <a href="/assets/sim3d/audio/audio-SOURCES.md" target="_blank" rel="noopener noreferrer" aria-label="查看单词发音来源与许可说明">来源</a><br>搭配与顾客：本地英式合成语音 · <a href="/assets/sim3d/audio/phrase-SOURCES.md" target="_blank" rel="noopener noreferrer" aria-label="查看合成短句来源与许可说明">Cori 来源</a></p></div><button id="s3-close-inspect" class="s3-glass-button" type="button">返回小店 <kbd>F / Esc</kbd></button></div>
+          <div class="s3-inspection-bottom"><div class="s3-inspection-meta"><span>拖动商品，换个角度看</span><p class="s3-audio-credit">单词真人：Judith Franck / Shtooka · <a href="https://creativecommons.org/licenses/by/3.0/us/" target="_blank" rel="noopener noreferrer">CC BY 3.0 US</a> · <a href="/assets/sim3d/audio/audio-SOURCES.md" target="_blank" rel="noopener noreferrer" aria-label="查看单词发音来源与许可说明">来源</a><br>搭配：本地英式合成语音 · <a href="/assets/sim3d/audio/phrase-SOURCES.md" target="_blank" rel="noopener noreferrer" aria-label="查看合成短句来源与许可说明">Cori 来源</a><br>顾客：本地男女声 · <a href="/assets/sim3d/audio/customer-phrase-SOURCES.md" target="_blank" rel="noopener noreferrer" aria-label="查看顾客配音来源与许可说明">配音来源</a></p></div><button id="s3-close-inspect" class="s3-glass-button" type="button">返回小店 <kbd>F / Esc</kbd></button></div>
         </section>
 
         <dialog id="s3-pause" class="s3-pause" aria-labelledby="s3-pause-title">
@@ -742,7 +746,7 @@ export class App3D {
     this.lastFrameAt = now;
     if (this.mode === "playing" && this.state.day.phase === "open" && this.state.customer.phase === "complete") {
       this.nextCustomerElapsed += elapsed;
-      if (this.nextCustomerElapsed >= 2) {
+      if (this.nextCustomerElapsed >= NEXT_CUSTOMER_SECONDS) {
         if (canSettleDay(this.state) && this.dayReadyNotified !== this.state.day.number) {
           this.dayReadyNotified = this.state.day.number;
           this.openManagement("day");
@@ -927,8 +931,10 @@ export class App3D {
       this.text(`s3-scan-${productId}`, scanned ? "已扫描" : "未扫描");
       this.el(`s3-scan-${productId}`).classList.toggle("s3-scanned", scanned);
     }
-    this.customerClip = showPaid ? "thanks" : atCheckout ? (getDaySummary(this.state).paidCustomers >= 2 ? "cardRepeat" : "card") : "greeting";
-    const clip = SPEECH_CLIPS[this.customerClip];
+    const profile = customerProfileFor(this.state);
+    this.text("s3-customer-name", `${profile.name} · 第 ${this.state.customer.number} 位顾客`);
+    this.customerClip = customerSpeechFor(this.state, showPaid ? "thanks" : atCheckout ? "checkout" : "greeting");
+    const clip = this.customerClip;
     this.text("s3-customer-line", `“${clip.text}”`);
     this.text("s3-customer-zh", clip.zh);
     this.el("s3-repeat-customer").hidden = !atCheckout;
@@ -1049,12 +1055,12 @@ export class App3D {
     if (this.mode !== "playing" || this.state.customer.phase === "outside") return;
     const phase = this.state.customer.phase;
     if ((phase === "leaving" || phase === "complete") && !this.state.transactions.some((sale) => sale.customerNumber === this.state.customer.number)) return;
-    const cue = `${this.state.customer.number}:${this.customerClip}`;
+    const cue = `${this.state.customer.number}:${this.customerClip.id}`;
     if (cue === this.lastCustomerCue) return;
     this.lastCustomerCue = cue;
     this.el<HTMLDetailsElement>("s3-receipt").open = true;
     if (phase === "checkout") this.world?.setCursorFree(true);
-    if (this.settings.autoSpeech && phase !== "complete") this.speak(SPEECH_CLIPS[this.customerClip].text);
+    if (this.settings.autoSpeech && phase !== "complete") this.speak(this.customerClip);
     else this.text("s3-customer-audio-status", "点击重听或按 R 播放，字幕始终保留。");
   }
 
@@ -1062,16 +1068,16 @@ export class App3D {
     if (this.mode !== "playing") return;
     if (this.el("s3-receipt").hidden) { this.notify("顾客进店后，按 R 就能重听刚刚的话。"); return }
     this.el<HTMLDetailsElement>("s3-receipt").open = true;
-    const clip = SPEECH_CLIPS[this.customerClip];
+    const clip = this.customerClip;
     this.text("s3-customer-line", `“${clip.text}”`);
     this.text("s3-customer-zh", clip.zh);
-    this.speak(clip.text);
+    this.speak(clip);
   }
 
   private repeatCustomer(): void {
     if (this.mode !== "playing" || this.state.customer.phase !== "checkout") return;
     const number = this.state.customer.number;
-    const reply = SPEECH_CLIPS[this.customerClip];
+    const reply = this.customerClip;
     const request = SPEECH_CLIPS.repeatRequest;
     this.text("s3-customer-line", `你：“${request.text}”`);
     this.text("s3-customer-zh", request.zh);
@@ -1079,11 +1085,12 @@ export class App3D {
       if (this.mode !== "playing" || this.state.customer.phase !== "checkout" || this.state.customer.number !== number) return;
       this.text("s3-customer-line", `顾客：“${reply.text}”`);
       this.text("s3-customer-zh", `${reply.zh} · 这次慢一点说`);
-      this.speak(reply.text, 0.84);
+      this.speak(reply, 0.84);
     });
   }
 
-  private speak(text: string, rate = 1, onDone?: () => void): void {
+  private speak(input: string | CustomerSpeechClip, rate = 1, onDone?: () => void): void {
+    const text = typeof input === "string" ? input : input.text;
     const report = (message: string): void => {
       if (this.mode === "inspecting") this.text("s3-speech-status", message);
       else this.text("s3-customer-audio-status", message);
@@ -1094,9 +1101,13 @@ export class App3D {
     const liveReport = (message: string): void => {
       if (!this.disposed && generation === this.speechGeneration) report(message);
     };
-    const word = text === "milk" || text === "bread";
+    const word = typeof input === "string" && (text === "milk" || text === "bread");
     const normalize = (value: string): string => value.toLowerCase().replace(/[.!?]/g, "").trim();
-    const clip = Object.values(SPEECH_CLIPS).find((candidate) => normalize(candidate.text) === normalize(text));
+    // NPC captions and audio are one selection. Never look up a new customer's
+    // text in the legacy female-only clips, even when the sentence is identical.
+    const clip = typeof input === "string"
+      ? Object.values(SPEECH_CLIPS).find((candidate) => normalize(candidate.text) === normalize(text))
+      : input;
     if (!word && !clip) { report("这句话暂未配音，字幕和操作不受影响。"); return }
     const audio = this.el<HTMLAudioElement>("s3-word-audio");
     let started = false;
@@ -1233,7 +1244,7 @@ export class App3D {
 
   private restart(): void {
     if (!this.saveSession?.canWrite) return;
-    const fresh = createFirstDayState();
+    const fresh = { ...createFirstDayState(), customerSeed: createCustomerSeed() };
     try { this.saveSession.save(this.state); this.saveSession.save(fresh) }
     catch (error) {
       if (error instanceof SimSaveConflictError) { this.enterReadOnly(error.message); return }

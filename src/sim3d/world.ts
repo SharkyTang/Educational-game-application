@@ -1,11 +1,11 @@
 import {
-  AbstractMesh, AnimationGroup, Color3, Color4, DirectionalLight, Engine,
+  AbstractMesh, Color3, Color4, DirectionalLight, Engine,
   HemisphericLight, ImageProcessingConfiguration, Mesh, MeshBuilder, PBRMaterial,
-  PointLight, Scene, SceneLoader, ShadowGenerator, TransformNode, UniversalCamera,
+  PointLight, Scene, ShadowGenerator, TransformNode, UniversalCamera,
   Vector3,
 } from "@babylonjs/core";
-import "@babylonjs/loaders/glTF";
-import { placeCustomerVisual } from "./modelPlacement";
+import { CustomerActors } from "./customerActors";
+import { CUSTOMER_EXIT_STOP_SECONDS, CUSTOMER_STOP_SECONDS, CUSTOMER_WALK_SPEED } from "./customerSelection";
 import { PointerAccess, type PointerMode } from "./pointerAccess";
 import { createCrate, createPlayerHands, createProduct, createShop, setCheckoutDisplay, setShelfCapacity, setShopSignState } from "./assets";
 import { createStreet, setDeliveryTruckStatus, setStreetVenueStatus, type StreetEnvironment } from "./street";
@@ -81,12 +81,9 @@ export class ShopWorld {
   private readonly shelfSlots: Record<ProductId, Vector3[]>;
   private readonly hands: TransformNode;
   private readonly customer: TransformNode;
+  private readonly customerActors: CustomerActors;
   private readonly basket: TransformNode;
   private readonly inspection: Record<ProductId, TransformNode>;
-  private customerAnimations: AnimationGroup[] = [];
-  private walkAnimation: AnimationGroup | undefined;
-  private idleAnimation: AnimationGroup | undefined;
-  private playingAnimation: AnimationGroup | undefined;
   private customerPhase: CustomerPhase;
   private route: Position[] = [];
   private routeIndex = 0;
@@ -208,6 +205,7 @@ export class ShopWorld {
     }
     this.layoutInspection();
     this.customer = new TransformNode("customer-path-root", this.scene);
+    this.customerActors = new CustomerActors(this.scene, this.shadow, this.customer);
     this.basket = this.createBasket();
     this.basket.parent = this.customer;
     this.basket.position.set(.34, .47, .04);
@@ -239,21 +237,8 @@ export class ShopWorld {
   }
 
   async init(): Promise<void> {
-    const imported = await SceneLoader.ImportMeshAsync("", "/assets/sim3d/", "customer.glb", this.scene);
+    await this.customerActors.init(this.state);
     if (this.disposed) return;
-    const visual = new TransformNode("customer-visual", this.scene);
-    for (const mesh of imported.meshes) {
-      if (!mesh.parent) mesh.parent = visual;
-      mesh.isPickable = true;
-      mesh.receiveShadows = true;
-      this.shadow.addShadowCaster(mesh, false);
-    }
-    placeCustomerVisual(visual, this.customer);
-    this.customerAnimations = imported.animationGroups;
-    this.walkAnimation = imported.animationGroups.find((group) => /walk/i.test(group.name));
-    this.idleAnimation = imported.animationGroups.find((group) => /idle|breathe/i.test(group.name));
-    for (const animation of this.customerAnimations) animation.stop();
-    this.playCustomerAnimation(false);
     await this.scene.whenReadyAsync();
     this.callbacks.onStatus("小店已准备好 · 先查看进货单，再搬运商品开始营业。");
   }
@@ -278,6 +263,7 @@ export class ShopWorld {
     const freshRun = state.revision < this.state.revision && state.purchases.length === 0 && state.transactions.length === 0;
     const closed = this.state.day.phase !== "settled" && state.day.phase === "settled";
     this.state = state;
+    this.customerActors.select(state);
     if (newDay || freshRun) this.resetTruck(state.day.phase === "settled" ? "away" : "arriving");
     else if (closed && this.truckPhase !== "away") this.truckPhase = "departing";
     if (phaseChanged) this.setCustomerRoute(false);
@@ -449,11 +435,7 @@ export class ShopWorld {
   }
 
   private playCustomerAnimation(walking: boolean): void {
-    const animation = walking ? this.walkAnimation : this.idleAnimation;
-    if (animation === this.playingAnimation) return;
-    this.playingAnimation?.stop();
-    this.playingAnimation = animation;
-    animation?.start(true, walking ? 1.05 : 1);
+    this.customerActors.play(walking);
   }
 
   private updateCustomer(dt: number): void {
@@ -471,7 +453,7 @@ export class ShopWorld {
       if (distance < .045) {
         this.routeIndex += 1;
       } else {
-        const step = Math.min(distance, dt * .94);
+        const step = Math.min(distance, dt * CUSTOMER_WALK_SPEED);
         this.customer.position.x += dx / distance * step;
         this.customer.position.z += dz / distance * step;
         const yaw = Math.atan2(dx, dz);
@@ -488,7 +470,8 @@ export class ShopWorld {
     if (this.customerPhase === "checkout" || this.customerPhase === "to-checkout") this.customer.rotation.y = -Math.PI / 2;
     if (["to-milk", "to-bread", "to-checkout", "leaving"].includes(this.customerPhase)) {
       this.arrivalDelay += dt;
-      if (this.arrivalDelay > 1.1 && this.arrivedRevision !== this.state.revision) {
+      const stopSeconds = this.customerPhase === "leaving" ? CUSTOMER_EXIT_STOP_SECONDS : CUSTOMER_STOP_SECONDS;
+      if (this.arrivalDelay >= stopSeconds && this.arrivedRevision !== this.state.revision) {
         this.arrivedRevision = this.state.revision;
         this.arrivalDelay = 0;
         this.callbacks.onCustomerArrive();
@@ -809,14 +792,18 @@ export class ShopWorld {
 
   private render(): void {
     if (this.disposed || this.canvasWasLost) return;
-    const dt = Math.min(.05, this.engine.getDeltaTime() / 1000);
+    const frameSeconds = Math.min(.25, Math.max(0, this.engine.getDeltaTime() / 1000));
+    const dt = Math.min(.05, frameSeconds);
     this.frameClock += dt;
     this.viewClock += dt;
-    this.poseClock += dt;
+    this.poseClock += frameSeconds;
     if (this.active) {
       this.movePlayer(dt);
       this.updateTruck(dt);
-      this.updateCustomer(dt);
+      // Keep NPC metres/second at low FPS, with bounded steps for route changes
+      // and player clearance. A stalled/background frame cannot skip the shop.
+      const customerSteps = Math.ceil(frameSeconds / .05);
+      for (let step = 0; step < customerSteps; step += 1) this.updateCustomer(frameSeconds / customerSteps);
       if (!this.reducedMotion && this.state.held.kind === "crate") {
         const root = this.crates.get(this.state.held.crateId)!;
         root.position.y = -.39 + (this.keys.size > 0 ? Math.sin(this.frameClock * 8) * .008 : 0);
@@ -827,7 +814,7 @@ export class ShopWorld {
       this.updateTarget();
       if (this.active) this.updateGuide();
     }
-    if (this.poseClock >= 1) {
+    if (this.poseClock >= .1) {
       this.poseClock = 0;
       this.callbacks.onFrame?.(Math.round(this.engine.getFps()), this.getPose());
     }
@@ -841,6 +828,7 @@ export class ShopWorld {
     this.keys.clear();
     if (document.pointerLockElement === this.canvas) document.exitPointerLock();
     this.engine.stopRenderLoop();
+    this.customerActors.dispose();
     this.scene.dispose();
     this.engine.dispose();
   }

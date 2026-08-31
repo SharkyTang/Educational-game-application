@@ -1,0 +1,39 @@
+{
+  "version": 1,
+  "scenes": {
+    "greeting": [
+      { "id": "greeting-hello", "text": "Hello!", "zh": "你好！" },
+      { "id": "greeting-hi-there", "text": "Hi there!", "zh": "嗨，你好！" },
+      { "id": "greeting-hello-there", "text": "Hello there!", "zh": "你好呀！" },
+      { "id": "greeting-nice-to-see-you", "text": "Hello, nice to see you!", "zh": "你好，很高兴见到你！" },
+      { "id": "greeting-hope-youre-well", "text": "Hi, hope you're well!", "zh": "嗨，希望你一切都好！" },
+      { "id": "greeting-lovely-to-see-you", "text": "Hi, lovely to see you!", "zh": "嗨，见到你真好！" },
+      { "id": "greeting-few-things", "text": "Hello! Just a few things today.", "zh": "你好！今天就买几样东西。" },
+      { "id": "greeting-popping-in", "text": "Hi! Just popping in for a few things.", "zh": "嗨！我进来买点东西。" }
+    ],
+    "checkout": [
+      { "id": "checkout-can-i-pay-by-card", "text": "Can I pay by card, please?", "zh": "请问可以刷卡吗？" },
+      { "id": "checkout-sorry-card", "text": "Sorry, can I pay by card?", "zh": "不好意思，我可以刷卡吗？" },
+      { "id": "checkout-card-please", "text": "Card, please.", "zh": "请刷卡。" },
+      { "id": "checkout-ill-pay-by-card", "text": "I'll pay by card, please.", "zh": "我想刷卡付款，谢谢。" },
+      { "id": "checkout-id-like-to-pay-by-card", "text": "I'd like to pay by card, please.", "zh": "我想用银行卡付款，谢谢。" },
+      { "id": "checkout-is-card-all-right", "text": "Is it all right if I pay by card?", "zh": "我用银行卡付款可以吗？" },
+      { "id": "checkout-may-i-use-my-card", "text": "May I use my card?", "zh": "我可以用银行卡吗？" },
+      { "id": "checkout-could-i-use-card", "text": "Could I use my card, please?", "zh": "请问我能用银行卡付款吗？" },
+      { "id": "checkout-with-my-card", "text": "I'll use my card, please.", "zh": "我用银行卡付，谢谢。" },
+      { "id": "checkout-pay-on-card", "text": "Can I pay on my card?", "zh": "我可以用这张银行卡付款吗？" },
+      { "id": "checkout-card-for-these", "text": "I'll pay for these by card, please.", "zh": "这些东西我用银行卡付，谢谢。" },
+      { "id": "checkout-ready-card", "text": "I'm ready to pay by card.", "zh": "我准备好刷卡付款了。" }
+    ],
+    "thanks": [
+      { "id": "thanks-lovely-day", "text": "Thank you. Have a lovely day!", "zh": "谢谢，祝你今天愉快！" },
+      { "id": "thanks-very-much", "text": "Thanks very much!", "zh": "非常感谢！" },
+      { "id": "thanks-cheers", "text": "Cheers, have a good day!", "zh": "谢谢，祝你今天过得愉快！" },
+      { "id": "thanks-see-you", "text": "Thank you. See you soon!", "zh": "谢谢，下次见！" },
+      { "id": "thanks-take-care", "text": "Thanks a lot. Take care!", "zh": "多谢啦，保重！" },
+      { "id": "thanks-been-helpful", "text": "Thank you, you've been very helpful!", "zh": "谢谢，你帮了我大忙！" },
+      { "id": "thanks-have-a-good-one", "text": "Thanks! Have a good one!", "zh": "谢谢！祝你今天愉快！" },
+      { "id": "thanks-thats-great", "text": "That's great, thank you!", "zh": "太好了，谢谢你！" }
+    ]
+  }
+}

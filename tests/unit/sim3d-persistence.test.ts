@@ -389,6 +389,7 @@ describe("audited v4 migration and coexistence with an older page", () => {
   it("migrates paid v4 goods in place without new money, cargo or receipt actions", () => {
     const storage = new MemoryStorage();
     const old = v4Snapshot();
+    old.customerSeed = 123456;
     expect(validateV4SimState(old)).toBe(true);
     const primary = JSON.stringify(old, null, 2);
     const backup = JSON.stringify({ ...old, revision: old.revision + 1 });
@@ -404,6 +405,7 @@ describe("audited v4 migration and coexistence with an older page", () => {
     expect(loaded.state.items).toEqual(old.items);
     expect(loaded.state.crates).toEqual(old.crates);
     expect(loaded.state.transactions).toEqual(old.transactions);
+    expect(loaded.state.customerSeed).toBe(123456);
     expect(loaded.state.purchases[0]?.receivedDay).toBe(1);
     expect(getDeliverySummary(loaded.state)).toMatchObject({ pendingOrders: 0, pendingUnits: 0, receivedToday: 1 });
     expect(reduceSim(loaded.state, { type: "RECEIVE_DELIVERY" }).state).toBe(loaded.state);

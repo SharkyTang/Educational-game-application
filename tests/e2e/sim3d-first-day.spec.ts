@@ -1,5 +1,6 @@
 import { expect, test, type Page } from "@playwright/test";
 import { createFirstDayState, reduceSim, validateSimState, type SimCommand, type SimState } from "../../src/sim3d/domain";
+import { customerProfileFor, customerSpeechFor } from "../../src/sim3d/customerSelection";
 
 // Keep these real 3D browser checks sequential even when the wider suite is parallel.
 // Every test gets Playwright's disposable context; no existing user browser is used.
@@ -182,12 +183,16 @@ test("3D high street: venues show separate level and achievement gates, with hon
 test("3D first day: a real arriving customer speaks locally, supports replay and slower repetition, and can be paid", async ({ page }) => {
   test.setTimeout(100_000);
   const errors = monitorRuntime(page);
+  const fixture = approachingCheckoutFixture();
+  const clip = customerSpeechFor(fixture, "checkout");
+  const thanks = customerSpeechFor(fixture, "thanks");
   await startFresh(page);
-  await importFixture(page, approachingCheckoutFixture());
+  await importFixture(page, fixture);
   await expect(page.locator("#s3-receipt-title")).toHaveText("顾客想结账", { timeout: 25_000 });
-  await expect(page.locator("#s3-customer-line")).toContainText("Can I pay by card, please?");
+  await expect(page.locator("#s3-customer-name")).toContainText(customerProfileFor(fixture).name);
+  await expect(page.locator("#s3-customer-line")).toContainText(clip.text);
   await expect.poll(() => page.evaluate(() => document.pointerLockElement === null)).toBe(true);
-  await expect(page.locator("#s3-word-audio")).toHaveAttribute("src", "/assets/sim3d/audio/card.wav");
+  await expect(page.locator("#s3-word-audio")).toHaveAttribute("src", clip.src);
   await expect(page.locator("#s3-customer-audio-status")).toContainText("播放结束", { timeout: 12_000 });
 
   await page.keyboard.press("r");
@@ -200,7 +205,7 @@ test("3D first day: a real arriving customer speaks locally, supports replay and
   await page.locator("#s3-repeat-customer").click();
   await expect(page.locator("#s3-word-audio")).toHaveAttribute("src", "/assets/sim3d/audio/repeat-request.wav");
   await expect(page.locator("#s3-customer-line")).toContainText("Could you say that again, please?");
-  await expect(page.locator("#s3-word-audio")).toHaveAttribute("src", "/assets/sim3d/audio/card.wav", { timeout: 12_000 });
+  await expect(page.locator("#s3-word-audio")).toHaveAttribute("src", clip.src, { timeout: 12_000 });
   await expect.poll(() => page.locator("#s3-word-audio").evaluate((audio: HTMLAudioElement) => audio.playbackRate)).toBe(0.84);
   await expect(page.locator("#s3-customer-zh")).toContainText("这次慢一点说");
   await expect(page.locator("#s3-customer-audio-status")).toContainText("播放结束", { timeout: 12_000 });
@@ -210,9 +215,9 @@ test("3D first day: a real arriving customer speaks locally, supports replay and
   await page.locator("#s3-repeat-customer").click();
   await expect(page.locator("#s3-word-audio")).toHaveAttribute("src", "/assets/sim3d/audio/repeat-request.wav");
   await page.keyboard.press("r");
-  await expect(page.locator("#s3-word-audio")).toHaveAttribute("src", "/assets/sim3d/audio/card.wav");
-  await expect(page.locator("#s3-customer-line")).toHaveText("“Can I pay by card, please?”");
-  await expect(page.locator("#s3-customer-zh")).toHaveText("请问可以刷卡吗？");
+  await expect(page.locator("#s3-word-audio")).toHaveAttribute("src", clip.src);
+  await expect(page.locator("#s3-customer-line")).toHaveText(`“${clip.text}”`);
+  await expect(page.locator("#s3-customer-zh")).toHaveText(clip.zh);
   await expect(page.locator("#s3-customer-audio-status")).toContainText("播放结束", { timeout: 12_000 });
 
   await expect(page.locator("#s3-target-label")).toContainText("收银台");
@@ -224,11 +229,74 @@ test("3D first day: a real arriving customer speaks locally, supports replay and
   await page.keyboard.press("e");
   await expect(page.locator("#s3-cash")).toHaveText("£9.10");
   await expect(page.locator("#s3-receipt-title")).toHaveText("本单已收款");
-  await expect(page.locator("#s3-word-audio")).toHaveAttribute("src", "/assets/sim3d/audio/thanks.wav");
+  await expect(page.locator("#s3-word-audio")).toHaveAttribute("src", thanks.src);
   await page.keyboard.press("e");
   await expect(page.locator("#s3-cash")).toHaveText("£9.10");
   await expect(page.locator("#s3-milk-stock")).toHaveText("牛奶 2 / 4");
   await expect(page.locator("#s3-bread-stock")).toHaveText("面包 2 / 4");
+  expect(errors).toEqual([]);
+});
+
+test("3D customer variety: three real visitors rotate models and voices, keep their line after refresh, and finish the day", async ({ page }) => {
+  test.setTimeout(180_000);
+  const errors = monitorRuntime(page);
+  let fixture: SimState = { ...stockedFixture(), customerSeed: 31 };
+  fixture = command(fixture, { type: "SAVE_POSE", pose: { x: -2.62, z: -1.06, yaw: Math.PI, pitch: .56 } });
+  fixture = command(fixture, { type: "OPEN_STORE" });
+  await startFresh(page);
+  await importFixture(page, fixture);
+  const names = new Set<string>();
+  const voices = new Set<string>();
+  const checkoutLines = new Set<string>();
+
+  for (let number = 1; number <= 3; number += 1) {
+    const visit = { ...fixture, customer: { ...fixture.customer, number } };
+    const profile = customerProfileFor(visit);
+    const greeting = customerSpeechFor(visit, "greeting");
+    const checkout = customerSpeechFor(visit, "checkout");
+    const thanks = customerSpeechFor(visit, "thanks");
+    names.add(profile.name);
+    voices.add(profile.voice);
+    checkoutLines.add(checkout.id);
+    await expect(page.locator("#s3-customer-name")).toHaveText(`${profile.name} · 第 ${number} 位顾客`, { timeout: 12_000 });
+    await expect(page.locator("#s3-customer-line")).toHaveText(`“${greeting.text}”`);
+    await expect(page.locator("#s3-word-audio")).toHaveAttribute("src", greeting.src);
+
+    // The renderer, not the fixture, walks each visitor through both shelves.
+    await expect(page.locator("#s3-receipt-title")).toHaveText("顾客想结账", { timeout: 35_000 });
+    await expect(page.locator("#s3-customer-line")).toHaveText(`“${checkout.text}”`);
+    await expect(page.locator("#s3-customer-zh")).toHaveText(checkout.zh);
+    await expect(page.locator("#s3-word-audio")).toHaveAttribute("src", checkout.src);
+
+    if (number === 2) {
+      await page.reload();
+      await expect(page.locator("#s3-start-button")).toBeEnabled({ timeout: 40_000 });
+      await page.locator("#s3-start-button").click();
+      await expect(page.locator("#s3-customer-name")).toHaveText(`${profile.name} · 第 ${number} 位顾客`);
+      await expect(page.locator("#s3-customer-line")).toHaveText(`“${checkout.text}”`);
+      await expect(page.locator("#s3-word-audio")).toHaveAttribute("src", checkout.src);
+      await page.keyboard.press("r");
+      await expect(page.locator("#s3-word-audio")).toHaveAttribute("src", checkout.src);
+    }
+
+    await expect(page.locator("#s3-target-label")).toContainText("收银台");
+    await page.keyboard.press("e");
+    await expect(page.locator("#s3-scan-milk")).toHaveText("已扫描");
+    await page.keyboard.press("e");
+    await expect(page.locator("#s3-scan-bread")).toHaveText("已扫描");
+    await page.keyboard.press("e");
+    await expect(page.locator("#s3-receipt-title")).toHaveText("本单已收款");
+    await expect(page.locator("#s3-customer-line")).toHaveText(`“${thanks.text}”`);
+    await expect(page.locator("#s3-word-audio")).toHaveAttribute("src", thanks.src);
+    await expect(page.locator("#s3-cash")).toHaveText(`£${((510 + number * 400) / 100).toFixed(2)}`);
+  }
+
+  expect(names.size).toBe(3);
+  expect(voices).toEqual(new Set(["female", "male"]));
+  expect(checkoutLines.size).toBe(3);
+  await expect(page.locator("#s3-pause")).toBeVisible({ timeout: 12_000 });
+  await expect(page.locator("#s3-day-progress")).toContainText("已收款 3 / 3 单");
+  await expect(page.locator("#s3-day-cash")).toHaveText("£17.10");
   expect(errors).toEqual([]);
 });
 
