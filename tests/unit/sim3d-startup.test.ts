@@ -31,10 +31,21 @@ const doubles = vi.hoisted(() => {
     getPose(): PlayerPose { return this.pose }
     complete(): void { this.callbacks.onStatus("模型就绪"); this.finish() }
   }
-  return { World };
+  class ShopAudio {
+    static instances: ShopAudio[] = [];
+    readonly unlock = vi.fn();
+    readonly setActive = vi.fn();
+    readonly setSettings = vi.fn();
+    readonly setSpeechActive = vi.fn();
+    readonly playEffect = vi.fn();
+    readonly dispose = vi.fn();
+    constructor(readonly options: { onStatus?: (status: string) => void } = {}) { ShopAudio.instances.push(this) }
+  }
+  return { World, ShopAudio };
 });
 
 vi.mock("../../src/sim3d/world", () => ({ ShopWorld: doubles.World }));
+vi.mock("../../src/sim3d/shopAudio", () => ({ ShopAudio: doubles.ShopAudio }));
 import { App3D } from "../../src/sim3d/App3D";
 
 class MemoryStorage implements StorageLike {
@@ -120,10 +131,10 @@ let windowDouble: EventTarget;
 let documentDouble: EventTarget & { hidden: boolean };
 let apps: App3D[];
 
-function mount(root = new ElementDouble()): { app: App3D; root: ElementDouble; element: (id: string) => ElementDouble } {
+function mount(root = new ElementDouble()) {
   const app = new App3D(root as unknown as HTMLElement);
   apps.push(app);
-  return { app, root, element: (id) => root.elements.get(id)! };
+  return { app, root, shopAudio: doubles.ShopAudio.instances.at(-1)!, element: (id: string) => root.elements.get(id)! };
 }
 
 beforeEach(() => {
@@ -136,6 +147,7 @@ beforeEach(() => {
   vi.stubGlobal("localStorage", storage);
   vi.stubGlobal("navigator", { locks });
   doubles.World.instances = [];
+  doubles.ShopAudio.instances = [];
   apps = [];
 });
 
@@ -1658,5 +1670,320 @@ describe("honest browser speech for products without recorded audio", () => {
     expect(view.element("s3-speech-status").textContent).toContain("浏览器合成发音未能播放");
     expect(view.audio.play).not.toHaveBeenCalled();
     expect(view.element("s3-inspection").hidden).toBe(false);
+  });
+});
+
+describe("shop music settings and lifecycle wiring", () => {
+  it("waits for Start, unlocks on real start/resume actions and relays music status to the accessible UI", async () => {
+    const view = mount();
+    const loading = view.app.init();
+    await settle();
+    doubles.World.instances.at(-1)!.complete();
+    await loading;
+    expect(view.shopAudio.unlock).not.toHaveBeenCalled();
+    expect(view.shopAudio.setActive).not.toHaveBeenCalledWith(true);
+    view.element("s3-start-button").click();
+    expect(view.shopAudio.unlock).toHaveBeenCalledOnce();
+    expect(view.shopAudio.setActive).toHaveBeenLastCalledWith(true);
+    view.shopAudio.options.onStatus?.("Local Forecast · 循环播放中");
+    expect(view.element("s3-music-status").textContent).toBe("Local Forecast · 循环播放中");
+    expect(view.element("s3-music-status").getAttribute("role")).toBe("status");
+    view.element("s3-pause-button").click();
+    expect(view.shopAudio.setActive).toHaveBeenLastCalledWith(false);
+    view.element("s3-resume").click();
+    expect(view.shopAudio.unlock).toHaveBeenCalledTimes(2);
+    expect(view.shopAudio.setActive).toHaveBeenLastCalledWith(true);
+  });
+
+  it("adds music defaults to old v1 settings without resetting speech, then persists all three channels through a remount", async () => {
+    const key = "english-high-street:sim3d:settings:v1";
+    storage.setItem(key, JSON.stringify({ schemaVersion: 1, sensitivity: 1.4, quality: "low", reducedMotion: false, volume: 0.35, autoSpeech: false }));
+    const view = await readyGame();
+    expect(view.shopAudio.setSettings).toHaveBeenLastCalledWith(expect.objectContaining({
+      musicEnabled: true, musicVolume: 0.22, effectsVolume: 0.5,
+      volume: 0.35, autoSpeech: false, sensitivity: 1.4, quality: "low", reducedMotion: false,
+    }));
+    expect(view.element("s3-music-enabled").checked).toBe(true);
+    expect(view.element("s3-music-volume-value").textContent).toBe("22%");
+    expect(view.element("s3-effects-volume-value").textContent).toBe("50%");
+    view.element("s3-pause-button").click();
+    view.element("s3-music-enabled").checked = false;
+    view.element("s3-music-enabled").dispatchEvent(new Event("input"));
+    view.element("s3-music-volume").value = "0.38";
+    view.element("s3-music-volume").dispatchEvent(new Event("input"));
+    view.element("s3-effects-volume").value = "0.25";
+    view.element("s3-effects-volume").dispatchEvent(new Event("input"));
+    const expected = { schemaVersion: 1, sensitivity: 1.4, quality: "low", reducedMotion: false, volume: 0.35, autoSpeech: false, musicEnabled: false, musicVolume: 0.38, effectsVolume: 0.25 };
+    expect(JSON.parse(storage.getItem(key)!)).toEqual(expected);
+    expect(view.shopAudio.setSettings).toHaveBeenLastCalledWith(expected);
+    expect(view.element("s3-music-volume-value").textContent).toBe("38%");
+    expect(view.element("s3-effects-volume-value").textContent).toBe("25%");
+    await view.app.dispose();
+    const restored = await readyGame(savedState());
+    expect(restored.shopAudio.setSettings).toHaveBeenLastCalledWith(expected);
+    expect(restored.element("s3-music-enabled").checked).toBe(false);
+    expect(restored.element("s3-music-volume").value).toBe("0.38");
+    expect(restored.element("s3-effects-volume").value).toBe("0.25");
+    expect(restored.element("s3-volume").value).toBe("0.35");
+    expect(restored.element("s3-auto-speech").checked).toBe(false);
+  });
+
+  it("bounds persisted music levels and retains explicit mute values", async () => {
+    storage.setItem("english-high-street:sim3d:settings:v1", JSON.stringify({ schemaVersion: 1, musicEnabled: false, musicVolume: -3, effectsVolume: 7, volume: 0 }));
+    const view = await readyGame();
+    expect(view.shopAudio.setSettings).toHaveBeenLastCalledWith(expect.objectContaining({ musicEnabled: false, musicVolume: 0, effectsVolume: 1, volume: 0 }));
+    expect(view.element("s3-music-volume-value").textContent).toBe("0%");
+    expect(view.element("s3-effects-volume-value").textContent).toBe("100%");
+  });
+
+  it.each(["blur", "hidden"] as const)("keeps gameplay music stopped after %s until the player explicitly resumes", async (reason) => {
+    const view = await readyGame();
+    expect(view.shopAudio.setActive).toHaveBeenLastCalledWith(true);
+    if (reason === "blur") windowDouble.dispatchEvent(new Event("blur"));
+    else { documentDouble.hidden = true; documentDouble.dispatchEvent(new Event("visibilitychange")) }
+    expect(view.shopAudio.setActive).toHaveBeenLastCalledWith(false);
+    expect(view.element("s3-pause").open).toBe(true);
+    if (reason === "blur") windowDouble.dispatchEvent(new Event("focus"));
+    else { documentDouble.hidden = false; documentDouble.dispatchEvent(new Event("visibilitychange")) }
+    expect(view.shopAudio.setActive).toHaveBeenLastCalledWith(false);
+    view.element("s3-resume").click();
+    expect(view.shopAudio.unlock).toHaveBeenCalledTimes(2);
+    expect(view.shopAudio.setActive).toHaveBeenLastCalledWith(true);
+  });
+
+  it("allows music during inspection but silences it while inspection is in the background", async () => {
+    const view = await inspectWord();
+    expect(view.element("s3-inspection").hidden).toBe(false);
+    expect(view.shopAudio.setActive).toHaveBeenLastCalledWith(true);
+    windowDouble.dispatchEvent(new Event("blur"));
+    expect(view.shopAudio.setActive).toHaveBeenLastCalledWith(false);
+    windowDouble.dispatchEvent(new Event("focus"));
+    expect(view.shopAudio.setActive).toHaveBeenLastCalledWith(true);
+    documentDouble.hidden = true;
+    documentDouble.dispatchEvent(new Event("visibilitychange"));
+    expect(view.shopAudio.setActive).toHaveBeenLastCalledWith(false);
+    documentDouble.hidden = false;
+    documentDouble.dispatchEvent(new Event("visibilitychange"));
+    expect(view.shopAudio.setActive).toHaveBeenLastCalledWith(true);
+    view.element("s3-close-inspect").click();
+    expect(view.shopAudio.setActive).toHaveBeenLastCalledWith(true);
+  });
+
+  it("stops on pagehide and awaits a new Start after a BFCache restoration", async () => {
+    const view = await readyGame();
+    windowDouble.dispatchEvent(new Event("pagehide"));
+    await settle();
+    expect(view.shopAudio.setActive).toHaveBeenLastCalledWith(false);
+    windowDouble.dispatchEvent(Object.assign(new Event("pageshow"), { persisted: true }));
+    await settle();
+    doubles.World.instances.at(-1)!.complete();
+    await settle();
+    expect(view.shopAudio.setActive).toHaveBeenLastCalledWith(false);
+    expect(view.shopAudio.unlock).toHaveBeenCalledOnce();
+    view.element("s3-start-button").click();
+    expect(view.shopAudio.unlock).toHaveBeenCalledTimes(2);
+    expect(view.shopAudio.setActive).toHaveBeenLastCalledWith(true);
+  });
+
+  it("never unlocks a read-only second page or accepts changes to its music settings", async () => {
+    const owner = await readyGame();
+    const preview = mount();
+    const loading = preview.app.init();
+    await settle();
+    doubles.World.instances.at(-1)!.complete();
+    await loading;
+    const writes = storage.writes;
+    preview.shopAudio.setSettings.mockClear();
+    preview.element("s3-start-button").click();
+    preview.element("s3-music-enabled").checked = false;
+    preview.element("s3-music-enabled").dispatchEvent(new Event("input"));
+    expect(preview.shopAudio.unlock).not.toHaveBeenCalled();
+    expect(preview.shopAudio.setActive).not.toHaveBeenCalledWith(true);
+    expect(preview.shopAudio.setSettings).not.toHaveBeenCalled();
+    expect(storage.writes).toBe(writes);
+    expect(owner.shopAudio.setActive).toHaveBeenLastCalledWith(true);
+  });
+
+  it("disposes the old audio engine exactly once on same-root remount and ignores its late status callbacks", async () => {
+    const first = await readyGame();
+    const replacement = mount(first.root);
+    const loading = replacement.app.init();
+    await settle();
+    expect(first.shopAudio.dispose).toHaveBeenCalledOnce();
+    doubles.World.instances.at(-1)!.complete();
+    await loading;
+    replacement.shopAudio.options.onStatus?.("新的播放器正在等待开始");
+    first.shopAudio.options.onStatus?.("旧播放器的迟到事件");
+    expect(replacement.element("s3-music-status").textContent).toBe("新的播放器正在等待开始");
+    expect(replacement.shopAudio.setActive).not.toHaveBeenCalledWith(true);
+    await first.app.dispose();
+    expect(first.shopAudio.dispose).toHaveBeenCalledOnce();
+    await replacement.app.dispose();
+    expect(replacement.shopAudio.dispose).toHaveBeenCalledOnce();
+  });
+});
+
+describe("accepted shop actions emit feedback once", () => {
+  it("only plays the stocking sound after a successful stock command, never for empty hands, wrong products or duplicate attempts", async () => {
+    const view = await readyGame(createInitialSimState());
+    const target = (next: InteractionTarget): void => { view.world.callbacks.onTarget(next); view.world.callbacks.onInteract() };
+    const shelf = (productId: ProductId): InteractionTarget => ({ id: `${productId}-shelf`, kind: "shelf", productId, label: "货架", action: "上架", inspectable: false, distance: 1 });
+    target(shelf("milk"));
+    expect(view.shopAudio.playEffect).not.toHaveBeenCalled();
+    target({ id: "bread-1", itemId: "bread-1", productId: "bread", kind: "item", label: "面包", action: "拿起", inspectable: true, distance: 1 });
+    target(shelf("milk"));
+    expect(view.shopAudio.playEffect).not.toHaveBeenCalled();
+    target(shelf("bread"));
+    expect(view.shopAudio.playEffect.mock.calls).toEqual([["stock"]]);
+    expect(countAt(savedState(), "bread", "shelf")).toBe(1);
+    target(shelf("bread"));
+    target({ ...shelf("bread"), distance: 8 });
+    expect(view.shopAudio.playEffect.mock.calls).toEqual([["stock"]]);
+  });
+
+  it("does not ring the doorbell when the empty shop cannot open", async () => {
+    const view = await readyGame();
+    view.world.callbacks.onTarget({ id: "open-sign", kind: "open-sign", label: "营业牌", action: "开店", inspectable: false, distance: 1 });
+    view.world.callbacks.onInteract();
+    expect(savedState().customer.phase).toBe("outside");
+    expect(view.shopAudio.playEffect).not.toHaveBeenCalled();
+  });
+
+  it("rings for a new visitor and emits one scan per item and one payment, keeping retries, speech replay and departure silent", async () => {
+    const view = await readyGame(stockedFirstDay());
+    expect(view.shopAudio.playEffect).not.toHaveBeenCalled();
+    view.world.callbacks.onTarget({ id: "open-sign", kind: "open-sign", label: "营业牌", action: "开店", inspectable: false, distance: 1 });
+    view.world.callbacks.onInteract();
+    view.world.callbacks.onInteract();
+    view.element("s3-read-customer").click();
+    expect(view.shopAudio.playEffect.mock.calls).toEqual([["doorbell"]]);
+    for (let step = 0; step < 3; step += 1) view.world.callbacks.onCustomerArrive();
+    const item = savedState().items.find((entry) => entry.location.kind === "checkout")!;
+    view.world.callbacks.onTarget({ id: item.id, itemId: item.id, productId: item.productId, kind: "item", label: "收银商品", action: "扫描", inspectable: true, distance: 1 });
+    view.world.callbacks.onInteract();
+    view.world.callbacks.onInteract();
+    expect(view.shopAudio.playEffect.mock.calls).toEqual([["doorbell"], ["scan"]]);
+    view.world.callbacks.onTarget({ id: "counter", kind: "counter", label: "收银台", action: "扫描收款", inspectable: false, distance: 1 });
+    view.world.callbacks.onInteract();
+    view.world.callbacks.onInteract();
+    expect(savedState().transactions).toHaveLength(1);
+    expect(view.shopAudio.playEffect.mock.calls).toEqual([["doorbell"], ["scan"], ["scan"], ["payment"]]);
+    view.world.callbacks.onInteract();
+    view.element("s3-read-customer").click();
+    view.world.callbacks.onCustomerArrive();
+    expect(view.shopAudio.playEffect.mock.calls).toEqual([["doorbell"], ["scan"], ["scan"], ["payment"]]);
+  });
+
+  it.each(["greeting", "checkout", "thanks"] as const)("does not replay historical effects when restoring and rereading a saved %s", async (phase) => {
+    let state = act(stockedFirstDay(), { type: "OPEN_STORE" });
+    if (phase !== "greeting") for (let step = 0; step < 3; step += 1) state = act(state, { type: "CUSTOMER_ADVANCE" });
+    if (phase === "thanks") {
+      for (const item of state.items.filter((entry) => entry.location.kind === "checkout")) state = act(state, { type: "SCAN", itemId: item.id });
+      state = act(state, { type: "PAY", success: true });
+    }
+    const view = await readyGame(state);
+    view.element("s3-read-customer").click();
+    view.element("s3-pause-button").click();
+    view.element("s3-resume").click();
+    expect(view.shopAudio.playEffect).not.toHaveBeenCalled();
+  });
+
+  it("rings only once for an automatically admitted next visitor", async () => {
+    let now = 1000;
+    vi.spyOn(performance, "now").mockImplementation(() => now);
+    const view = await readyGame(completeOrder(stockedFirstDay()));
+    expect(view.shopAudio.playEffect).not.toHaveBeenCalled();
+    now += NEXT_CUSTOMER_SECONDS * 1000;
+    view.world.callbacks.onFrame?.(60, savedState().playerPose);
+    expect(savedState().customer.number).toBe(2);
+    expect(view.shopAudio.playEffect.mock.calls).toEqual([["doorbell"]]);
+    now += NEXT_CUSTOMER_SECONDS * 1000;
+    view.world.callbacks.onFrame?.(60, savedState().playerPose);
+    view.element("s3-read-customer").click();
+    expect(view.shopAudio.playEffect.mock.calls).toEqual([["doorbell"]]);
+  });
+
+  it("stops music and suppresses feedback if a formerly valid interaction loses save ownership", async () => {
+    const view = await readyGame(stockedFirstDay());
+    view.world.callbacks.onTarget({ id: "open-sign", kind: "open-sign", label: "营业牌", action: "开店", inspectable: false, distance: 1 });
+    storage.setItem(SIM_STORAGE_KEY, JSON.stringify(createFirstDayState()));
+    view.world.callbacks.onInteract();
+    expect(view.element("s3-start-button").textContent).toBe("此页面只读");
+    expect(view.shopAudio.setActive).toHaveBeenLastCalledWith(false);
+    expect(view.shopAudio.playEffect).not.toHaveBeenCalled();
+  });
+});
+
+describe("speech ducking uses real playback events", () => {
+  it.each(["ended", "error", "pause", "close", "blur", "hidden"] as const)("restores music when a local recording is stopped by %s", async (reason) => {
+    const view = await inspectWord();
+    view.shopAudio.setSpeechActive.mockClear();
+    view.element("s3-speak-word").click();
+    expect(view.shopAudio.setSpeechActive).not.toHaveBeenCalledWith(true);
+    view.audio.onplaying?.();
+    expect(view.shopAudio.setSpeechActive).toHaveBeenLastCalledWith(true);
+    const lateStart = view.audio.onplaying;
+    const lateEnd = view.audio.onended;
+    if (reason === "ended") view.audio.onended?.();
+    else if (reason === "error") view.audio.onerror?.();
+    else if (reason === "pause") view.element("s3-pause-button").click();
+    else if (reason === "close") view.element("s3-close-inspect").click();
+    else if (reason === "blur") windowDouble.dispatchEvent(new Event("blur"));
+    else { documentDouble.hidden = true; documentDouble.dispatchEvent(new Event("visibilitychange")) }
+    expect(view.shopAudio.setSpeechActive).toHaveBeenLastCalledWith(false);
+    if (reason !== "ended") {
+      const calls = view.shopAudio.setSpeechActive.mock.calls.length;
+      lateStart?.();
+      lateEnd?.();
+      expect(view.shopAudio.setSpeechActive.mock.calls).toHaveLength(calls);
+    }
+  });
+
+  it("does not duck for blocked local media playback or a late event from that failed attempt", async () => {
+    const view = await inspectWord();
+    view.shopAudio.setSpeechActive.mockClear();
+    view.audio.play.mockRejectedValueOnce(new Error("NotAllowedError"));
+    view.element("s3-speak-word").click();
+    await settle();
+    view.audio.onplaying?.();
+    view.audio.onended?.();
+    expect(view.shopAudio.setSpeechActive).not.toHaveBeenCalledWith(true);
+    expect(view.shopAudio.setSpeechActive).toHaveBeenLastCalledWith(false);
+  });
+
+  it.each(["ended", "error", "pause", "close", "blur"] as const)("restores music when browser speech is stopped by %s", async (reason) => {
+    const browser = installBrowserVoice();
+    const view = await inspectNewProduct();
+    view.shopAudio.setSpeechActive.mockClear();
+    view.element("s3-speak-word").click();
+    const utterance = browser.utterances[0]!;
+    expect(view.shopAudio.setSpeechActive).not.toHaveBeenCalledWith(true);
+    utterance.onstart?.();
+    expect(view.shopAudio.setSpeechActive).toHaveBeenLastCalledWith(true);
+    const lateStart = utterance.onstart;
+    const lateEnd = utterance.onend;
+    if (reason === "ended") utterance.onend?.();
+    else if (reason === "error") utterance.onerror?.();
+    else if (reason === "pause") view.element("s3-pause-button").click();
+    else if (reason === "close") view.element("s3-close-inspect").click();
+    else windowDouble.dispatchEvent(new Event("blur"));
+    expect(view.shopAudio.setSpeechActive).toHaveBeenLastCalledWith(false);
+    if (reason !== "ended") {
+      const calls = view.shopAudio.setSpeechActive.mock.calls.length;
+      lateStart?.();
+      lateEnd?.();
+      expect(view.shopAudio.setSpeechActive.mock.calls).toHaveLength(calls);
+    }
+  });
+
+  it("does not leave music ducked when the browser's synthesis call throws", async () => {
+    const browser = installBrowserVoice();
+    const view = await inspectNewProduct();
+    view.shopAudio.setSpeechActive.mockClear();
+    browser.synthesis.speak.mockImplementationOnce(() => { throw new Error("VoiceUnavailable") });
+    view.element("s3-speak-word").click();
+    browser.utterances[0]?.onstart?.();
+    expect(view.shopAudio.setSpeechActive).not.toHaveBeenCalledWith(true);
+    expect(view.shopAudio.setSpeechActive).toHaveBeenLastCalledWith(false);
   });
 });

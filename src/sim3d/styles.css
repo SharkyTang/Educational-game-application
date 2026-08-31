@@ -252,6 +252,9 @@
 .s3-settings-grid input[type="range"] { width: 100%; margin: 0; accent-color: #3c664b; cursor: pointer; }
 .s3-settings-grid input[type="checkbox"] { justify-self: end; width: 18px; height: 18px; accent-color: #3c664b; cursor: pointer; }
 .s3-settings-grid select { width: 100%; min-height: 35px; padding: 6px 9px; border: 1px solid #c5cdb8; border-radius: 5px; color: #3c5540; background: #f7f6ea; font-size: 11px; }
+#s3-sound-settings > p { margin-bottom: 12px; line-height: 1.7; }
+.s3-music-credit { overflow-wrap: anywhere; font-size: 11px; }
+.s3-music-credit a { color: var(--s3-green); text-underline-offset: 3px; }
 .s3-controls-list { display: grid; gap: 10px; margin: 0 0 13px; }
 .s3-controls-list > div { display: flex; justify-content: space-between; gap: 12px; font-size: 11px; }
 .s3-controls-list dd { flex-shrink: 0; margin: 0; color: #617358; }

@@ -8,6 +8,7 @@ import {
 import { loadSimState, parseImportedSimState, SimSaveConflictError, SimSaveSession, SIM_STORAGE_KEY } from "./persistence";
 import { ShopWorld, type InteractionTarget, type Quality } from "./world";
 import { SPEECH_CLIPS } from "./speechClips";
+import { ShopAudio, type ShopEffect } from "./shopAudio";
 import { createCustomerSeed, customerProfileFor, customerSpeechFor, NEXT_CUSTOMER_SECONDS, type CustomerSpeechClip } from "./customerSelection";
 import { STREET_VENUES, getStreetProgress, getVenueProgress } from "./progression";
 import { PRODUCT_ASSETS, PRODUCT_CATEGORIES, type ProductCategoryId } from "./product-library/catalog";
@@ -31,10 +32,16 @@ interface Settings {
   reducedMotion: boolean;
   volume: number;
   autoSpeech: boolean;
+  musicEnabled: boolean;
+  musicVolume: number;
+  effectsVolume: number;
 }
 const SETTINGS_KEY = "english-high-street:sim3d:settings:v1";
 const MAX_INTERACTION_DISTANCE = 2.6;
-const DEFAULT_SETTINGS: Settings = { schemaVersion: 1, sensitivity: 1, quality: "standard", reducedMotion: true, volume: 0.7, autoSpeech: true };
+const DEFAULT_SETTINGS: Settings = {
+  schemaVersion: 1, sensitivity: 1, quality: "standard", reducedMotion: true, volume: 0.7, autoSpeech: true,
+  musicEnabled: true, musicVolume: 0.22, effectsVolume: 0.5,
+};
 const money = (pence: number): string => `£${(pence / 100).toFixed(2)}`;
 const unitPhrase = (id: ProductId): string => PRODUCTS[id].phraseEn;
 const clamp = (number: number, min: number, max: number): number => Math.max(min, Math.min(max, number));
@@ -153,6 +160,8 @@ export class App3D {
   private pendingImport: SimState | null = null;
   private importGeneration = 0;
   private readonly events = new AbortController();
+  private readonly shopAudio: ShopAudio;
+  private audioForeground = true;
 
   constructor(root: HTMLElement) {
     this.root = root;
@@ -169,6 +178,10 @@ export class App3D {
     }
     this.readSettings();
     this.renderShell();
+    this.shopAudio = new ShopAudio({
+      onStatus: (status) => { if (!this.disposed) this.text("s3-music-status", status) },
+    });
+    this.shopAudio.setSettings(this.settings);
     this.bindEvents();
     this.renderState();
     activeInstances.add(this);
@@ -180,6 +193,8 @@ export class App3D {
     const isCurrent = (): boolean => !this.disposed && generation === this.initGeneration;
     this.ready = false;
     this.mode = "loading";
+    this.shopAudio.setActive(false);
+    this.stopSpeech();
     this.dragLookFallback = false;
     this.el<HTMLButtonElement>("s3-start-button").disabled = true;
     this.text("s3-loading", "正在载入小店、商品和顾客模型…");
@@ -431,9 +446,18 @@ export class App3D {
             <label for="s3-sensitivity">鼠标灵敏度 <output id="s3-sensitivity-value">1.0</output></label><input id="s3-sensitivity" type="range" min="0.3" max="2" step="0.1" value="1">
             <label for="s3-quality">画质</label><select id="s3-quality"><option value="standard">标准 · 优先细节</option><option value="low">流畅 · 降低渲染负担</option></select>
             <label for="s3-reduced-motion">减少镜头动态</label><input id="s3-reduced-motion" type="checkbox" checked>
+          </div></details>
+          <details id="s3-sound-settings" class="s3-pause-section"><summary>声音与音乐</summary>
+            <p id="s3-music-status" class="s3-muted" role="status" aria-live="polite">背景音乐：Local Forecast · 等待开始</p>
+            <div class="s3-settings-grid">
+            <label for="s3-music-enabled">循环背景音乐</label><input id="s3-music-enabled" type="checkbox" checked>
+            <label for="s3-music-volume">音乐音量 <output id="s3-music-volume-value">22%</output></label><input id="s3-music-volume" type="range" min="0" max="1" step="0.01" value="0.22">
+            <label for="s3-effects-volume">操作音效 <output id="s3-effects-volume-value">50%</output></label><input id="s3-effects-volume" type="range" min="0" max="1" step="0.05" value="0.5">
             <label for="s3-volume">发音音量 <output id="s3-volume-value">70%</output></label><input id="s3-volume" type="range" min="0" max="1" step="0.1" value="0.7">
             <label for="s3-auto-speech">顾客自动说话</label><input id="s3-auto-speech" type="checkbox" checked>
-          </div><p class="s3-muted">milk / bread 使用现有单词录音与本地短句音频；其他商品尚未录制，按设备能力使用浏览器合成发音。顾客继续使用本地配音。字幕始终保留，不录音、不要求开麦。</p></details>
+          </div><p class="s3-muted">顾客进店、成功上架、扫码和收款各有轻声反馈。播放英语时音乐自动变轻；暂停或切出页面时停声，返回小店后继续循环。操作音效调到 0 即可关闭，不影响英语发音。</p>
+          <p class="s3-muted">milk / bread 使用现有单词录音与本地短句音频；其他商品尚未录制，按设备能力使用浏览器合成发音。顾客继续使用本地配音。字幕始终保留，不录音、不要求开麦。</p>
+          <p class="s3-muted s3-music-credit">音乐：<a href="https://www.incompetech.com/music/royalty-free/index.html?isrc=USUAN1300010" target="_blank" rel="noopener noreferrer">Local Forecast</a> — Kevin MacLeod（incompetech.com），<a href="https://creativecommons.org/licenses/by/4.0/" target="_blank" rel="noopener noreferrer">CC BY 4.0</a>。原音频未改动，仅在游戏内循环播放并调节音量。</p></details>
           <details class="s3-pause-section"><summary>存档与试玩管理</summary><p id="s3-pause-save" class="s3-muted"></p><div class="s3-management-buttons"><button id="s3-export" class="s3-secondary-button" type="button">下载存档备份</button><button id="s3-import" class="s3-secondary-button" type="button">导入存档备份</button><input id="s3-import-file" type="file" accept="application/json,.json" aria-label="选择本游戏导出的 3D JSON 存档" hidden><button id="s3-cancel-customer" class="s3-secondary-button" type="button">取消本单并归还商品</button><button id="s3-restart" class="s3-text-button" type="button">重新试玩</button></div><p class="s3-muted">导入文件只在本机校验，确认后才替换进度。取消订单只退回尚未付款的商品。</p></details>
           <section id="s3-restart-confirm" class="s3-confirm" aria-labelledby="s3-confirm-title" hidden><h3 id="s3-confirm-title">重新开始这轮试营业？</h3><p>当前 3D 进度会被新一轮替换，上一有效快照会保留为备份。建议先下载存档；旧版 2D 存档不受影响。</p><div><button id="s3-restart-confirm-button" class="s3-danger-button" type="button">确认重新试玩</button><button id="s3-restart-cancel" class="s3-secondary-button" type="button">保留当前进度</button></div></section>
           <section id="s3-import-confirm" class="s3-confirm" aria-labelledby="s3-import-title" hidden><h3 id="s3-import-title">确认导入这份存档？</h3><p id="s3-import-summary"></p><p>会替换当前 3D 进度，覆盖前保留当前有效快照。旧版 2D 存档不变；文件不会上传。</p><div><button id="s3-import-confirm-button" class="s3-primary-button" type="button">确认导入并替换进度</button><button id="s3-import-cancel" class="s3-secondary-button" type="button">保留当前进度</button></div></section>
@@ -534,12 +558,19 @@ export class App3D {
     click("s3-restart-confirm-button", () => this.restart());
     click("s3-dismiss-warning", () => { this.loadWarning = ""; this.settingsWarning = ""; this.renderSaveStatus() });
     this.el<HTMLDialogElement>("s3-pause").addEventListener("cancel", (event) => { event.preventDefault(); this.resume(false) }, { signal });
-    for (const id of ["s3-sensitivity", "s3-quality", "s3-reduced-motion", "s3-volume", "s3-auto-speech"]) {
+    for (const id of ["s3-sensitivity", "s3-quality", "s3-reduced-motion", "s3-volume", "s3-auto-speech", "s3-music-enabled", "s3-music-volume", "s3-effects-volume"]) {
       this.el(id).addEventListener("input", () => this.updateSettings(), { signal });
     }
     window.addEventListener("keydown", (event) => this.onKeyDown(event), { capture: true, signal });
-    window.addEventListener("blur", () => { this.stopSpeech(); if (this.mode === "playing") this.pause() }, { signal });
+    window.addEventListener("blur", () => {
+      this.audioForeground = false;
+      this.syncShopAudio();
+      this.stopSpeech();
+      if (this.mode === "playing") this.pause();
+    }, { signal });
+    window.addEventListener("focus", () => { this.audioForeground = true; this.syncShopAudio() }, { signal });
     document.addEventListener("visibilitychange", () => {
+      this.syncShopAudio();
       if (document.hidden) { this.stopSpeech(); if (this.mode === "playing") this.pause() }
     }, { signal });
     document.addEventListener("pointerlockchange", () => this.renderCaptureHint(), { signal });
@@ -547,6 +578,7 @@ export class App3D {
       if (event.key === SIM_STORAGE_KEY && this.saveSession?.observeExternalSnapshot(event.newValue)) this.enterReadOnly(new SimSaveConflictError().message);
     }, { signal });
     window.addEventListener("pagehide", () => {
+      this.shopAudio.setActive(false);
       this.savePoseAndPersist();
       this.stopSpeech();
       this.initGeneration += 1;
@@ -578,6 +610,8 @@ export class App3D {
     this.el("s3-hud").hidden = false;
     this.world.setActive(true);
     this.unlockSpeech();
+    this.shopAudio.unlock();
+    this.syncShopAudio();
     this.world.requestPointerLock();
     this.lastFrameAt = performance.now();
     this.lastPoseSave = performance.now();
@@ -625,6 +659,8 @@ export class App3D {
     this.savePoseAndPersist();
     if (this.mode !== "playing" || !this.saveSession?.canWrite) return;
     this.mode = "inspecting";
+    this.stopSpeech();
+    this.syncShopAudio();
     this.inspecting = productId;
     this.world?.setActive(false);
     this.releasePointer();
@@ -653,6 +689,8 @@ export class App3D {
     this.el("s3-hud").hidden = false;
     this.mode = "playing";
     this.world?.setActive(true);
+    this.shopAudio.unlock();
+    this.syncShopAudio();
     this.renderCaptureHint();
     this.el(this.dragLookFallback ? "s3-canvas" : "s3-capture").focus();
     this.notify(this.dragLookFallback ? "回到小店。按住画面拖动视角，或使用 IJKL 转头、E 操作。" : "回到小店。点击继续控制视角，或使用底部操作按钮。");
@@ -664,6 +702,7 @@ export class App3D {
     this.savePoseAndPersist();
     if (!this.saveSession?.canWrite) return;
     this.mode = "paused";
+    this.syncShopAudio();
     this.world?.setActive(false);
     this.releasePointer();
     this.el("s3-restart-confirm").hidden = true;
@@ -734,6 +773,8 @@ export class App3D {
     this.mode = "playing";
     this.lastFrameAt = performance.now();
     this.world?.setActive(true);
+    this.shopAudio.unlock();
+    this.syncShopAudio();
     if (lockPointer) this.world?.requestPointerLock();
     this.renderCaptureHint();
   }
@@ -782,6 +823,7 @@ export class App3D {
         this.world?.setState(this.state);
         this.renderState();
         this.syncCustomerCue();
+        this.playInteractionSound(command);
       }
       if (showMessage && result.message) this.notify(result.message);
       if (result.changed && command.type === "PAY" && command.success) {
@@ -796,6 +838,19 @@ export class App3D {
       this.renderSaveStatus();
       return false;
     }
+  }
+
+  /** Only committed, accepted actions reach here; retries and rejected actions stay silent. */
+  private playInteractionSound(command: SimCommand): void {
+    let effect: ShopEffect | undefined;
+    switch (command.type) {
+      case "OPEN_STORE":
+      case "NEXT_CUSTOMER": effect = "doorbell"; break;
+      case "STOCK": effect = "stock"; break;
+      case "SCAN": effect = "scan"; break;
+      case "PAY": if (command.success) effect = "payment"; break;
+    }
+    if (effect) this.shopAudio.playEffect(effect);
   }
 
   private capturePose(pose?: PlayerPose): void {
@@ -887,8 +942,13 @@ export class App3D {
     this.el<HTMLInputElement>("s3-reduced-motion").checked = this.settings.reducedMotion;
     this.el<HTMLInputElement>("s3-volume").value = String(this.settings.volume);
     this.el<HTMLInputElement>("s3-auto-speech").checked = this.settings.autoSpeech;
+    this.el<HTMLInputElement>("s3-music-enabled").checked = this.settings.musicEnabled;
+    this.el<HTMLInputElement>("s3-music-volume").value = String(this.settings.musicVolume);
+    this.el<HTMLInputElement>("s3-effects-volume").value = String(this.settings.effectsVolume);
     this.text("s3-sensitivity-value", this.settings.sensitivity.toFixed(1));
     this.text("s3-volume-value", `${Math.round(this.settings.volume * 100)}%`);
+    this.renderSoundSettings();
+    this.syncShopAudio();
   }
 
   private renderManagement(): void {
@@ -1104,6 +1164,7 @@ export class App3D {
 
   private enterReadOnly(message: string): void {
     this.saveSession?.release();
+    this.shopAudio.setActive(false);
     this.stopSpeech();
     this.writerWarning = message;
     this.lastSaveText = "只读 · 本页已停止写入";
@@ -1147,6 +1208,9 @@ export class App3D {
         reducedMotion: input.reducedMotion !== false,
         volume: typeof input.volume === "number" && Number.isFinite(input.volume) ? clamp(input.volume, 0, 1) : DEFAULT_SETTINGS.volume,
         autoSpeech: input.autoSpeech !== false,
+        musicEnabled: input.musicEnabled !== false,
+        musicVolume: typeof input.musicVolume === "number" && Number.isFinite(input.musicVolume) ? clamp(input.musicVolume, 0, 1) : DEFAULT_SETTINGS.musicVolume,
+        effectsVolume: typeof input.effectsVolume === "number" && Number.isFinite(input.effectsVolume) ? clamp(input.effectsVolume, 0, 1) : DEFAULT_SETTINGS.effectsVolume,
       };
     } catch { this.settingsWarning = "个性化设置暂未读取成功，当前使用默认设置。" }
   }
@@ -1162,10 +1226,14 @@ export class App3D {
       reducedMotion: this.el<HTMLInputElement>("s3-reduced-motion").checked,
       volume: clamp(Number(this.el<HTMLInputElement>("s3-volume").value), 0, 1),
       autoSpeech: this.el<HTMLInputElement>("s3-auto-speech").checked,
+      musicEnabled: this.el<HTMLInputElement>("s3-music-enabled").checked,
+      musicVolume: clamp(Number(this.el<HTMLInputElement>("s3-music-volume").value), 0, 1),
+      effectsVolume: clamp(Number(this.el<HTMLInputElement>("s3-effects-volume").value), 0, 1),
     };
     this.applySettings();
     this.text("s3-sensitivity-value", this.settings.sensitivity.toFixed(1));
     this.text("s3-volume-value", `${Math.round(this.settings.volume * 100)}%`);
+    this.renderSoundSettings();
     try { localStorage.setItem(SETTINGS_KEY, JSON.stringify(this.settings)); this.settingsWarning = "" }
     catch { this.settingsWarning = "设置已在本局生效，但暂时无法保存到浏览器。" }
     this.renderSaveStatus();
@@ -1175,6 +1243,18 @@ export class App3D {
     this.world?.setSensitivity(this.settings.sensitivity);
     this.world?.setQuality(this.settings.quality);
     this.world?.setReducedMotion(this.settings.reducedMotion);
+    this.shopAudio.setSettings(this.settings);
+    this.syncShopAudio();
+  }
+
+  private renderSoundSettings(): void {
+    this.text("s3-music-volume-value", `${Math.round(this.settings.musicVolume * 100)}%`);
+    this.text("s3-effects-volume-value", `${Math.round(this.settings.effectsVolume * 100)}%`);
+  }
+
+  private syncShopAudio(): void {
+    this.shopAudio.setActive(!this.disposed && this.ready && !!this.saveSession?.canWrite
+      && this.audioForeground && !document.hidden && (this.mode === "playing" || this.mode === "inspecting"));
   }
 
   /** Prime this very same audio element in the Start click's user activation. */
@@ -1260,17 +1340,20 @@ export class App3D {
     const fail = (): void => {
       if (this.disposed || generation !== this.speechGeneration || failed) return;
       failed = true;
+      this.shopAudio.setSpeechActive(false);
       if (this.speechTimer) clearTimeout(this.speechTimer);
       liveReport(word ? "这段单词发音未能播放，请重试；商品文字和操作不受影响。" : "语音未能播放。点击“重听”或按 R 再试，并检查浏览器与设备声音；字幕和收款仍可用。");
     };
     audio.onplaying = () => {
       if (failed || this.disposed || generation !== this.speechGeneration) return;
       started = true;
+      this.shopAudio.setSpeechActive(true);
       if (this.speechTimer) clearTimeout(this.speechTimer);
       liveReport(word ? `正在播放英式发音：${text}` : `正在播放${rate < 1 ? "慢速" : "英式"}语音：${text}`);
     };
     audio.onended = () => {
       if (this.disposed || generation !== this.speechGeneration || !started || failed) return;
+      this.shopAudio.setSpeechActive(false);
       liveReport(word ? `已播放英式发音：${text}。可以再听一次。` : "语音播放结束，可以点击重听或按 R 再听一次。");
       onDone?.();
     };
@@ -1303,6 +1386,7 @@ export class App3D {
     const fail = (): void => {
       if (!current() || failed) return;
       failed = true;
+      this.shopAudio.setSpeechActive(false);
       if (this.speechTimer) clearTimeout(this.speechTimer);
       report("浏览器合成发音未能播放；本商品尚无本地录音。请重试或继续阅读字幕。");
     };
@@ -1318,12 +1402,14 @@ export class App3D {
       utterance.onstart = () => {
         if (!current() || failed) return;
         started = true;
+        this.shopAudio.setSpeechActive(true);
         if (this.speechTimer) clearTimeout(this.speechTimer);
         report(`正在播放浏览器合成发音：${text}（非本地录音）`);
       };
       utterance.onend = () => {
         if (!current() || !started || failed) return;
         this.synthesisUtterance = null;
+        this.shopAudio.setSpeechActive(false);
         report("浏览器合成发音结束，可以再听一次。声音由当前设备提供。");
         onDone?.();
       };
@@ -1338,6 +1424,7 @@ export class App3D {
 
   private stopSpeech(): void {
     this.speechGeneration += 1;
+    this.shopAudio.setSpeechActive(false);
     if (this.speechTimer) clearTimeout(this.speechTimer);
     this.speechTimer = undefined;
     if (this.synthesisUtterance) {
@@ -1472,6 +1559,7 @@ export class App3D {
     this.el("s3-hud").hidden = true;
     this.el("s3-start").hidden = false;
     this.mode = "start";
+    this.stopSpeech();
     this.renderState();
     this.el("s3-start-button").focus();
   }
@@ -1489,6 +1577,7 @@ export class App3D {
     this.events.abort();
     if (this.statusTimer) clearTimeout(this.statusTimer);
     this.stopSpeech();
+    this.shopAudio.dispose();
     this.releasePointer();
     this.world?.dispose();
     this.world = null;
