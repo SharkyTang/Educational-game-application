@@ -134,4 +134,19 @@ describe("3D shop asset contracts", () => {
     expect(scene.getMeshByName("milk-capacity-note")!.isEnabled()).toBe(false);
     expect(scene.getMeshByName("bread-capacity-note")!.isEnabled()).toBe(false);
   });
+
+  it("prints the same opening state on both readable faces of the street entrance sign", () => {
+    createShop(scene);
+    const inward = scene.getMeshByName("open-sign")!;
+    const outward = scene.getMeshByName("open-sign-exterior")!;
+    const inwardNormal = Vector3.TransformNormal(new Vector3(0, 0, -1), inward.computeWorldMatrix(true)).normalize();
+    const outwardNormal = Vector3.TransformNormal(new Vector3(0, 0, -1), outward.computeWorldMatrix(true)).normalize();
+    expect(inwardNormal.z).toBeCloseTo(1);
+    expect(outwardNormal.z).toBeCloseTo(-1);
+    expect(outward.isDescendantOf(inward)).toBe(true);
+    expect(outward.material).toBe(inward.material);
+    expect(inward.material!.backFaceCulling).toBe(true);
+    setShopSignState(scene, true);
+    expect(inward.metadata.displayState).toBe("open");
+  });
 });

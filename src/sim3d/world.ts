@@ -8,18 +8,21 @@ import "@babylonjs/loaders/glTF";
 import { placeCustomerVisual } from "./modelPlacement";
 import { PointerAccess, type PointerMode } from "./pointerAccess";
 import { createCrate, createPlayerHands, createProduct, createShop, setCheckoutDisplay, setShelfCapacity, setShopSignState } from "./assets";
+import { createStreet, setDeliveryTruckStatus, setStreetVenueStatus, type StreetEnvironment } from "./street";
+import { STREET_VENUES, getVenueProgress, type VenueId } from "./progression";
 import {
-  countAt, canSettleDay, PRODUCTS, SAFE_DROP_POINTS, type CrateId, type CustomerPhase,
+  countAt, canSettleDay, getDaySummary, getDeliverySummary, isWalkablePosition, PRODUCTS, SAFE_DROP_POINTS, type CrateId, type CustomerPhase,
   type PlayerPose, type Position, type ProductId, type SimState,
 } from "./domain";
 
 export type Quality = "standard" | "low";
 export interface InteractionTarget {
   id: string;
-  kind: "crate" | "shelf" | "item" | "counter" | "open-sign" | "drop-zone";
+  kind: "crate" | "shelf" | "item" | "counter" | "open-sign" | "drop-zone" | "delivery" | "venue";
   productId?: ProductId;
   itemId?: string;
   crateId?: CrateId;
+  venueId?: VenueId;
   position?: Position;
   label: string;
   action: string;
@@ -69,6 +72,8 @@ export class ShopWorld {
   private readonly scene: Scene;
   private readonly camera: UniversalCamera;
   private readonly shadow: ShadowGenerator;
+  private readonly street: StreetEnvironment;
+  private truckPhase: "arriving" | "parked" | "departing" | "away" = "arriving";
   private state: SimState;
   private readonly colliders: Collider[] = [];
   private readonly crates = new Map<CrateId, TransformNode>();
@@ -112,7 +117,11 @@ export class ShopWorld {
     this.engine = new Engine(canvas, true, { stencil: true, preserveDrawingBuffer: false, powerPreference: "high-performance" });
     this.engine.setHardwareScalingLevel(1 / Math.min(window.devicePixelRatio || 1, 1.5));
     this.scene = new Scene(this.engine);
-    this.scene.clearColor = Color4.FromHexString("#e6ece7ff");
+    this.scene.clearColor = Color4.FromHexString("#dceaf0ff");
+    this.scene.fogMode = Scene.FOGMODE_LINEAR;
+    this.scene.fogColor = Color3.FromHexString("#dceaf0");
+    this.scene.fogStart = 38;
+    this.scene.fogEnd = 68;
     this.scene.ambientColor = new Color3(.12, .14, .11);
     this.scene.imageProcessingConfiguration.toneMappingEnabled = true;
     this.scene.imageProcessingConfiguration.toneMappingType = ImageProcessingConfiguration.TONEMAPPING_ACES;
@@ -149,6 +158,18 @@ export class ShopWorld {
 
     const shop = createShop(this.scene);
     this.colliders.push(...shop.colliders);
+    this.street = createStreet(this.scene);
+    this.colliders.push(...this.street.colliders);
+    for (const target of this.street.targets) {
+      this.tag(target.mesh, {
+        id: target.id, kind: target.kind,
+        ...(target.venueId ? { venueId: target.venueId } : {}),
+        position: { x: target.position.x, z: target.position.z },
+      });
+    }
+    // A delivery is physical interaction with the stopped vehicle, not an invisible trigger.
+    this.tag(this.street.truck, { id: "daily-delivery", kind: "delivery" });
+    this.resetTruck(initialState.day.phase === "settled" ? "away" : initialState.purchases.length > 0 || initialState.day.phase === "open" ? "parked" : "arriving");
     const slots = shop.root.metadata?.shelfSlots as Record<ProductId, Vector3[]> | undefined;
     this.shelfSlots = slots ?? {
       milk: Array.from({ length: 8 }, (_, i) => new Vector3(-.3 + (i % 4) * .2, i < 4 ? .94 : 1.4, 3.68)),
@@ -193,6 +214,7 @@ export class ShopWorld {
     this.customerPhase = initialState.customer.phase;
     this.setCustomerRoute(true);
     this.syncInventory();
+    this.syncStreet();
     this.ensureSafePose();
     for (const mesh of this.scene.meshes) {
       if (mesh.renderingGroupId === 2) continue;
@@ -252,15 +274,22 @@ export class ShopWorld {
 
   setState(state: SimState): void {
     const phaseChanged = this.customerPhase !== state.customer.phase;
+    const newDay = this.state.day.number !== state.day.number;
+    const freshRun = state.revision < this.state.revision && state.purchases.length === 0 && state.transactions.length === 0;
+    const closed = this.state.day.phase !== "settled" && state.day.phase === "settled";
     this.state = state;
+    if (newDay || freshRun) this.resetTruck(state.day.phase === "settled" ? "away" : "arriving");
+    else if (closed && this.truckPhase !== "away") this.truckPhase = "departing";
     if (phaseChanged) this.setCustomerRoute(false);
     this.syncInventory();
+    this.syncStreet();
+    this.ensureSafePose();
     this.updateTarget();
   }
 
   private syncInventory(): void {
     const state = this.state;
-    const visibleIds = new Set(state.items.filter((item) => item.location.kind !== "sold").map((item) => item.id));
+    const visibleIds = new Set(state.items.filter((item) => item.location.kind !== "sold" && item.location.kind !== "delivery").map((item) => item.id));
     for (const [id, root] of this.products) {
       if (visibleIds.has(id)) continue;
       for (const mesh of root.getChildMeshes()) this.shadow.removeShadowCaster(mesh, false);
@@ -278,7 +307,7 @@ export class ShopWorld {
       this.tag(root, { id: crate.id, kind: "crate", crateId: crate.id, productId: crate.productId });
     }
     for (const item of state.items) {
-      if (item.location.kind === "sold") continue;
+      if (item.location.kind === "sold" || item.location.kind === "delivery") continue;
       let root = this.products.get(item.id);
       if (!root) {
         root = createProduct(this.scene, item.productId, item.id);
@@ -339,6 +368,43 @@ export class ShopWorld {
       paid,
     });
     setShelfCapacity(this.scene, state.upgraded);
+  }
+
+  private resetTruck(phase: "arriving" | "parked" | "away"): void {
+    this.truckPhase = phase;
+    this.street.truck.position.set(phase === "arriving" ? -25 : phase === "away" ? 25 : 3, 0, -9.1);
+    this.street.truck.setEnabled(phase !== "away");
+  }
+
+  private syncStreet(): void {
+    for (const venue of STREET_VENUES) {
+      const progress = getVenueProgress(this.state, venue.id);
+      const conditions = progress.requirements.map((entry) => entry.label).join(" · ");
+      setStreetVenueStatus(this.scene, venue.id, progress.statusText, conditions, progress.eligible);
+    }
+    const delivery = getDeliverySummary(this.state);
+    setDeliveryTruckStatus(this.scene, `第 ${this.state.day.number} 天 · ${delivery.pendingUnits > 0 ? `${delivery.pendingUnits} 件待签收` : delivery.receivedToday > 0 ? "今日货物已签收" : "每日配送 · 按需订货"}`);
+  }
+
+  private updateTruck(dt: number): void {
+    if (this.truckPhase !== "arriving" && this.truckPhase !== "departing") return;
+    const truck = this.street.truck;
+    const destination = this.truckPhase === "arriving" ? 3 : 25;
+    const step = Math.min(destination - truck.position.x, dt * 4.8);
+    const nextX = truck.position.x + step;
+    // Stop for the player instead of driving through them. The clear pavement stays accessible.
+    if (Math.abs(this.camera.position.x - nextX) < 2.85 && Math.abs(this.camera.position.z - truck.position.z) < 1.45) return;
+    truck.position.x = nextX;
+    for (const wheel of this.street.wheels) wheel.rotation.z -= step / .38;
+    if (Math.abs(destination - nextX) < .01) {
+      if (this.truckPhase === "arriving") {
+        this.truckPhase = "parked";
+        this.callbacks.onStatus(`第 ${this.state.day.number} 天的送货车到店了。按 B 订货，走近车身按 E 签收，再把门口的货箱搬上货架。`);
+      } else {
+        this.truckPhase = "away";
+        truck.setEnabled(false);
+      }
+    }
   }
 
   private setCustomerRoute(initial: boolean): void {
@@ -590,7 +656,7 @@ export class ShopWorld {
 
   private isFree(x: number, z: number): boolean {
     const radius = .24;
-    if (x < -3.4 + radius || x > 3.4 - radius || z < -4.6 + radius || z > 4.6 - radius) return false;
+    if (!isWalkablePosition({ x, z }, radius)) return false;
     for (const box of this.colliders) {
       if (x > box.minX - radius && x < box.maxX + radius && z > box.minZ - radius && z < box.maxZ + radius) return false;
     }
@@ -599,6 +665,9 @@ export class ShopWorld {
       const halfWidth = crate.productId === "milk" ? .23 : .35;
       if (Math.abs(x - crate.position.x) < halfWidth + radius && Math.abs(z - crate.position.z) < .20 + radius) return false;
     }
+    if (this.street && this.truckPhase !== "away"
+      && Math.abs(x - this.street.truck.position.x) < 2.45 + radius
+      && Math.abs(z - this.street.truck.position.z) < .96 + radius) return false;
     return true;
   }
 
@@ -649,7 +718,17 @@ export class ShopWorld {
       inspectable = false;
     } else if (data.kind === "open-sign") {
       label = "Open / Closed · 营业牌";
-      action = this.state.day.phase === "settled" ? "查看日结 / 开始下一天" : canSettleDay(this.state) ? "结束营业并查看账目" : this.state.customer.phase === "outside" ? "开门营业" : this.state.customer.phase === "complete" ? "接待下一位顾客" : "正在营业";
+      action = this.state.day.phase === "settled" ? "查看日结 / 开始下一天" : canSettleDay(this.state) ? "结束营业并查看账目" : getDaySummary(this.state).paidCustomers >= this.state.day.targetCustomers ? "查看日结前的收尾事项" : this.state.customer.phase === "outside" ? "开门营业" : this.state.customer.phase === "complete" ? "接待下一位顾客" : "正在营业";
+      inspectable = false;
+    } else if (data.kind === "delivery") {
+      const delivery = getDeliverySummary(this.state);
+      label = `Daily delivery · 第 ${this.state.day.number} 天送货车`;
+      action = delivery.pendingUnits > 0 ? delivery.canReceive ? `签收 ${delivery.pendingUnits} 件货物` : delivery.reason ?? "请先腾出收货空间" : "查看今日进货单";
+      inspectable = false;
+    } else if (data.kind === "venue") {
+      const venue = STREET_VENUES.find((entry) => entry.id === data.venueId);
+      label = venue ? `${venue.nameEn} · ${venue.nameZh}` : "High Street · 商业街";
+      action = data.venueId ? `${getVenueProgress(this.state, data.venueId).statusText} · 查看条件` : "查看开放条件";
       inspectable = false;
     } else {
       label = "Delivery · 安全卸货点";
@@ -666,7 +745,7 @@ export class ShopWorld {
     if (this.targetMesh && this.targetMesh instanceof Mesh) this.targetMesh.renderOutline = false;
     this.targetMesh = null;
     const data = hit?.pickedMesh?.metadata?.interaction as TargetData | undefined;
-    if (hit?.hit && hit.distance <= INTERACTION_RANGE && data) {
+    if (hit?.hit && hit.distance <= INTERACTION_RANGE && data && (data.kind !== "delivery" || this.truckPhase === "parked")) {
       const target = this.decorateTarget(data, hit.distance);
       this.targetMesh = hit.pickedMesh;
       if (hit.pickedMesh instanceof Mesh) {
@@ -680,6 +759,7 @@ export class ShopWorld {
 
   private updateGuide(): void {
     const state = this.state;
+    const delivery = getDeliverySummary(state);
     let point: Position;
     let title: string;
     if (state.day.phase === "settled" || canSettleDay(state)) {
@@ -696,6 +776,13 @@ export class ShopWorld {
         point = crate.productId === "milk" ? { x: 0, z: 3.6 } : { x: 2.65, z: .3 };
         title = crate.productId === "milk" ? "Milk 牛奶冰柜" : "Bread 面包架";
       }
+    } else if (delivery.pendingUnits > 0) {
+      if (this.truckPhase === "arriving") {
+        this.callbacks.onGuide?.(`送货车正在靠边 · ${delivery.pendingUnits} 件货待签收 · 请留出车道`);
+        return;
+      }
+      point = { x: this.street.truck.position.x, z: this.street.truck.position.z + 1 };
+      title = `门口送货车 · 按 E 签收 ${delivery.pendingUnits} 件`;
     } else if (state.customer.phase === "outside" || state.customer.phase === "complete") {
       const productId = (["milk", "bread"] as ProductId[]).find((id) => countAt(state, id, "shelf") === 0);
       if (productId) {
@@ -728,6 +815,7 @@ export class ShopWorld {
     this.poseClock += dt;
     if (this.active) {
       this.movePlayer(dt);
+      this.updateTruck(dt);
       this.updateCustomer(dt);
       if (!this.reducedMotion && this.state.held.kind === "crate") {
         const root = this.crates.get(this.state.held.crateId)!;

@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
-  CRATE_CAPACITY, DAY_CUSTOMER_TARGET, INITIAL_CAPITAL_PENCE, PRODUCTS, PURCHASE_PAIR_COST_PENCE,
+  CRATE_CAPACITY, DAY_CUSTOMER_TARGET, DELIVERY_DROP_POINTS, INITIAL_CAPITAL_PENCE, PRODUCTS, PURCHASE_PAIR_COST_PENCE,
   canSettleDay, capacityFor, countAt, createFirstDayState, createInitialSimState, getDaySummary, getObjective,
-  getPurchaseOffer, migrateLegacySimState, reduceSim, validateLegacySimState, validateSimState,
+  getDeliverySummary, getPurchaseOffer, migrateLegacySimState, reduceSim, validateLegacySimState, validateSimState,
   type LegacySimState, type ProductId, type PurchasePairs, type SimCommand, type SimState,
 } from "../../src/sim3d/domain";
 
@@ -15,7 +15,7 @@ function act(state: SimState, command: SimCommand): SimState {
 }
 
 function buy(state = createFirstDayState(), pairs: PurchasePairs = 3, id = `order-${state.purchases.length + 1}`): SimState {
-  return act(state, { type: "PURCHASE_STOCK", orderId: id, pairs });
+  return act(act(state, { type: "PURCHASE_STOCK", orderId: id, pairs }), { type: "RECEIVE_DELIVERY" });
 }
 
 function stock(state: SimState, quantity: number): SimState {
@@ -73,7 +73,7 @@ describe("first-day paired purchasing and conserved goods", () => {
   it("opens with £12 capital, two empty reusable crates and no free merchandise", () => {
     const state = createFirstDayState();
     expect(validateSimState(state)).toBe(true);
-    expect(state.schemaVersion).toBe(4);
+    expect(state.schemaVersion).toBe(5);
     expect(state.cashPence).toBe(INITIAL_CAPITAL_PENCE);
     expect(state.items).toEqual([]);
     expect(state.crates).toHaveLength(2);
@@ -92,7 +92,7 @@ describe("first-day paired purchasing and conserved goods", () => {
     expect(state.items).toHaveLength(6);
     expect(new Set(state.items.map((item) => item.id)).size).toBe(6);
     expect(state.purchases).toEqual([{
-      id: "opening-delivery", dayNumber: 1, pairs: 3, amountPence: 690,
+      id: "opening-delivery", dayNumber: 1, pairs: 3, amountPence: 690, receivedDay: 1,
       itemIds: ["milk-purchase-opening-delivery-1", "milk-purchase-opening-delivery-2", "milk-purchase-opening-delivery-3",
         "bread-purchase-opening-delivery-1", "bread-purchase-opening-delivery-2", "bread-purchase-opening-delivery-3"],
     }]);
@@ -128,16 +128,27 @@ describe("first-day paired purchasing and conserved goods", () => {
     expect(reduceSim(state, { type: "PURCHASE_STOCK", orderId, pairs: 1 }).state).toBe(state);
   });
 
-  it("rejects overspending and allows delivery to a carried empty crate", () => {
+  it("accepts a paid order while carrying a crate but refuses to move that crate on receipt", () => {
     let state = createFirstDayState();
     expect(reduceSim(state, { type: "PURCHASE_STOCK", orderId: "too-large", pairs: 6 }).state).toBe(state);
     state = act(state, { type: "PICK_CRATE", crateId: "bread-crate" });
     expect(getObjective(state)).toContain("空");
-    state = buy(state);
+    const beforeCrates = structuredClone(state.crates);
+    state = act(state, { type: "PURCHASE_STOCK", orderId: "held-order", pairs: 3 });
     expect(state.held).toEqual({ kind: "crate", crateId: "bread-crate" });
-    expect(countAt(state, "bread", "crate")).toBe(3);
+    expect(countAt(state, "bread", "crate")).toBe(0);
+    expect(countAt(state, "bread", "delivery")).toBe(3);
+    expect(getDeliverySummary(state)).toMatchObject({ pendingOrders: 1, pendingUnits: 6, canReceive: false });
+    expect(reduceSim(state, { type: "RECEIVE_DELIVERY" }).state).toBe(state);
+    expect(state.crates).toEqual(beforeCrates);
     expect(reduceSim(state, { type: "PURCHASE_STOCK", orderId: "not-affordable", pairs: 3 }).state).toBe(state);
     expect(getPurchaseOffer(state, 1).allowed).toBe(true);
+    state = act(state, { type: "DROP_HELD", position: state.crates[1]!.position });
+    const balance = state.cashPence;
+    state = act(state, { type: "RECEIVE_DELIVERY" });
+    expect(state.crates.map((crate) => crate.position)).toEqual(DELIVERY_DROP_POINTS);
+    expect(countAt(state, "bread", "crate")).toBe(3);
+    expect(state.cashPence).toBe(balance);
   });
 
   it("caps crates at eight including a hand-held unit's reserved return space", () => {
@@ -287,6 +298,127 @@ describe("a complete business day and continued operation", () => {
     expect(state.customer).toEqual(before.customer);
     expect(state.inspectedProducts).toEqual([]);
     expect(state.upgradeDay).toBe(1);
+  });
+});
+
+describe("doorstep delivery ownership and receipt", () => {
+  it("debits once but keeps paid goods on the vehicle until signed for", () => {
+    const original = createFirstDayState();
+    const pending = act(original, { type: "PURCHASE_STOCK", orderId: "doorstep", pairs: 3 });
+    expect(pending.cashPence).toBe(510);
+    expect(pending.purchases[0]?.receivedDay).toBeNull();
+    expect(getDeliverySummary(pending)).toEqual({ pendingOrders: 1, pendingUnits: 6, receivedToday: 0, canReceive: true });
+    expect(pending.crates).toEqual(original.crates);
+    for (const productId of ["milk", "bread"] as const) {
+      expect(countAt(pending, productId, "crate")).toBe(0);
+      expect(countAt(pending, productId, "delivery")).toBe(3);
+      expect(reduceSim(pending, { type: "INSPECT", productId }).changed).toBe(false);
+    }
+    expect(reduceSim(pending, { type: "TAKE_ITEM", itemId: pending.items[0]!.id }).changed).toBe(false);
+    expect(reduceSim(pending, { type: "OPEN_STORE" }).changed).toBe(false);
+    expect(getObjective(pending)).toContain("签收");
+    expect(getDaySummary(pending)).toMatchObject({ procurementPence: 690, remainingStockUnits: 6, remainingInventoryValuePence: 690 });
+    const received = act(pending, { type: "RECEIVE_DELIVERY" });
+    expect(received.cashPence).toBe(pending.cashPence);
+    expect(received.items.map((item) => item.id)).toEqual(pending.items.map((item) => item.id));
+    expect(received.crates.map((crate) => crate.position)).toEqual(DELIVERY_DROP_POINTS);
+    expect(getDeliverySummary(received)).toMatchObject({ pendingOrders: 0, pendingUnits: 0, receivedToday: 1, canReceive: false });
+    expect(reduceSim(received, { type: "RECEIVE_DELIVERY" }).state).toBe(received);
+    expect(reduceSim(received, { type: "PURCHASE_STOCK", orderId: "doorstep", pairs: 3 }).state).toBe(received);
+  });
+
+  it("combines independently paid same-day orders into a single safe unloading", () => {
+    let state = act(createFirstDayState(), { type: "PURCHASE_STOCK", orderId: "morning", pairs: 3 });
+    state = act(state, { type: "PURCHASE_STOCK", orderId: "extra", pairs: 1 });
+    expect(getDeliverySummary(state)).toMatchObject({ pendingOrders: 2, pendingUnits: 8, receivedToday: 0 });
+    state = act(state, { type: "RECEIVE_DELIVERY" });
+    expect(state.cashPence).toBe(280);
+    expect(state.purchases.map((purchase) => purchase.receivedDay)).toEqual([1, 1]);
+    expect(countAt(state, "milk", "crate")).toBe(4);
+    expect(countAt(state, "bread", "crate")).toBe(4);
+    expect(getDeliverySummary(state).receivedToday).toBe(2);
+  });
+
+  it("reserves crate capacity for all paid pending goods before further orders", () => {
+    let state = act(afterDays(2), { type: "PURCHASE_STOCK", orderId: "large", pairs: 6 });
+    state = act(state, { type: "PURCHASE_STOCK", orderId: "extra-one", pairs: 1 });
+    state = act(state, { type: "PURCHASE_STOCK", orderId: "extra-two", pairs: 1 });
+    expect(countAt(state, "milk", "crate")).toBe(0);
+    expect(countAt(state, "milk", "delivery")).toBe(8);
+    expect(state.cashPence).toBeGreaterThanOrEqual(PURCHASE_PAIR_COST_PENCE);
+    expect(getPurchaseOffer(state, 1).allowed).toBe(false);
+    expect(reduceSim(state, { type: "PURCHASE_STOCK", orderId: "overflow", pairs: 1 }).state).toBe(state);
+    state = act(state, { type: "RECEIVE_DELIVERY" });
+    expect(countAt(state, "milk", "crate")).toBe(8);
+  });
+
+  it("does not unload into the player or move a crate that owns a held item's return place", () => {
+    let state = buy();
+    state = act(state, { type: "PURCHASE_STOCK", orderId: "supplement", pairs: 1 });
+    const milk = state.items.find((item) => item.productId === "milk" && item.location.kind === "crate")!;
+    state = act(state, { type: "TAKE_ITEM", itemId: milk.id });
+    expect(getDeliverySummary(state).reason).toContain("放下");
+    expect(reduceSim(state, { type: "RECEIVE_DELIVERY" }).state).toBe(state);
+    state = act(state, { type: "RETURN_ITEM" });
+    state = act(state, { type: "SAVE_POSE", pose: { ...DELIVERY_DROP_POINTS[0]!, yaw: 0, pitch: 0 } });
+    expect(getDeliverySummary(state).reason).toContain("卸货点");
+    expect(reduceSim(state, { type: "RECEIVE_DELIVERY" }).state).toBe(state);
+    state = act(state, { type: "SAVE_POSE", pose: { x: 0, z: -6, yaw: 0, pitch: 0 } });
+    state = act(state, { type: "RECEIVE_DELIVERY" });
+    expect(state.items.find((item) => item.id === milk.id)?.location).toEqual({ kind: "crate", crateId: "milk-crate" });
+    expect(countAt(state, "milk", "crate")).toBe(4);
+  });
+
+  it("keeps space for unpaid cancellation and a held shelf return while another delivery is pending", () => {
+    let state = buy(afterDays(4), 6);
+    state = stock(state, 4);
+    state = buy(state, 3);
+    state = checkout(state);
+    state = stock(state, 1);
+    state = act(state, { type: "PURCHASE_STOCK", orderId: "cancel-safe", pairs: 3 });
+    const milk = state.items.find((item) => item.productId === "milk" && item.location.kind === "shelf")!;
+    state = act(state, { type: "TAKE_ITEM", itemId: milk.id });
+    expect(getPurchaseOffer(state, 1).allowed).toBe(false);
+    state = act(state, { type: "CANCEL_CUSTOMER" });
+    state = act(state, { type: "RETURN_ITEM" });
+    expect(countAt(state, "milk", "crate")).toBe(5);
+    expect(countAt(state, "milk", "delivery")).toBe(3);
+    state = act(state, { type: "RECEIVE_DELIVERY" });
+    expect(countAt(state, "milk", "crate")).toBe(8);
+    expect(countAt(state, "bread", "crate")).toBe(8);
+  });
+
+  it("waits for the last delivery before day-end and resets receipt counts without granting free next-day stock", () => {
+    let state = fullDay();
+    state = act(state, { type: "PURCHASE_STOCK", orderId: "last-minute", pairs: 1 });
+    expect(canSettleDay(state)).toBe(false);
+    const closing = reduceSim(state, { type: "SETTLE_DAY" });
+    expect(closing.state).toBe(state);
+    expect(closing.message).toContain("先签收");
+    expect(reduceSim(state, { type: "START_NEXT_DAY" }).state).toBe(state);
+    state = act(state, { type: "RECEIVE_DELIVERY" });
+    state = act(state, { type: "SETTLE_DAY" });
+    const before = structuredClone(state);
+    state = act(state, { type: "START_NEXT_DAY" });
+    expect(state.items).toEqual(before.items);
+    expect(state.cashPence).toBe(before.cashPence);
+    expect(getDeliverySummary(state)).toMatchObject({ pendingOrders: 0, receivedToday: 0, canReceive: false });
+    state = act(state, { type: "PURCHASE_STOCK", orderId: "day-two", pairs: 1 });
+    expect(getDeliverySummary(state)).toMatchObject({ pendingOrders: 1, pendingUnits: 2, receivedToday: 0 });
+    state = act(state, { type: "RECEIVE_DELIVERY" });
+    expect(state.purchases.at(-1)?.receivedDay).toBe(2);
+  });
+
+  it.each([
+    ["missing receipt state", (state: SimState) => { delete (state.purchases[0] as Partial<typeof state.purchases[number]>).receivedDay }],
+    ["false receipt", (state: SimState) => { state.purchases[0]!.receivedDay = 1 }],
+    ["premature crate ownership", (state: SimState) => { state.items[0]!.location = { kind: "crate", crateId: "milk-crate" } }],
+    ["another order's cargo", (state: SimState) => { state.items[0]!.location = { kind: "delivery", orderId: "other-order" } }],
+    ["unreceived day end", (state: SimState) => { state.day.phase = "settled" }],
+  ])("rejects %s in saved delivery ownership", (_label, mutate) => {
+    const state = act(createFirstDayState(), { type: "PURCHASE_STOCK", orderId: "pending", pairs: 3 });
+    mutate(state);
+    expect(validateSimState(state)).toBe(false);
   });
 });
 

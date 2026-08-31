@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { createFirstDayState, createInitialSimState, reduceSim, validateSimState, type LegacySimState, type SimState } from "../../src/sim3d/domain";
+import { SAFE_DROP_POINTS, createFirstDayState, createInitialSimState, getDeliverySummary, migrateV4SimState, reduceSim, validateSimState, validateV4SimState, type LegacySimState, type SimState, type SimStateV4 } from "../../src/sim3d/domain";
 import {
   SIM_BACKUP_KEY, SIM_STORAGE_KEY, SIM_LEGACY_STORAGE_KEY, SIM_LEGACY_BACKUP_KEY, SimSaveConflictError, SimSaveSession,
+  SIM_V4_STORAGE_KEY, SIM_V4_BACKUP_KEY, SIM_WRITER_LOCK,
   loadSimState, parseImportedSimState, saveSimState,
   type SimLockManager, type StorageLike,
 } from "../../src/sim3d/persistence";
@@ -46,6 +47,16 @@ function oldSnapshot(state = paidSnapshot()): LegacySimState {
     held: structuredClone(state.held), inspectedProducts: [...state.inspectedProducts], customer: { ...state.customer },
     scannedIds: [...state.scannedIds], transactions: structuredClone(state.transactions), cashPence: state.cashPence,
     upgraded: state.upgraded, playerPose: { ...state.playerPose },
+  };
+}
+
+function v4Snapshot(): SimStateV4 {
+  let state = reduceSim(createFirstDayState(), { type: "PURCHASE_STOCK", orderId: "v4-original", pairs: 3 }).state;
+  state = reduceSim(state, { type: "RECEIVE_DELIVERY" }).state;
+  return {
+    ...structuredClone(state), schemaVersion: 4,
+    crates: state.crates.map((crate, index) => ({ ...crate, position: { ...SAFE_DROP_POINTS[index]! } })),
+    purchases: state.purchases.map(({ id, dayNumber, pairs, itemIds, amountPence }) => ({ id, dayNumber, pairs, itemIds: [...itemIds], amountPence })),
   };
 }
 
@@ -216,14 +227,14 @@ describe("safe crate placement around the player", () => {
   });
 });
 
-describe("v4 first-day persistence and read-only v3 migration", () => {
+describe("v5 delivery persistence and read-only v3 migration", () => {
   it("starts the new namespace with £12 and empty crates without rewriting unrelated 2D data", () => {
     const storage = new MemoryStorage();
     storage.data.set("english-high-street:save:v2", "legacy-2d-content");
     const before = [...storage.data];
     expect(loadSimState(storage)).toEqual({ state: createFirstDayState(), source: "new" });
     expect([...storage.data]).toEqual(before);
-    expect(SIM_STORAGE_KEY).toBe("english-high-street:sim3d:v4");
+    expect(SIM_STORAGE_KEY).toBe("english-high-street:sim3d:v5");
   });
 
   it("migrates the valid v3 world once and leaves both original v3 keys byte-for-byte intact", () => {
@@ -237,7 +248,7 @@ describe("v4 first-day persistence and read-only v3 migration", () => {
     expect(migrated.source).toBe("legacy");
     expect(migrated.warning).toContain("不会额外发放");
     expect(migrated.state.cashPence).toBe(400);
-    expect(migrated.state.schemaVersion).toBe(4);
+    expect(migrated.state.schemaVersion).toBe(5);
     expect(migrated.state.transactions).toEqual(oldSnapshot().transactions);
     expect([...storage.data]).toEqual(before);
     saveSimState(migrated.state, storage);
@@ -262,7 +273,7 @@ describe("v4 first-day persistence and read-only v3 migration", () => {
     expect(storage.getItem(SIM_LEGACY_BACKUP_KEY)).toBe(backup);
   });
 
-  it("prefers a valid v4 backup over older v3 progress", () => {
+  it("prefers a valid v5 backup over older v3 progress", () => {
     const storage = new MemoryStorage();
     const state = reduceSim(createFirstDayState(), { type: "PURCHASE_STOCK", orderId: "real-purchase", pairs: 3 }).state;
     storage.data.set(SIM_STORAGE_KEY, "{bad");
@@ -313,7 +324,7 @@ describe("v4 first-day persistence and read-only v3 migration", () => {
     expect(imported.day.openingCashPence).toBe(0);
   });
 
-  it("detects a live S0 writer changing the migration source before the first v4 save", async () => {
+  it("detects a live S0 writer changing the migration source before the first v5 save", async () => {
     const storage = new MemoryStorage();
     storage.data.set(SIM_LEGACY_STORAGE_KEY, JSON.stringify(oldSnapshot(createInitialSimState())));
     const session = new SimSaveSession(storage, null);
@@ -359,5 +370,109 @@ describe("v4 first-day persistence and read-only v3 migration", () => {
     expect(reduceSim(restored, { type: "PURCHASE_STOCK", orderId: "real-order", pairs: 3 }).state).toBe(restored);
     expect(restored.items).toHaveLength(6);
     expect(restored.cashPence).toBe(510);
+    expect(getDeliverySummary(restored)).toMatchObject({ pendingOrders: 1, pendingUnits: 6, receivedToday: 0 });
+    const signed = reduceSim(restored, { type: "RECEIVE_DELIVERY" }).state;
+    session.save(signed);
+    const reloaded = loadSimState(storage).state;
+    expect(getDeliverySummary(reloaded)).toMatchObject({ pendingOrders: 0, receivedToday: 1 });
+    expect(reduceSim(reloaded, { type: "RECEIVE_DELIVERY" }).state).toBe(reloaded);
+    expect(reloaded.cashPence).toBe(510);
+    expect(reloaded.items.map((item) => item.id)).toEqual(restored.items.map((item) => item.id));
+  });
+});
+
+describe("audited v4 migration and coexistence with an older page", () => {
+  it("keeps the v4 writer lock across the namespace upgrade", () => {
+    expect(SIM_WRITER_LOCK).toBe("english-high-street:sim3d:v4:writer");
+  });
+
+  it("migrates paid v4 goods in place without new money, cargo or receipt actions", () => {
+    const storage = new MemoryStorage();
+    const old = v4Snapshot();
+    expect(validateV4SimState(old)).toBe(true);
+    const primary = JSON.stringify(old, null, 2);
+    const backup = JSON.stringify({ ...old, revision: old.revision + 1 });
+    storage.data.set(SIM_V4_STORAGE_KEY, primary);
+    storage.data.set(SIM_V4_BACKUP_KEY, backup);
+    storage.data.set(SIM_LEGACY_STORAGE_KEY, JSON.stringify(oldSnapshot()));
+    const before = [...storage.data];
+    const loaded = loadSimState(storage);
+    expect(loaded.source).toBe("v4");
+    expect(loaded.warning).toContain("不会重复扣款或发货");
+    expect(validateSimState(loaded.state)).toBe(true);
+    expect(loaded.state.cashPence).toBe(old.cashPence);
+    expect(loaded.state.items).toEqual(old.items);
+    expect(loaded.state.crates).toEqual(old.crates);
+    expect(loaded.state.transactions).toEqual(old.transactions);
+    expect(loaded.state.purchases[0]?.receivedDay).toBe(1);
+    expect(getDeliverySummary(loaded.state)).toMatchObject({ pendingOrders: 0, pendingUnits: 0, receivedToday: 1 });
+    expect(reduceSim(loaded.state, { type: "RECEIVE_DELIVERY" }).state).toBe(loaded.state);
+    expect([...storage.data]).toEqual(before);
+    saveSimState(loaded.state, storage);
+    expect(storage.getItem(SIM_V4_STORAGE_KEY)).toBe(primary);
+    expect(storage.getItem(SIM_V4_BACKUP_KEY)).toBe(backup);
+    expect(loadSimState(storage).source).toBe("primary");
+    expect(parseImportedSimState(primary)).toEqual(loaded.state);
+  });
+
+  it("uses the validated v4 backup before v3 and explicitly warns if newer progress is unavailable", () => {
+    const storage = new MemoryStorage();
+    const old = JSON.stringify(v4Snapshot());
+    storage.data.set(SIM_STORAGE_KEY, "{corrupt-v5");
+    storage.data.set(SIM_V4_STORAGE_KEY, "{corrupt-v4");
+    storage.data.set(SIM_V4_BACKUP_KEY, old);
+    storage.data.set(SIM_LEGACY_STORAGE_KEY, JSON.stringify(oldSnapshot()));
+    const loaded = loadSimState(storage);
+    expect(loaded.source).toBe("v4-backup");
+    expect(loaded.warning).toContain("进度可能丢失");
+    expect(loaded.state.cashPence).toBe(510);
+    saveSimState(loaded.state, storage);
+    expect(storage.getItem(SIM_V4_STORAGE_KEY)).toBe("{corrupt-v4");
+    expect(storage.getItem(SIM_V4_BACKUP_KEY)).toBe(old);
+  });
+
+  it.each([
+    ["cash", (old: SimStateV4) => { old.cashPence += 1200 }],
+    ["missing purchase", (old: SimStateV4) => { old.purchases = [] }],
+    ["incorrect purchase charge", (old: SimStateV4) => { old.purchases[0]!.amountPence = 100 }],
+    ["unaudited extra goods", (old: SimStateV4) => { old.items.push({ id: "free-milk", productId: "milk", location: { kind: "crate", crateId: "milk-crate" } }) }],
+    ["new cargo in an old schema", (old: SimStateV4) => { old.items[0]!.location = { kind: "delivery", orderId: old.purchases[0]!.id } }],
+  ])("does not bless forged old %s through migration", (_label, mutate) => {
+    const old = v4Snapshot();
+    mutate(old);
+    expect(validateV4SimState(old)).toBe(false);
+    expect(() => migrateV4SimState(old)).toThrow("校验失败");
+    expect(() => parseImportedSimState(JSON.stringify(old))).toThrow("校验未通过");
+  });
+
+  it.each([SIM_V4_STORAGE_KEY, SIM_V4_BACKUP_KEY])("rejects a migration when an old writer changes %s", async (sourceKey) => {
+    const storage = new MemoryStorage();
+    storage.data.set(SIM_V4_STORAGE_KEY, JSON.stringify(v4Snapshot()));
+    const session = new SimSaveSession(storage, null);
+    expect(await session.acquire()).toBe(true);
+    const snapshot = session.load();
+    expect(snapshot.source).toBe("v4");
+    storage.data.set(sourceKey, JSON.stringify({ ...v4Snapshot(), revision: 50 }));
+    expect(() => session.save(snapshot.state)).toThrow("迁移源");
+    expect(session.canWrite).toBe(false);
+    expect(storage.getItem(SIM_STORAGE_KEY)).toBeNull();
+  });
+
+  it("preserves migration sources through quota failure and can safely retry the same v5 snapshot", async () => {
+    const storage = new MemoryStorage();
+    const original = JSON.stringify(v4Snapshot());
+    storage.data.set(SIM_V4_STORAGE_KEY, original);
+    const session = new SimSaveSession(storage, null);
+    await session.acquire();
+    const state = session.load().state;
+    storage.failKey = SIM_STORAGE_KEY;
+    expect(() => session.save(state)).toThrow("QuotaExceededError");
+    expect(session.canWrite).toBe(true);
+    expect(storage.getItem(SIM_V4_STORAGE_KEY)).toBe(original);
+    expect(storage.getItem(SIM_STORAGE_KEY)).toBeNull();
+    storage.failKey = undefined;
+    session.save(state);
+    expect(loadSimState(storage).state).toEqual(state);
+    expect(storage.getItem(SIM_V4_STORAGE_KEY)).toBe(original);
   });
 });

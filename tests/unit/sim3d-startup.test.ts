@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { capacityFor, countAt, createFirstDayState, createInitialSimState, reduceSim, validateSimState, type PlayerPose, type SimCommand, type SimState } from "../../src/sim3d/domain";
+import { capacityFor, countAt, createFirstDayState, createInitialSimState, DELIVERY_DROP_POINTS, getDeliverySummary, reduceSim, validateSimState, type PlayerPose, type SimCommand, type SimState } from "../../src/sim3d/domain";
 import { SIM_BACKUP_KEY, SIM_STORAGE_KEY, type SimLockManager, type StorageLike } from "../../src/sim3d/persistence";
-import type { WorldCallbacks } from "../../src/sim3d/world";
+import type { InteractionTarget, WorldCallbacks } from "../../src/sim3d/world";
 import { SPEECH_CLIPS } from "../../src/sim3d/speechClips";
 
 const doubles = vi.hoisted(() => {
@@ -166,6 +166,7 @@ function act(state: SimState, command: SimCommand): SimState {
 function stockedFirstDay(pairs: 3 | 4 = 3): SimState {
   let state = act(createFirstDayState(), { type: "PURCHASE_STOCK", pairs: 3, orderId: "first-day-three" });
   if (pairs === 4) state = act(state, { type: "PURCHASE_STOCK", pairs: 1, orderId: "one-extra-pair" });
+  state = act(state, { type: "RECEIVE_DELIVERY" });
   for (const productId of ["milk", "bread"] as const) {
     for (let slot = 0; slot < pairs; slot += 1) {
       const item = state.items.find((entry) => entry.productId === productId && entry.location.kind === "crate")!;
@@ -221,6 +222,14 @@ function key(code: string): Event {
   const event = Object.assign(new Event("keydown", { cancelable: true }), { code, repeat: false, ctrlKey: false, metaKey: false, altKey: false, isComposing: false });
   windowDouble.dispatchEvent(event);
   return event;
+}
+
+function deliveryTarget(distance = 1.3): InteractionTarget {
+  return { id: "delivery-truck", kind: "delivery", label: "每日送货车", action: "签收送货", inspectable: false, distance };
+}
+
+function venueTarget(venueId: "cafe" | "restaurant" | "supermarket", distance = 1.3): InteractionTarget {
+  return { id: `venue-${venueId}`, kind: "venue", venueId, label: "未来商铺", action: "查看开放条件", inspectable: false, distance };
 }
 
 describe("3D application startup and lifecycle", () => {
@@ -530,7 +539,7 @@ describe("cursor access and directly reachable business panels", () => {
     expect(view.world.requestPointerLock).toHaveBeenCalledOnce();
   });
 
-  it.each([["KeyB", "supply"], ["KeyU", "upgrade"]] as const)("opens %s directly and returns with clickable pointer", async (code, section) => {
+  it.each([["KeyB", "supply"], ["KeyU", "upgrade"], ["KeyM", "street"]] as const)("opens %s directly and returns with clickable pointer", async (code, section) => {
     const view = await readyGame();
     view.world.callbacks.onPointerMode?.("locked");
     expect(key(code).defaultPrevented).toBe(true);
@@ -747,12 +756,16 @@ describe("first-day management event wiring and persistence", () => {
     expect(state.cashPence).toBe(510);
     expect(state.purchases).toHaveLength(1);
     expect(state.items).toHaveLength(6);
-    expect(countAt(state, "milk", "crate")).toBe(3);
-    expect(countAt(state, "bread", "crate")).toBe(3);
+    expect(countAt(state, "milk", "crate")).toBe(0);
+    expect(countAt(state, "bread", "crate")).toBe(0);
+    expect(getDeliverySummary(state)).toMatchObject({ pendingOrders: 1, pendingUnits: 6, receivedToday: 0 });
+    expect(view.element("s3-delivery-hud").hidden).toBe(false);
+    expect(view.element("s3-delivery-hud").textContent).toContain("6 件待签收");
     expect(view.world.setState).toHaveBeenLastCalledWith(state);
     expect(view.element("s3-pause").open).toBe(false);
     expect(view.world.requestPointerLock).not.toHaveBeenCalled();
-    expect(view.element("s3-toast").textContent).toContain("进货到账");
+    expect(view.element("s3-toast").textContent).toContain("下单成功");
+    expect(view.element("s3-toast").textContent).toContain("门口货车旁按 E 签收");
   });
 
   it("disables unaffordable purchases with an explicit reason, and a smaller selection restores availability", async () => {
@@ -872,5 +885,133 @@ describe("first-day management event wiring and persistence", () => {
       expect(view.element("s3-settle-day").disabled).toBe(false);
       expect(view.audio.play).not.toHaveBeenCalled();
     }
+  });
+});
+
+describe("doorstep delivery and high street management", () => {
+  it("keeps paid deliveries pending until a nearby physical interaction, then preserves payment exactly once", async () => {
+    const pending = act(createFirstDayState(), { type: "PURCHASE_STOCK", orderId: "doorstep-order", pairs: 3 });
+    const view = await readyGame(pending);
+    view.world.callbacks.onTarget(deliveryTarget(5));
+    expect(view.element("s3-interact").disabled).toBe(true);
+    view.world.callbacks.onInteract();
+    expect(getDeliverySummary(savedState()).pendingUnits).toBe(6);
+    view.world.callbacks.onTarget(deliveryTarget());
+    expect(view.element("s3-interact").disabled).toBe(false);
+    expect(view.element("s3-target-action").textContent).toContain("签收 6 件");
+    view.element("s3-interact").click();
+    expect(savedState().cashPence).toBe(510);
+    expect(getDeliverySummary(savedState())).toMatchObject({ pendingUnits: 0, receivedToday: 1 });
+    expect(savedState().crates.map((crate) => crate.position)).toEqual(DELIVERY_DROP_POINTS);
+    expect(view.element("s3-delivery-hud").hidden).toBe(true);
+    view.world.callbacks.onInteract();
+    expect(view.element("s3-panel-supply").hidden).toBe(false);
+    expect(view.element("s3-pause").open).toBe(true);
+    expect(savedState().cashPence).toBe(510);
+    expect(savedState().purchases).toHaveLength(1);
+  });
+
+  it("checks unloading space against the latest world pose before rejecting delivery", async () => {
+    let pending = act(createFirstDayState(), { type: "PURCHASE_STOCK", orderId: "blocked-drop", pairs: 1 });
+    pending = act(pending, { type: "SAVE_POSE", pose: { ...pending.playerPose, ...DELIVERY_DROP_POINTS[0]! } });
+    const view = await readyGame(pending);
+    view.world.callbacks.onTarget(deliveryTarget());
+    view.world.callbacks.onInteract();
+    expect(getDeliverySummary(savedState()).pendingUnits).toBe(2);
+    expect(view.element("s3-toast").textContent).toContain("离开门外的卸货点");
+    Object.assign(view.world.getPose(), { x: 0, z: -7.5 });
+    view.world.callbacks.onInteract();
+    expect(getDeliverySummary(savedState()).pendingUnits).toBe(0);
+    expect(savedState().cashPence).toBe(970);
+  });
+
+  it("does not unload or open another management panel from a paused world interaction", async () => {
+    const state = act(createFirstDayState(), { type: "PURCHASE_STOCK", orderId: "paused-delivery", pairs: 1 });
+    const view = await readyGame(state);
+    view.element("s3-open-street").click();
+    const snapshot = storage.getItem(SIM_STORAGE_KEY);
+    view.world.callbacks.onTarget(deliveryTarget());
+    view.world.callbacks.onInteract();
+    key("KeyB");
+    expect(storage.getItem(SIM_STORAGE_KEY)).toBe(snapshot);
+    expect(view.element("s3-panel-street").hidden).toBe(false);
+    expect(view.element("s3-panel-supply").hidden).toBe(true);
+    expect(getDeliverySummary(savedState()).pendingUnits).toBe(2);
+  });
+
+  it("restores a pending paid order with a visible delivery reminder after remount", async () => {
+    const pending = act(createFirstDayState(), { type: "PURCHASE_STOCK", orderId: "saved-delivery", pairs: 3 });
+    const first = await readyGame(pending);
+    await first.app.dispose();
+    const restored = await readyGame(savedState());
+    expect(restored.element("s3-delivery-hud").hidden).toBe(false);
+    expect(restored.element("s3-delivery-hud").textContent).toContain("6 件待签收");
+    key("KeyB");
+    expect(restored.element("s3-delivery-summary").textContent).toContain("1 笔已付款订单");
+    expect(savedState().cashPence).toBe(510);
+    expect(countAt(savedState(), "milk", "crate")).toBe(0);
+  });
+
+  it("shows delivery as the reason day settlement is blocked after all customers have left", async () => {
+    let state = stockedFirstDay();
+    for (let count = 0; count < 3; count += 1) state = completeOrder(state);
+    state = act(state, { type: "PURCHASE_STOCK", orderId: "tomorrow-order", pairs: 1 });
+    const view = await readyGame(state);
+    view.element("s3-open-day").click();
+    expect(view.element("s3-settle-day").disabled).toBe(true);
+    expect(view.element("s3-day-reason").textContent).toContain("2 件已付款商品待签收");
+    expect(view.element("s3-day-reason").textContent).not.toContain("正在离店");
+    view.element("s3-resume").click();
+    view.world.callbacks.onTarget(deliveryTarget());
+    view.world.callbacks.onInteract();
+    view.element("s3-open-day").click();
+    expect(view.element("s3-settle-day").disabled).toBe(false);
+  });
+
+  it("uses the public street button and shop signs to select concrete goals while pausing the world", async () => {
+    const view = await readyGame();
+    const funds = savedState().cashPence;
+    view.element("s3-open-street").click();
+    expect(view.element("s3-pause").open).toBe(true);
+    expect(view.element("s3-panel-street").hidden).toBe(false);
+    expect(view.element("s3-street-level").textContent).toBe("Lv. 1");
+    expect(view.element("s3-street-progress").getAttribute("aria-valuenow")).toBe("0");
+    for (const venue of ["cafe", "restaurant", "supermarket"]) {
+      expect(view.element(`s3-venue-status-${venue}`).textContent).toBe("暂未开放");
+    }
+    view.element("s3-venue-supermarket").click();
+    expect(view.element("s3-venue-detail-supermarket").hidden).toBe(false);
+    expect(view.element("s3-venue-detail-cafe").hidden).toBe(true);
+    expect(view.element("s3-requirement-progress-supermarket-level").textContent).toBe("1 / 5");
+    expect(view.element("s3-requirement-progress-supermarket-paid-orders").textContent).toBe("0 / 30");
+    expect(view.element("s3-requirement-progress-supermarket-upgrade").textContent).toBe("0 / 1");
+    view.element("s3-resume").click();
+    view.world.callbacks.onTarget(venueTarget("restaurant", 4));
+    view.world.callbacks.onInteract();
+    expect(view.element("s3-pause").open).toBe(false);
+    view.world.callbacks.onTarget(venueTarget("restaurant"));
+    view.world.callbacks.onInteract();
+    expect(view.element("s3-pause").open).toBe(true);
+    expect(view.element("s3-venue-restaurant").getAttribute("aria-pressed")).toBe("true");
+    expect(view.element("s3-venue-detail-restaurant").hidden).toBe(false);
+    expect(view.element("s3-venue-detail-supermarket").hidden).toBe(true);
+    expect(view.world.setActive).toHaveBeenLastCalledWith(false);
+    expect(savedState().cashPence).toBe(funds);
+    expect(savedState().inspectedProducts).toEqual([]);
+  });
+
+  it("announces achieved shop conditions as preparation while keeping interiors unavailable", async () => {
+    let state = stockedFirstDay();
+    for (let count = 0; count < 3; count += 1) state = completeOrder(state);
+    state = act(state, { type: "SETTLE_DAY" });
+    const view = await readyGame(state);
+    key("KeyM");
+    expect(view.element("s3-street-level").textContent).toBe("Lv. 2");
+    expect(view.element("s3-street-progress").getAttribute("aria-valuenow")).toBe("0");
+    expect(view.element("s3-venue-status-cafe").textContent).toBe("条件已达成·筹备中");
+    expect(view.element("s3-requirement-progress-cafe-settlement").textContent).toBe("1 / 1 · 已达成");
+    expect(view.element("s3-venue-note-cafe").textContent).toContain("内部经营尚未开放");
+    expect(view.element("s3-venue-status-restaurant").textContent).toBe("暂未开放");
+    expect(view.element("s3-venue-status-supermarket").textContent).toBe("暂未开放");
   });
 });

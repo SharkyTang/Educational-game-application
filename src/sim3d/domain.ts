@@ -19,13 +19,32 @@ export const PRODUCTS: Record<ProductId, ProductDefinition> = {
 export interface Position { x: number; z: number }
 export interface PlayerPose extends Position { yaw: number; pitch: number }
 
-export const SAFE_DROP_POINTS: readonly Position[] = [
+const INDOOR_DROP_POINTS: readonly Position[] = [
   { x: 1.35, z: -2.9 },
   { x: 2.2, z: -2.9 },
   { x: -1.1, z: 2.6 },
   { x: 1.8, z: 1.35 },
 ];
-export const WORLD_BOUNDS = { minX: -3.4, maxX: 3.4, minZ: -4.6, maxZ: 4.6 } as const;
+export const DELIVERY_DROP_POINTS: readonly Position[] = [
+  { x: 1.35, z: -6 },
+  { x: 2.3, z: -6 },
+];
+export const SAFE_DROP_POINTS: readonly Position[] = [...INDOOR_DROP_POINTS, ...DELIVERY_DROP_POINTS];
+const INDOOR_BOUNDS = { minX: -3.4, maxX: 3.4, minZ: -4.6, maxZ: 4.6 } as const;
+export const WORLD_BOUNDS = { minX: -20, maxX: 20, minZ: -20, maxZ: 4.6 } as const;
+
+/** The room joins the street without a radius-sized gap at the doorway seam. */
+export function isWalkablePosition(position: Position, radius = 0): boolean {
+  const { x, z } = position;
+  if (!Number.isFinite(x) || !Number.isFinite(z) || !Number.isFinite(radius) || radius < 0
+    || x < WORLD_BOUNDS.minX + radius || x > WORLD_BOUNDS.maxX - radius
+    || z < WORLD_BOUNDS.minZ + radius || z > WORLD_BOUNDS.maxZ - radius) return false;
+  if (z > INDOOR_BOUNDS.minZ && (x < INDOOR_BOUNDS.minX || x > INDOOR_BOUNDS.maxX)) return false;
+  // Distance to the two forbidden quadrants beside the shop, including their inside corners.
+  const belowSeam = Math.max(0, INDOOR_BOUNDS.minZ - z);
+  return Math.hypot(Math.max(0, INDOOR_BOUNDS.maxX - x), belowSeam) >= radius
+    && Math.hypot(Math.max(0, x - INDOOR_BOUNDS.minX), belowSeam) >= radius;
+}
 export const UPGRADE_COST_PENCE = 800;
 export const INITIAL_CAPITAL_PENCE = 1200;
 export const CRATE_CAPACITY = 8;
@@ -38,6 +57,7 @@ export type ReturnLocation =
   | { kind: "crate"; crateId: CrateId }
   | { kind: "shelf"; productId: ProductId; slot: number };
 export type ItemLocation = ReturnLocation
+  | { kind: "delivery"; orderId: string }
   | { kind: "hand" }
   | { kind: "basket" }
   | { kind: "checkout" }
@@ -71,12 +91,16 @@ interface SimWorldState {
 }
 /** Exact old S0 snapshot shape. Migration must retain these fields, not manufacture capital. */
 export interface LegacySimState extends SimWorldState { schemaVersion: 3 }
-export interface SimPurchase {
+export interface SimPurchaseV4 {
   id: string;
   dayNumber: number;
   pairs: PurchasePairs;
   itemIds: string[];
   amountPence: number;
+}
+export interface SimPurchase extends SimPurchaseV4 {
+  /** Null means paid goods are still on the delivery vehicle; never available for sale. */
+  receivedDay: number | null;
 }
 export interface SimDay {
   number: number;
@@ -110,14 +134,23 @@ export interface SimSettlement extends SimDaySummary {
   openingInventoryValuePence: number;
   openingStockUnits: number;
 }
-export interface SimState extends SimWorldState {
-  schemaVersion: 4;
+interface SimEconomyState extends SimWorldState {
   /** Only these two fixed, auditable opening balances are accepted. */
   openingKind: "first-day" | "legacy-s0";
   day: SimDay;
-  purchases: SimPurchase[];
   upgradeDay: number | null;
   settlements: SimSettlement[];
+}
+export interface SimStateV4 extends SimEconomyState { schemaVersion: 4; purchases: SimPurchaseV4[] }
+export interface SimState extends SimEconomyState { schemaVersion: 5; purchases: SimPurchase[] }
+type EconomySnapshot = SimState | SimStateV4;
+export interface DeliverySummary {
+  pendingOrders: number;
+  pendingUnits: number;
+  /** Number of orders received on the current business day. */
+  receivedToday: number;
+  canReceive: boolean;
+  reason?: string;
 }
 export interface PurchaseOffer {
   pairs: PurchasePairs;
@@ -141,6 +174,7 @@ export type SimCommand =
   | { type: "CANCEL_CUSTOMER" }
   | { type: "BUY_UPGRADE" }
   | { type: "PURCHASE_STOCK"; orderId: string; pairs: PurchasePairs }
+  | { type: "RECEIVE_DELIVERY" }
   | { type: "SETTLE_DAY" }
   | { type: "START_NEXT_DAY" }
   | { type: "SAVE_POSE"; pose: PlayerPose };
@@ -197,7 +231,7 @@ export function createInitialSimState(): SimState {
 export function createFirstDayState(): SimState {
   const world = createLegacyInitialState();
   return {
-    ...world, schemaVersion: 4, items: [], cashPence: INITIAL_CAPITAL_PENCE,
+    ...world, schemaVersion: 5, items: [], cashPence: INITIAL_CAPITAL_PENCE,
     openingKind: "first-day", day: firstDay("first-day"), purchases: [], upgradeDay: null, settlements: [],
   };
 }
@@ -208,13 +242,27 @@ export function migrateLegacySimState(value: unknown): SimState {
   const legacy = structuredClone(value);
   const day = firstDay("legacy-s0");
   day.phase = legacy.customer.phase === "outside" ? "preparing" : "open";
-  return {
-    ...legacy, schemaVersion: 4, openingKind: "legacy-s0", day,
+  const migrated: SimState = {
+    ...legacy, schemaVersion: 5, openingKind: "legacy-s0", day,
     purchases: [], upgradeDay: legacy.upgraded ? 1 : null, settlements: [],
   };
+  if (!validateSimState(migrated)) throw new Error("旧版 3D 存档迁移校验失败，原始存档未改变。");
+  return migrated;
 }
 
-export function countAt(state: SimState, productId: ProductId, kind: ItemLocation["kind"]): number {
+/** Validate the complete v4 ledger first; goods already received stay exactly where they were. */
+export function migrateV4SimState(value: unknown): SimState {
+  if (!validateV4SimState(value)) throw new Error("旧版 v4 存档校验失败，不能迁移这份库存或金额。");
+  const previous = structuredClone(value);
+  const migrated: SimState = {
+    ...previous, schemaVersion: 5,
+    purchases: previous.purchases.map((purchase) => ({ ...purchase, receivedDay: purchase.dayNumber })),
+  };
+  if (!validateSimState(migrated)) throw new Error("旧版 v4 存档迁移校验失败，原始存档未改变。");
+  return migrated;
+}
+
+export function countAt(state: EconomySnapshot, productId: ProductId, kind: ItemLocation["kind"]): number {
   return state.items.filter((item) => item.productId === productId && item.location.kind === kind).length;
 }
 
@@ -223,7 +271,7 @@ export function getCheckoutTotal(state: SimState): number {
     .reduce((total, item) => total + PRODUCTS[item.productId].pricePence, 0);
 }
 
-function unsoldItems(state: SimState, productId?: ProductId): SimItem[] {
+function unsoldItems(state: EconomySnapshot, productId?: ProductId): SimItem[] {
   return state.items.filter((item) => item.location.kind !== "sold" && (!productId || item.productId === productId));
 }
 
@@ -249,7 +297,7 @@ export function getPurchaseOffer(state: SimState, pairs: PurchasePairs): Purchas
     const held = state.held;
     // A hand-held item reserves its exact crate return space until placed elsewhere.
     const reserved = held.kind === "item" && held.returnTo.kind === "crate" && held.returnTo.crateId === crateIdFor(productId) ? 1 : 0;
-    if (countAt(state, productId, "crate") + reserved + pairs > CRATE_CAPACITY) {
+    if (countAt(state, productId, "crate") + countAt(state, productId, "delivery") + reserved + pairs > CRATE_CAPACITY) {
       return denied(`${PRODUCTS[productId].nameZh}箱最多容纳 ${CRATE_CAPACITY} 件，请先上架或卖出部分商品。`);
     }
     // Keep room to cancel an unpaid basket safely even after shelf replenishment.
@@ -260,8 +308,27 @@ export function getPurchaseOffer(state: SimState, pairs: PurchasePairs): Purchas
   return { pairs, costPence, allowed: true };
 }
 
+export function getDeliverySummary(state: SimState): DeliverySummary {
+  const pending = state.purchases.filter((purchase) => purchase.receivedDay === null);
+  const summary = {
+    pendingOrders: pending.length,
+    pendingUnits: pending.reduce((total, purchase) => total + purchase.itemIds.length, 0),
+    receivedToday: state.purchases.filter((purchase) => purchase.receivedDay === state.day.number).length,
+  };
+  if (!pending.length) return { ...summary, canReceive: false, reason: "还没有待收货订单，可以先打开经营面板订货。" };
+  if (state.held.kind !== "none") return { ...summary, canReceive: false, reason: "请先放下手里的货箱或商品，再到送货车旁签收。" };
+  for (const [index, productId] of PRODUCT_IDS.entries()) {
+    const point = DELIVERY_DROP_POINTS[index]!;
+    const halfWidth = productId === "milk" ? 0.23 : 0.35;
+    if (Math.abs(state.playerPose.x - point.x) < halfWidth + 0.24 && Math.abs(state.playerPose.z - point.z) < 0.44) {
+      return { ...summary, canReceive: false, reason: "请先离开门外的卸货点，给送货员留出放箱空间。" };
+    }
+  }
+  return { ...summary, canReceive: true };
+}
+
 function summaryForRange(
-  state: SimState, day: SimDay, transactionEnd: number, purchaseEnd: number,
+  state: EconomySnapshot, day: SimDay, transactionEnd: number, purchaseEnd: number,
 ): SimDaySummary {
   const transactions = state.transactions.slice(day.transactionStart, transactionEnd);
   const purchases = state.purchases.slice(day.purchaseStart, purchaseEnd);
@@ -285,14 +352,14 @@ function summaryForRange(
 }
 
 /** Purchase expense is cash flow; gross profit subtracts sold-goods cost, not all unsold stock. */
-export function getDaySummary(state: SimState): SimDaySummary {
+export function getDaySummary(state: EconomySnapshot): SimDaySummary {
   return summaryForRange(state, state.day, state.transactions.length, state.purchases.length);
 }
 
 export function canSettleDay(state: SimState): boolean {
   return state.day.phase === "open" && getDaySummary(state).paidCustomers >= DAY_CUSTOMER_TARGET
     && state.customer.phase === "complete" && state.scannedIds.length === 0
-    && !state.items.some((item) => item.location.kind === "basket" || item.location.kind === "checkout");
+    && !state.items.some((item) => item.location.kind === "basket" || item.location.kind === "checkout" || item.location.kind === "delivery");
 }
 
 function settlementFor(state: SimState): SimSettlement {
@@ -306,6 +373,11 @@ function settlementFor(state: SimState): SimSettlement {
 export function getObjective(state: SimState): string {
   if (state.day.phase === "settled") return `第 ${state.day.number} 天已日结。可以查看收支、用资金扩充货架，或开始次日继续营业。`;
   if (canSettleDay(state)) return `今天已完成 ${DAY_CUSTOMER_TARGET} 单收款！打开经营面板，日结后查看毛利与库存，再决定扩容。`;
+  const delivery = getDeliverySummary(state);
+  if (delivery.pendingOrders && ["outside", "complete"].includes(state.customer.phase)) {
+    return state.held.kind !== "none" ? "订购的商品已到门口。先放下手里的物品，再到送货车旁按 E 签收。"
+      : `送货车在店门口等你：${delivery.pendingUnits} 件商品待签收。走到车旁按 E，货箱会放在门外卸货点。`;
+  }
   if (state.customer.phase === "outside") {
     const held = state.held;
     const crate = held.kind === "crate" ? state.crates.find((entry) => entry.id === held.crateId) : undefined;
@@ -502,20 +574,29 @@ export function reduceSim(state: SimState, command: SimCommand): SimResult {
     case "PURCHASE_STOCK": {
       if (!validOrderId(command.orderId)) return reject("进货单号不可用，请重新发起订货。");
       const prior = next.purchases.find((purchase) => purchase.id === command.orderId);
-      if (prior) return reject(prior.pairs === command.pairs ? "这笔进货已经送达，不会再次扣钱或发货。" : "同一进货单号不能改成不同数量。");
+      if (prior) return reject(prior.pairs === command.pairs ? "这笔进货单已经记录，不会再次扣钱或发货。" : "同一进货单号不能改成不同数量。");
       const offer = getPurchaseOffer(next, command.pairs);
       if (!offer.allowed) return reject(offer.reason ?? "当前无法进货。");
       const itemIds = purchaseItemIds(command.orderId, command.pairs);
-      next.purchases.push({ id: command.orderId, dayNumber: next.day.number, pairs: command.pairs, itemIds, amountPence: offer.costPence });
+      next.purchases.push({ id: command.orderId, dayNumber: next.day.number, pairs: command.pairs, itemIds, amountPence: offer.costPence, receivedDay: null });
       for (const [index, id] of itemIds.entries()) {
         const productId = index < command.pairs ? "milk" : "bread";
-        next.items.push({ id, productId, location: { kind: "crate", crateId: crateIdFor(productId) } });
+        next.items.push({ id, productId, location: { kind: "delivery", orderId: command.orderId } });
       }
       next.cashPence -= offer.costPence;
-      return finish(`进货成功 -£${(offer.costPence / 100).toFixed(2)}：${command.pairs} 盒牛奶和 ${command.pairs} 袋面包已放入对应货箱。`);
+      return finish(`订货成功 -£${(offer.costPence / 100).toFixed(2)}：${command.pairs} 盒牛奶和 ${command.pairs} 袋面包待收货，请到门口送货车旁按 E 签收。`);
+    }
+    case "RECEIVE_DELIVERY": {
+      const delivery = getDeliverySummary(next);
+      if (!delivery.canReceive) return reject(delivery.reason ?? "当前无法签收送货。");
+      for (const purchase of next.purchases) if (purchase.receivedDay === null) purchase.receivedDay = next.day.number;
+      for (const item of next.items) if (item.location.kind === "delivery") item.location = { kind: "crate", crateId: crateIdFor(item.productId) };
+      for (const crate of next.crates) crate.position = { ...DELIVERY_DROP_POINTS[PRODUCT_IDS.indexOf(crate.productId)]! };
+      return finish(`已签收 ${delivery.pendingOrders} 单、${delivery.pendingUnits} 件商品，货箱放在门外卸货点；本次不会再次扣款。`);
     }
     case "SETTLE_DAY": {
       if (next.day.phase === "settled") return reject("今天已经日结，不会重复结算或增加资金。");
+      if (getDeliverySummary(next).pendingOrders) return reject("请先签收门口的待收货物，再完成日结。");
       if (!canSettleDay(next)) return reject(`先完成今天 ${DAY_CUSTOMER_TARGET} 单收款，并等最后一位顾客离店后再日结。`);
       next.day.phase = "settled";
       next.settlements.push(settlementFor(next));
@@ -535,7 +616,7 @@ export function reduceSim(state: SimState, command: SimCommand): SimResult {
     case "SAVE_POSE": {
       const pose = command.pose;
       if (!isFiniteNumber(pose.x) || !isFiniteNumber(pose.z) || !isFiniteNumber(pose.yaw) || !isFiniteNumber(pose.pitch)
-        || pose.x < WORLD_BOUNDS.minX || pose.x > WORLD_BOUNDS.maxX || pose.z < WORLD_BOUNDS.minZ || pose.z > WORLD_BOUNDS.maxZ) return reject("这个玩家位置不安全。");
+        || !isWalkablePosition(pose)) return reject("这个玩家位置不安全。");
       const updated = { ...pose, yaw: Math.atan2(Math.sin(pose.yaw), Math.cos(pose.yaw)), pitch: Math.max(-1.35, Math.min(1.35, pose.pitch)) };
       if (Object.keys(updated).every((key) => updated[key as keyof PlayerPose] === next.playerPose[key as keyof PlayerPose])) return reject("位置没有变化。");
       next.playerPose = updated;
@@ -556,9 +637,10 @@ export function canUnlockAdvancedUpgrade(input: {
     && input.requiredTaskIds.every((id) => id.length > 0 && input.completedIndependentTaskIds.includes(id));
 }
 
-function validPose(value: unknown): value is PlayerPose {
+function validPose(value: unknown, version: 3 | 4 | 5): value is PlayerPose {
   return isRecord(value) && isFiniteNumber(value.x) && isFiniteNumber(value.z) && isFiniteNumber(value.yaw) && isFiniteNumber(value.pitch)
-    && value.x >= WORLD_BOUNDS.minX && value.x <= WORLD_BOUNDS.maxX && value.z >= WORLD_BOUNDS.minZ && value.z <= WORLD_BOUNDS.maxZ
+    && (version === 5 ? isWalkablePosition({ x: value.x, z: value.z })
+      : value.x >= INDOOR_BOUNDS.minX && value.x <= INDOOR_BOUNDS.maxX && value.z >= INDOOR_BOUNDS.minZ && value.z <= INDOOR_BOUNDS.maxZ)
     && Math.abs(value.yaw) <= Math.PI + 0.00001 && Math.abs(value.pitch) <= 1.35;
 }
 
@@ -569,10 +651,10 @@ function validReturnLocation(value: unknown, productId: ProductId, capacity: num
 }
 
 /** Shared physical ownership checks; S0 additionally requires its fixed eight-unit grant. */
-function validateWorldState(value: unknown, version: 3 | 4): value is SimState | LegacySimState {
+function validateWorldState(value: unknown, version: 3 | 4 | 5): value is SimState | SimStateV4 | LegacySimState {
   const legacy = version === 3;
   if (!isRecord(value) || value.schemaVersion !== version || !isInteger(value.revision) || value.revision < 0
-    || typeof value.upgraded !== "boolean" || !isInteger(value.cashPence) || value.cashPence < 0 || !validPose(value.playerPose)) return false;
+    || typeof value.upgraded !== "boolean" || !isInteger(value.cashPence) || value.cashPence < 0 || !validPose(value.playerPose, version)) return false;
   if (!Array.isArray(value.crates) || value.crates.length !== 2 || !Array.isArray(value.items) || (legacy && value.items.length !== 8)
     || !Array.isArray(value.transactions) || (legacy && value.transactions.length > 4) || !Array.isArray(value.scannedIds)
     || !Array.isArray(value.inspectedProducts) || value.inspectedProducts.some((id) => !isProductId(id))
@@ -583,7 +665,7 @@ function validateWorldState(value: unknown, version: 3 | 4): value is SimState |
     if (!isRecord(crate) || !isProductId(crate.productId) || typeof crate.id !== "string" || crate.id !== crateIdFor(crate.productId)
       || !isRecord(crate.position) || !isFiniteNumber(crate.position.x) || !isFiniteNumber(crate.position.z)) return false;
     const position = { x: crate.position.x, z: crate.position.z };
-    if (!SAFE_DROP_POINTS.some((point) => positionEquals(point, position)) || crateIds.has(crate.id)
+    if (!(version === 5 ? SAFE_DROP_POINTS : INDOOR_DROP_POINTS).some((point) => positionEquals(point, position)) || crateIds.has(crate.id)
       || cratePositions.some((previous) => positionEquals(previous, position))) return false;
     crateIds.add(crate.id);
     cratePositions.push(position);
@@ -606,6 +688,8 @@ function validateWorldState(value: unknown, version: 3 | 4): value is SimState |
         if (occupiedSlots.has(key)) return false;
         occupiedSlots.add(key);
       }
+    } else if (location.kind === "delivery") {
+      if (version !== 5 || !validOrderId(location.orderId)) return false;
     } else if (location.kind === "sold") {
       if (typeof location.transactionId !== "string") return false;
     } else if (typeof location.kind !== "string" || !["hand", "basket", "checkout"].includes(location.kind)) return false;
@@ -663,7 +747,7 @@ function validateWorldState(value: unknown, version: 3 | 4): value is SimState |
 }
 
 export function validateLegacySimState(value: unknown): value is LegacySimState {
-  return validateWorldState(value, 3);
+  return validateWorldState(value, 3) && value.schemaVersion === 3;
 }
 
 const SUMMARY_FIELDS = [
@@ -672,8 +756,8 @@ const SUMMARY_FIELDS = [
 ] as const;
 
 /** The ledger proves each item source, purchase quantity, paid sale, daily carry and cash balance. */
-export function validateSimState(value: unknown): value is SimState {
-  if (!validateWorldState(value, 4) || value.schemaVersion !== 4) return false;
+function validateEconomyState(value: unknown, version: 4 | 5): value is EconomySnapshot {
+  if (!validateWorldState(value, version) || value.schemaVersion === 3) return false;
   if (value.openingKind !== "first-day" && value.openingKind !== "legacy-s0") return false;
   if (!isRecord(value.day) || !isInteger(value.day.number) || value.day.number < 1
     || typeof value.day.phase !== "string" || !["preparing", "open", "settled"].includes(value.day.phase) || value.day.targetCustomers !== DAY_CUSTOMER_TARGET
@@ -691,7 +775,7 @@ export function validateSimState(value: unknown): value is SimState {
   if (value.openingKind === "legacy-s0") {
     for (const productId of PRODUCT_IDS) for (let number = 1; number <= 4; number += 1) {
       const id = `${productId}-${number}`;
-      if (itemById.get(id)?.productId !== productId) return false;
+      if (itemById.get(id)?.productId !== productId || itemById.get(id)?.location.kind === "delivery") return false;
       sourceIds.add(id);
       sourceDay.set(id, 1);
     }
@@ -703,13 +787,20 @@ export function validateSimState(value: unknown): value is SimState {
     if (!isRecord(purchase) || !validOrderId(purchase.id) || purchaseIds.has(purchase.id) || !validPairs(purchase.pairs)
       || !isInteger(purchase.dayNumber) || purchase.dayNumber < purchaseDay || purchase.dayNumber > value.day.number
       || purchase.amountPence !== purchase.pairs * PURCHASE_PAIR_COST_PENCE || !Array.isArray(purchase.itemIds)) return false;
+    const receivedDay = version === 5 ? purchase.receivedDay : purchase.dayNumber;
+    if (receivedDay !== null && (!isInteger(receivedDay) || receivedDay !== purchase.dayNumber)) return false;
+    if (receivedDay === null && (purchase.dayNumber !== value.day.number || value.day.phase === "settled")) return false;
     const expectedIds = purchaseItemIds(purchase.id, purchase.pairs);
     if (purchase.itemIds.length !== expectedIds.length || purchase.itemIds.some((id, index) => id !== expectedIds[index])) return false;
     for (const [index, id] of expectedIds.entries()) {
       const expectedProduct = index < purchase.pairs ? "milk" : "bread";
-      if (sourceIds.has(id) || itemById.get(id)?.productId !== expectedProduct) return false;
+      const item = itemById.get(id);
+      if (sourceIds.has(id) || item?.productId !== expectedProduct) return false;
+      if (receivedDay === null) {
+        if (item.location.kind !== "delivery" || item.location.orderId !== purchase.id) return false;
+      } else if (item.location.kind === "delivery") return false;
       sourceIds.add(id);
-      sourceDay.set(id, purchase.dayNumber);
+      sourceDay.set(id, receivedDay ?? Infinity);
     }
     purchaseIds.add(purchase.id);
     purchaseDay = purchase.dayNumber;
@@ -719,7 +810,7 @@ export function validateSimState(value: unknown): value is SimState {
   for (const productId of PRODUCT_IDS) {
     const held = value.held;
     const reserved = held.kind === "item" && held.returnTo.kind === "crate" && held.returnTo.crateId === crateIdFor(productId) ? 1 : 0;
-    if (countAt(value, productId, "crate") + reserved > CRATE_CAPACITY
+    if (countAt(value, productId, "crate") + countAt(value, productId, "delivery") + reserved > CRATE_CAPACITY
       || unsoldItems(value, productId).length > CRATE_CAPACITY + capacityFor(value)) return false;
   }
   const opening = firstDay(value.openingKind);
@@ -777,4 +868,12 @@ export function validateSimState(value: unknown): value is SimState {
   if (value.day.phase === "settled" && (value.customer.phase !== "complete" || current.paidCustomers < DAY_CUSTOMER_TARGET)) return false;
   if (current.paidCustomers >= DAY_CUSTOMER_TARGET && !["leaving", "complete"].includes(value.customer.phase)) return false;
   return true;
+}
+
+export function validateV4SimState(value: unknown): value is SimStateV4 {
+  return validateEconomyState(value, 4) && value.schemaVersion === 4;
+}
+
+export function validateSimState(value: unknown): value is SimState {
+  return validateEconomyState(value, 5) && value.schemaVersion === 5;
 }

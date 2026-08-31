@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { createInitialSimState, reduceSim, type SimState } from "../../src/sim3d/domain";
+import { createFirstDayState, createInitialSimState, getDeliverySummary, reduceSim, type SimState } from "../../src/sim3d/domain";
 import type { InteractionTarget } from "../../src/sim3d/world";
 
 // Pure UI decisions do not require a WebGL engine or a browser document.
@@ -83,5 +83,57 @@ describe("3D accessible interaction decisions", () => {
     expect(commandForInteraction(state, target({ kind: "drop-zone" })).command).toBeUndefined();
     expect(commandForInteraction(state, target({ kind: "drop-zone", position: { x: -1.1, z: 2.6 } })).command)
       .toEqual({ type: "DROP_HELD", position: { x: -1.1, z: 2.6 } });
+  });
+
+  it("receives paid delivery only through an in-reach target and never charges again", () => {
+    const state = reduceSim(createFirstDayState(), { type: "PURCHASE_STOCK", orderId: "ui-delivery", pairs: 3 }).state;
+    const truck = target({ kind: "delivery", id: "delivery-truck", inspectable: false });
+    expect(commandForInteraction(state, { ...truck, distance: 2.61 }).command).toBeUndefined();
+    expect(getDeliverySummary(state).pendingUnits).toBe(6);
+    const receive = commandForInteraction(state, truck).command!;
+    expect(receive).toEqual({ type: "RECEIVE_DELIVERY" });
+    const delivered = reduceSim(state, receive).state;
+    expect(delivered.cashPence).toBe(state.cashPence);
+    expect(getDeliverySummary(delivered).pendingUnits).toBe(0);
+    expect(commandForInteraction(delivered, truck)).toEqual({ management: "supply" });
+  });
+
+  it("explains why a delivery cannot unload when the player's hands are full", () => {
+    let state = reduceSim(createFirstDayState(), { type: "PURCHASE_STOCK", orderId: "first-batch", pairs: 1 }).state;
+    state = reduceSim(state, { type: "RECEIVE_DELIVERY" }).state;
+    state = reduceSim(state, { type: "PICK_CRATE", crateId: "milk-crate" }).state;
+    state = reduceSim(state, { type: "PURCHASE_STOCK", orderId: "second-batch", pairs: 1 }).state;
+    const decision = commandForInteraction(state, target({ kind: "delivery", inspectable: false }));
+    expect(decision.command).toBeUndefined();
+    expect(decision.management).toBeUndefined();
+    expect(decision.message).toContain("先放下");
+    expect(getDeliverySummary(state).pendingOrders).toBe(1);
+  });
+
+  it("routes nearby future shop signs to their requirements without creating an entry command", () => {
+    const sign = target({ kind: "venue", id: "restaurant-sign", venueId: "restaurant", inspectable: false });
+    expect(commandForInteraction(createFirstDayState(), sign)).toEqual({ management: "street", venueId: "restaurant" });
+    expect(commandForInteraction(createFirstDayState(), { ...sign, distance: 10 }).management).toBeUndefined();
+    expect(inspectableProduct(createFirstDayState(), sign)).toBeNull();
+  });
+
+  it("uses the opening sign to explain end-of-day deliveries instead of starting an extra customer", () => {
+    let state = createInitialSimState();
+    for (const productId of ["milk", "bread"] as const) {
+      state = reduceSim(state, { type: "PICK_CRATE", crateId: `${productId}-crate` }).state;
+      for (let slot = 0; slot < 4; slot += 1) state = reduceSim(state, { type: "STOCK", productId, slot }).state;
+      state = reduceSim(state, { type: "DROP_HELD", position: state.crates.find((crate) => crate.productId === productId)!.position }).state;
+    }
+    for (let guest = 0; guest < 3; guest += 1) {
+      state = reduceSim(state, { type: guest === 0 ? "OPEN_STORE" : "NEXT_CUSTOMER" }).state;
+      for (let stop = 0; stop < 3; stop += 1) state = reduceSim(state, { type: "CUSTOMER_ADVANCE" }).state;
+      for (const item of state.items.filter((entry) => entry.location.kind === "checkout")) state = reduceSim(state, { type: "SCAN", itemId: item.id }).state;
+      state = reduceSim(state, { type: "PAY", success: true }).state;
+      state = reduceSim(state, { type: "CUSTOMER_ADVANCE" }).state;
+    }
+    state = reduceSim(state, { type: "PURCHASE_STOCK", orderId: "end-of-day-delivery", pairs: 1 }).state;
+    expect(getDeliverySummary(state).pendingUnits).toBe(2);
+    expect(state.transactions).toHaveLength(3);
+    expect(commandForInteraction(state, target({ kind: "open-sign", inspectable: false }))).toEqual({ management: "day" });
   });
 });

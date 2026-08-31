@@ -1,10 +1,13 @@
-import { createFirstDayState, migrateLegacySimState, validateLegacySimState, validateSimState, type SimState } from "./domain";
+import { createFirstDayState, migrateLegacySimState, migrateV4SimState, validateLegacySimState, validateSimState, validateV4SimState, type SimState } from "./domain";
 
 /** Deliberately separate from the older 2D storage namespace; never migrate/delete it. */
-export const SIM_STORAGE_KEY = "english-high-street:sim3d:v4";
+export const SIM_STORAGE_KEY = "english-high-street:sim3d:v5";
 export const SIM_BACKUP_KEY = `${SIM_STORAGE_KEY}:backup`;
-export const SIM_WRITER_LOCK = `${SIM_STORAGE_KEY}:writer`;
 /** These old keys are read-only migration sources, never overwritten or removed. */
+export const SIM_V4_STORAGE_KEY = "english-high-street:sim3d:v4";
+export const SIM_V4_BACKUP_KEY = `${SIM_V4_STORAGE_KEY}:backup`;
+/** Share the old writer lock so a still-open v4 page cannot mutate the migration source. */
+export const SIM_WRITER_LOCK = `${SIM_V4_STORAGE_KEY}:writer`;
 export const SIM_LEGACY_STORAGE_KEY = "english-high-street:sim3d:v3";
 export const SIM_LEGACY_BACKUP_KEY = `${SIM_LEGACY_STORAGE_KEY}:backup`;
 
@@ -15,7 +18,7 @@ export interface StorageLike {
 
 export interface SimLoadResult {
   state: SimState;
-  source: "primary" | "backup" | "legacy" | "legacy-backup" | "new";
+  source: "primary" | "backup" | "v4" | "v4-backup" | "legacy" | "legacy-backup" | "new";
   warning?: string;
 }
 
@@ -62,14 +65,31 @@ function parseLegacySnapshot(raw: string | null): SimState | undefined {
   } catch { return undefined }
 }
 
+function parseV4Snapshot(raw: string | null): SimState | undefined {
+  if (raw === null) return undefined;
+  try {
+    const value: unknown = JSON.parse(raw);
+    return validateV4SimState(value) ? migrateV4SimState(value) : undefined;
+  } catch { return undefined }
+}
+
+const PREVIOUS_KEYS = [SIM_V4_STORAGE_KEY, SIM_V4_BACKUP_KEY, SIM_LEGACY_STORAGE_KEY, SIM_LEGACY_BACKUP_KEY] as const;
+type PreviousSnapshots = Record<(typeof PREVIOUS_KEYS)[number], string | null>;
+function readPreviousSnapshots(storage: StorageLike): PreviousSnapshots {
+  return {
+    [SIM_V4_STORAGE_KEY]: storage.getItem(SIM_V4_STORAGE_KEY), [SIM_V4_BACKUP_KEY]: storage.getItem(SIM_V4_BACKUP_KEY),
+    [SIM_LEGACY_STORAGE_KEY]: storage.getItem(SIM_LEGACY_STORAGE_KEY), [SIM_LEGACY_BACKUP_KEY]: storage.getItem(SIM_LEGACY_BACKUP_KEY),
+  };
+}
+
 /** Read-only recovery: retain corrupt snapshots for diagnosis until the next explicit save. */
 export function loadSimState(storage: StorageLike = browserStorage()): SimLoadResult {
   // Storage access errors are not hidden: the caller must tell the player saves are unavailable.
   const primaryRaw = storage.getItem(SIM_STORAGE_KEY);
-  return loadSnapshot(primaryRaw, storage.getItem(SIM_BACKUP_KEY), storage.getItem(SIM_LEGACY_STORAGE_KEY), storage.getItem(SIM_LEGACY_BACKUP_KEY));
+  return loadSnapshot(primaryRaw, storage.getItem(SIM_BACKUP_KEY), readPreviousSnapshots(storage));
 }
 
-function loadSnapshot(primaryRaw: string | null, backupRaw: string | null, legacyRaw: string | null, legacyBackupRaw: string | null): SimLoadResult {
+function loadSnapshot(primaryRaw: string | null, backupRaw: string | null, previous: PreviousSnapshots): SimLoadResult {
   const primary = parseSnapshot(primaryRaw);
   if (primary) return { state: primary, source: "primary" };
 
@@ -79,16 +99,22 @@ function loadSnapshot(primaryRaw: string | null, backupRaw: string | null, legac
     source: "backup",
     warning: "当前存档不可用，已恢复上一份有效快照；最近一次操作可能需要重做。",
   };
-  const legacy = parseLegacySnapshot(legacyRaw);
-  const legacyBackup = legacy ? undefined : parseLegacySnapshot(legacyBackupRaw);
+  const v4 = parseV4Snapshot(previous[SIM_V4_STORAGE_KEY]);
+  const v4Backup = v4 ? undefined : parseV4Snapshot(previous[SIM_V4_BACKUP_KEY]);
+  if (v4 || v4Backup) return {
+    state: (v4 ?? v4Backup)!, source: v4 ? "v4" : "v4-backup",
+    warning: `${primaryRaw !== null || backupRaw !== null ? "当前配送存档不可恢复，已回到保留的 v4 进度；最近的收货与营业进度可能丢失。" : v4Backup ? "旧 v4 主存档不可用，已从旧备份迁移；最近一次操作可能需要重做。" : "已迁移原有小店进度。"}已购货物保持原位，历史采购视为已收货，不会重复扣款或发货；旧档未修改。`,
+  };
+  const legacy = parseLegacySnapshot(previous[SIM_LEGACY_STORAGE_KEY]);
+  const legacyBackup = legacy ? undefined : parseLegacySnapshot(previous[SIM_LEGACY_BACKUP_KEY]);
   if (legacy || legacyBackup) return {
     state: (legacy ?? legacyBackup)!, source: legacy ? "legacy" : "legacy-backup",
-    warning: `${primaryRaw !== null || backupRaw !== null ? "当前首日存档不可恢复，已回到保留的旧 3D 进度；之后的采购与营业进度可能丢失。" : legacyBackup ? "旧 3D 主存档不可用，已从旧备份迁移；最近一次操作可能需要重做。" : "已迁移旧 3D 试玩进度。"}货物、现金和交易均保留，旧档未修改；不会额外发放首日本金。`,
+    warning: `${primaryRaw !== null || backupRaw !== null || previous[SIM_V4_STORAGE_KEY] !== null || previous[SIM_V4_BACKUP_KEY] !== null ? "当前首日存档不可恢复，已回到保留的旧 3D 进度；之后的采购与营业进度可能丢失。" : legacyBackup ? "旧 3D 主存档不可用，已从旧备份迁移；最近一次操作可能需要重做。" : "已迁移旧 3D 试玩进度。"}货物、现金和交易均保留，旧档未修改；不会额外发放首日本金。`,
   };
   return {
     state: createFirstDayState(),
     source: "new",
-    ...(primaryRaw !== null || backupRaw !== null || legacyRaw !== null || legacyBackupRaw !== null
+    ...(primaryRaw !== null || backupRaw !== null || PREVIOUS_KEYS.some((key) => previous[key] !== null)
       ? { warning: "没有找到可恢复的有效 3D 存档，已开启新的首日；旧存档未被删除。" }
       : {}),
   };
@@ -101,6 +127,7 @@ export function parseImportedSimState(raw: string): SimState {
   try { value = JSON.parse(raw) }
   catch { throw new Error("文件不是可读取的 JSON，当前进度未改变。") }
   if (validateSimState(value)) return value;
+  if (validateV4SimState(value)) return migrateV4SimState(value);
   if (validateLegacySimState(value)) return migrateLegacySimState(value);
   throw new Error("存档的版本、库存或金额校验未通过，当前进度未改变。旧版 2D 存档不能直接导入此小样。");
 }
@@ -113,7 +140,7 @@ export class SimSaveSession {
   private writable = false;
   private loaded = false;
   private expectedRaw: string | null = null;
-  private expectedLegacy: { primary: string | null; backup: string | null } | null = null;
+  private expectedMigrationSources: PreviousSnapshots | null = null;
   private releaseLock: (() => void) | null = null;
   private resolveAdmission: ((allowed: boolean) => void) | null = null;
   private requesting: Promise<boolean> | null = null;
@@ -172,10 +199,10 @@ export class SimSaveSession {
   /** Refresh only while intentionally acquiring/continuing, never silently merge live inventory. */
   load(): SimLoadResult {
     const raw = this.storage.getItem(SIM_STORAGE_KEY);
-    const legacy = { primary: this.storage.getItem(SIM_LEGACY_STORAGE_KEY), backup: this.storage.getItem(SIM_LEGACY_BACKUP_KEY) };
-    const result = loadSnapshot(raw, this.storage.getItem(SIM_BACKUP_KEY), legacy.primary, legacy.backup);
+    const previous = readPreviousSnapshots(this.storage);
+    const result = loadSnapshot(raw, this.storage.getItem(SIM_BACKUP_KEY), previous);
     this.expectedRaw = raw;
-    this.expectedLegacy = result.source === "legacy" || result.source === "legacy-backup" ? legacy : null;
+    this.expectedMigrationSources = ["v4", "v4-backup", "legacy", "legacy-backup"].includes(result.source) ? previous : null;
     this.loaded = true;
     return result;
   }
@@ -187,10 +214,9 @@ export class SimSaveSession {
       this.release();
       throw new SimSaveConflictError();
     }
-    if (this.expectedLegacy && (this.storage.getItem(SIM_LEGACY_STORAGE_KEY) !== this.expectedLegacy.primary
-      || this.storage.getItem(SIM_LEGACY_BACKUP_KEY) !== this.expectedLegacy.backup)) {
+    if (this.expectedMigrationSources && PREVIOUS_KEYS.some((key) => this.storage.getItem(key) !== this.expectedMigrationSources![key])) {
       this.release();
-      throw new SimSaveConflictError("旧版试玩页面刚刚修改了迁移源，已停止写入。请关闭旧页面后重新读取进度再迁移。");
+      throw new SimSaveConflictError("旧版页面刚刚修改了迁移源，已停止写入。请关闭旧页面后重新读取进度再迁移。");
     }
   }
 
@@ -198,7 +224,7 @@ export class SimSaveSession {
     this.assertCurrent();
     saveSimState(state, this.storage);
     this.expectedRaw = JSON.stringify(state);
-    this.expectedLegacy = null;
+    this.expectedMigrationSources = null;
   }
 
   /** A storage event from another page freezes this page before its next interaction. */
@@ -214,7 +240,7 @@ export class SimSaveSession {
     this.generation += 1;
     this.writable = false;
     this.loaded = false;
-    this.expectedLegacy = null;
+    this.expectedMigrationSources = null;
     this.resolveAdmission?.(false);
     this.resolveAdmission = null;
     this.requesting = null;

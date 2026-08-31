@@ -658,6 +658,10 @@ function entrance(scene: Scene, root: TransformNode): ShopTarget {
   mat.receiveShadows = true;
   const hanging = sign(scene, root, "open-sign", 0.50, 0.235, new Vector3(0.62, 1.73, -4.40), "CLOSED", "Ready when you are", true);
   hanging.rotation.y = Math.PI;
+  // Players can now stand outside. Print both faces so the street side is not mirrored.
+  const outwardSign = sign(scene, hanging, "open-sign-exterior", 0.50, 0.235, new Vector3(0, 0, 0.018), "CLOSED", "Ready when you are", true);
+  outwardSign.rotation.y = Math.PI;
+  if (hanging.material) hanging.material.backFaceCulling = true;
   for (const x of [0.45, 0.79]) line(scene, root, `sign-cord-${x}`, [new Vector3(x, 1.848, -4.40), new Vector3(0.62, 2.075, -4.40)], 0.003, "kraftEdge");
   const exterior = box(scene, root, "pavement", new Vector3(11, 0.10, 3.9), new Vector3(0, -0.051, -6.5), "plaster");
   exterior.receiveShadows = true;

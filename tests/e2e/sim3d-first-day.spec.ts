@@ -14,6 +14,7 @@ function command(state: SimState, action: SimCommand): SimState {
 
 function stockedFixture(): SimState {
   let state = command(createFirstDayState(), { type: "PURCHASE_STOCK", orderId: "e2e-first-delivery", pairs: 3 });
+  state = command(state, { type: "RECEIVE_DELIVERY" });
   for (const productId of ["milk", "bread"] as const) {
     state = command(state, { type: "PICK_CRATE", crateId: `${productId}-crate` });
     for (let slot = 0; slot < 3; slot += 1) state = command(state, { type: "STOCK", productId, slot });
@@ -106,6 +107,75 @@ test("3D first day: procurement quotes, insufficient funds and upgrades are reac
   await page.keyboard.press("u");
   await expect(page.locator("#s3-panel-upgrade")).toBeVisible();
   await expect(page.locator("#s3-cash")).toHaveText("£5.10");
+  expect(errors).toEqual([]);
+});
+
+test("3D daily delivery: paid goods survive reload, require the real van and are received once at the doorstep", async ({ page }) => {
+  test.setTimeout(100_000);
+  const errors = monitorRuntime(page);
+  await startFresh(page);
+  let pending = command(createFirstDayState(), { type: "PURCHASE_STOCK", orderId: "street-delivery", pairs: 3 });
+  pending = command(pending, { type: "SAVE_POSE", pose: { x: 3, z: -6.9, yaw: Math.PI, pitch: .06 } });
+  await importFixture(page, pending);
+  await expect(page.locator("#s3-cash")).toHaveText("£5.10");
+  await expect(page.locator("#s3-target-action")).toContainText("签收 6 件", { timeout: 15_000 });
+  await page.reload();
+  await expect(page.locator("#s3-start-button")).toBeEnabled({ timeout: 40_000 });
+  await page.locator("#s3-start-button").click();
+  await expect(page.locator("#s3-target-action")).toContainText("签收 6 件", { timeout: 15_000 });
+  await page.keyboard.press("e");
+  await expect(page.locator("#s3-target-action")).toContainText("查看今日进货单");
+  await expect(page.locator("#s3-cash")).toHaveText("£5.10");
+  await expect(page.locator("#s3-sold")).toContainText("库存 6 件");
+  await expect(page.locator("#s3-milk-stock")).toHaveText("牛奶 0 / 4");
+  await expect(page.locator("#s3-bread-stock")).toHaveText("面包 0 / 4");
+  // The same physical van opens the order form after receipt, never duplicating the previous delivery.
+  await page.keyboard.press("e");
+  await expect(page.locator("#s3-panel-supply")).toBeVisible();
+  await expect(page.locator("#s3-supply-summary")).toContainText("牛奶 3 件");
+  await expect(page.locator("#s3-supply-summary")).toContainText("面包 3 件");
+  await expect(page.locator("#s3-cash")).toHaveText("£5.10");
+  await page.locator("#s3-resume").click();
+  await page.reload();
+  await expect(page.locator("#s3-start-button")).toBeEnabled({ timeout: 40_000 });
+  await page.locator("#s3-start-button").click();
+  await expect(page.locator("#s3-target-action")).toContainText("查看今日进货单", { timeout: 15_000 });
+  await expect(page.locator("#s3-cash")).toHaveText("£5.10");
+  await expect(page.locator("#s3-sold")).toContainText("库存 6 件");
+  expect(errors).toEqual([]);
+});
+
+test("3D high street: venues show separate level and achievement gates, with honest preparation status after qualification", async ({ page }) => {
+  test.setTimeout(90_000);
+  const errors = monitorRuntime(page);
+  await startFresh(page);
+  await page.keyboard.press("m");
+  await expect(page.locator("#s3-panel-street")).toBeVisible();
+  await expect(page.locator("#s3-street-level")).toHaveText("Lv. 1");
+  for (const venue of ["cafe", "restaurant", "supermarket"]) {
+    await page.locator(`#s3-venue-${venue}`).click();
+    await expect(page.locator(`#s3-venue-detail-${venue}`)).toBeVisible();
+    await expect(page.locator(`#s3-venue-detail-status-${venue}`)).toHaveText("暂未开放");
+  }
+  await page.locator("#s3-resume").click();
+  await importFixture(page, completedDayFixture());
+  await expect(page.locator("#s3-panel-day")).toBeVisible({ timeout: 12_000 });
+  await page.locator("#s3-tab-street").click();
+  await expect(page.locator("#s3-street-level")).toHaveText("Lv. 2");
+  // Enough sales alone do not satisfy the separate first-settlement achievement.
+  await expect(page.locator("#s3-venue-status-cafe")).toHaveText("暂未开放");
+  await page.locator("#s3-tab-day").click();
+  await page.locator("#s3-settle-day").click();
+  await page.locator("#s3-tab-street").click();
+  await expect(page.locator("#s3-venue-status-cafe")).toHaveText("条件已达成·筹备中");
+  await expect(page.locator("#s3-venue-status-restaurant")).toHaveText("暂未开放");
+  await expect(page.locator("#s3-venue-status-supermarket")).toHaveText("暂未开放");
+  await page.reload();
+  await expect(page.locator("#s3-start-button")).toBeEnabled({ timeout: 40_000 });
+  await page.locator("#s3-start-button").click();
+  await page.keyboard.press("m");
+  await expect(page.locator("#s3-venue-status-cafe")).toHaveText("条件已达成·筹备中");
+  await expect(page.locator("#s3-street-record")).toContainText("完成日结 1 天");
   expect(errors).toEqual([]);
 });
 
