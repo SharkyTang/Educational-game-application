@@ -46,7 +46,8 @@ function paidSnapshot(): SimState {
 function oldSnapshot(state = paidSnapshot()): LegacySimState {
   return {
     schemaVersion: 3, revision: state.revision, items: structuredClone(state.items), crates: structuredClone(state.crates),
-    held: structuredClone(state.held), inspectedProducts: [...state.inspectedProducts], customer: { ...state.customer },
+    held: structuredClone(state.held), inspectedProducts: [...state.inspectedProducts],
+    customer: { phase: state.customer.phase, number: state.customer.number },
     scannedIds: [...state.scannedIds], transactions: structuredClone(state.transactions), cashPence: state.cashPence,
     upgraded: state.upgraded, playerPose: { ...state.playerPose },
   };
@@ -56,16 +57,17 @@ function v4Snapshot(): SimStateV4 {
   let state = reduceSim(createFirstDayState(), { type: "PURCHASE_STOCK", orderId: "v4-original", pairs: 3 }).state;
   state = reduceSim(state, { type: "RECEIVE_DELIVERY" }).state;
   return {
-    ...structuredClone(state), schemaVersion: 4,
+    ...v5Snapshot(state), schemaVersion: 4,
     crates: state.crates.map((crate, index) => ({ ...crate, position: { ...SAFE_DROP_POINTS[index]! } })),
     purchases: state.purchases.map(({ id, dayNumber, pairs, itemIds, amountPence }) => ({ id, dayNumber, pairs: pairs!, itemIds: [...itemIds], amountPence })),
   };
 }
 
 function v5Snapshot(state = reduceSim(createFirstDayState(), { type: "PURCHASE_STOCK", orderId: "v5-original", pairs: 3 }).state): SimStateV5 {
-  const previous = structuredClone(state);
+  const { recyclingBatches: _recyclingBatches, recyclingRecords: _recyclingRecords, settlements, ...previous } = structuredClone(state);
   return {
     ...previous, schemaVersion: 5, customer: { phase: previous.customer.phase, number: previous.customer.number },
+    settlements: settlements.map(({ recycledCrates: _recycledCrates, recyclingIncomePence: _recyclingIncomePence, ...record }) => record),
     purchases: previous.purchases.map(({ id, dayNumber, pairs, itemIds, amountPence, receivedDay }) => ({
       id, dayNumber, pairs: pairs!, itemIds, amountPence, receivedDay,
     })),
@@ -239,14 +241,14 @@ describe("safe crate placement around the player", () => {
   });
 });
 
-describe("v6 selected-stock persistence and read-only v3 migration", () => {
+describe("v7 snapshot persistence and read-only v3 migration", () => {
   it("starts the new namespace with £12 and empty crates without rewriting unrelated 2D data", () => {
     const storage = new MemoryStorage();
     storage.data.set("english-high-street:save:v2", "legacy-2d-content");
     const before = [...storage.data];
     expect(loadSimState(storage)).toEqual({ state: createFirstDayState(), source: "new" });
     expect([...storage.data]).toEqual(before);
-    expect(SIM_STORAGE_KEY).toBe("english-high-street:sim3d:v6");
+    expect(SIM_STORAGE_KEY).toBe("english-high-street:sim3d:v7");
   });
 
   it("migrates the valid v3 world once and leaves both original v3 keys byte-for-byte intact", () => {
@@ -260,7 +262,7 @@ describe("v6 selected-stock persistence and read-only v3 migration", () => {
     expect(migrated.source).toBe("legacy");
     expect(migrated.warning).toContain("不会额外发放");
     expect(migrated.state.cashPence).toBe(400);
-    expect(migrated.state.schemaVersion).toBe(6);
+    expect(migrated.state.schemaVersion).toBe(7);
     expect(migrated.state.transactions).toEqual(oldSnapshot().transactions);
     expect([...storage.data]).toEqual(before);
     saveSimState(migrated.state, storage);
@@ -285,7 +287,7 @@ describe("v6 selected-stock persistence and read-only v3 migration", () => {
     expect(storage.getItem(SIM_LEGACY_BACKUP_KEY)).toBe(backup);
   });
 
-  it("prefers a valid v5 backup over older v3 progress", () => {
+  it("prefers a valid current backup over older v3 progress", () => {
     const storage = new MemoryStorage();
     const state = reduceSim(createFirstDayState(), { type: "PURCHASE_STOCK", orderId: "real-purchase", pairs: 3 }).state;
     storage.data.set(SIM_STORAGE_KEY, "{bad");
@@ -331,12 +333,12 @@ describe("v6 selected-stock persistence and read-only v3 migration", () => {
     expect(validateSimState(imported)).toBe(true);
     expect(imported.cashPence).toBe(old.cashPence);
     expect(imported.items).toEqual(old.items);
-    expect(imported.customer).toEqual(old.customer);
+    expect(imported.customer).toEqual({ ...old.customer, shoppingList: ["milk", "bread"] });
     expect(imported.scannedIds).toEqual(old.scannedIds);
     expect(imported.day.openingCashPence).toBe(0);
   });
 
-  it("detects a live S0 writer changing the migration source before the first v5 save", async () => {
+  it("detects a live S0 writer changing the migration source before the first v7 save", async () => {
     const storage = new MemoryStorage();
     storage.data.set(SIM_LEGACY_STORAGE_KEY, JSON.stringify(oldSnapshot(createInitialSimState())));
     const session = new SimSaveSession(storage, null);
@@ -402,6 +404,8 @@ describe("audited v4 migration and coexistence with an older page", () => {
     const storage = new MemoryStorage();
     const old = v4Snapshot();
     old.customerSeed = 123456;
+    expect(old).not.toHaveProperty("recyclingBatches");
+    expect(old).not.toHaveProperty("recyclingRecords");
     expect(validateV4SimState(old)).toBe(true);
     const primary = JSON.stringify(old, null, 2);
     const backup = JSON.stringify({ ...old, revision: old.revision + 1 });
@@ -432,7 +436,7 @@ describe("audited v4 migration and coexistence with an older page", () => {
   it("uses the validated v4 backup before v3 and explicitly warns if newer progress is unavailable", () => {
     const storage = new MemoryStorage();
     const old = JSON.stringify(v4Snapshot());
-    storage.data.set(SIM_STORAGE_KEY, "{corrupt-v5");
+    storage.data.set(SIM_STORAGE_KEY, "{corrupt-v7");
     storage.data.set(SIM_V4_STORAGE_KEY, "{corrupt-v4");
     storage.data.set(SIM_V4_BACKUP_KEY, old);
     storage.data.set(SIM_LEGACY_STORAGE_KEY, JSON.stringify(oldSnapshot()));
@@ -472,7 +476,7 @@ describe("audited v4 migration and coexistence with an older page", () => {
     expect(storage.getItem(SIM_STORAGE_KEY)).toBeNull();
   });
 
-  it("preserves migration sources through quota failure and can safely retry the same v5 snapshot", async () => {
+  it("preserves migration sources through quota failure and can safely retry the same migrated snapshot", async () => {
     const storage = new MemoryStorage();
     const original = JSON.stringify(v4Snapshot());
     storage.data.set(SIM_V4_STORAGE_KEY, original);
@@ -491,11 +495,13 @@ describe("audited v4 migration and coexistence with an older page", () => {
   });
 });
 
-describe("strict v5 to v6 selected-stock migration", () => {
+describe("strict v5 selected-stock migration to the current schema", () => {
   it("keeps the existing £5.10 and six received milk/bread units exactly intact", () => {
     const purchased = reduceSim(createFirstDayState(), { type: "PURCHASE_STOCK", orderId: "opening-six", pairs: 3 }).state;
     const received = reduceSim(purchased, { type: "RECEIVE_DELIVERY" }).state;
     const old = v5Snapshot(received);
+    expect(old).not.toHaveProperty("recyclingBatches");
+    expect(old).not.toHaveProperty("recyclingRecords");
     expect(validateV5SimState(old)).toBe(true);
     const migrated = parseImportedSimState(JSON.stringify(old));
     expect(migrated.cashPence).toBe(510);
@@ -522,7 +528,7 @@ describe("strict v5 to v6 selected-stock migration", () => {
     const untouched = [...storage.data];
     const result = loadSimState(storage);
     expect(result.source).toBe("v5");
-    expect(result.state.schemaVersion).toBe(6);
+    expect(result.state.schemaVersion).toBe(7);
     expect(validateSimState(result.state)).toBe(true);
     expect(result.state.cashPence).toBe(old.cashPence);
     expect(result.state.items).toEqual(old.items);
@@ -572,7 +578,7 @@ describe("strict v5 to v6 selected-stock migration", () => {
 
   it("prefers the last valid v5 backup over v4 and warns about recovering older progress", () => {
     const storage = new MemoryStorage();
-    storage.data.set(SIM_STORAGE_KEY, "{corrupt-v6");
+    storage.data.set(SIM_STORAGE_KEY, "{corrupt-v7");
     storage.data.set(SIM_V5_STORAGE_KEY, "{corrupt-v5");
     storage.data.set(SIM_V5_BACKUP_KEY, JSON.stringify(v5Snapshot()));
     storage.data.set(SIM_V4_STORAGE_KEY, JSON.stringify(v4Snapshot()));
@@ -596,7 +602,7 @@ describe("strict v5 to v6 selected-stock migration", () => {
     expect(storage.getItem(SIM_STORAGE_KEY)).toBeNull();
   });
 
-  it("keeps a valid v5 migration source through a failed v6 write and preserves pending stock on retry", async () => {
+  it("keeps a valid v5 migration source through a failed current write and preserves pending stock on retry", async () => {
     const storage = new MemoryStorage();
     const original = JSON.stringify(v5Snapshot());
     storage.data.set(SIM_V5_STORAGE_KEY, original);

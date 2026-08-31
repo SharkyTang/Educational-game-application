@@ -11,6 +11,7 @@ import { createFirstDayState, DELIVERY_DROP_POINTS, getCustomerOrder, PRODUCTS, 
 
 interface RendererHarness {
   state: SimState;
+  camera: UniversalCamera;
   products: Map<string, TransformNode>;
   crates: Map<CrateId, TransformNode>;
   productVisuals: ProductVisuals;
@@ -20,6 +21,8 @@ interface RendererHarness {
   syncInventory(): void;
   setCustomerRoute(initial: boolean): void;
   inspect(id: ProductId | null): void;
+  isFree(x: number, z: number): boolean;
+  getNearestDrop(): { x: number; z: number } | null;
 }
 
 /** Test the real renderer methods using a NullEngine, without browser input or NPC downloads. */
@@ -216,6 +219,44 @@ describe("all-product game presentation", () => {
     expect(soapCrate.position.y).toBe(-0.39);
   });
 
+  it("keeps dropped empty delivery boxes pickable across reloads and frees their receiving bay on recycling", () => {
+    const initial = harness(createFirstDayState());
+    expect(initial.crates.size).toBe(0);
+    let state = command(createFirstDayState(), { type: "PURCHASE_STOCK", orderId: "empty-box-visual", lines: [{ productId: "soap", quantity: 1 }] });
+    state = command(state, { type: "RECEIVE_DELIVERY" });
+    const point = state.crates.find((entry) => entry.id === "soap-crate")!.position;
+    const view = harness(state);
+    expect(view.isFree(point.x, point.z)).toBe(false);
+    state = command(state, { type: "PICK_CRATE", crateId: "soap-crate" });
+    state = command(state, { type: "STOCK", productId: "soap", slot: 0 });
+    state = command(state, { type: "DROP_HELD", position: point });
+    view.state = state; view.syncInventory();
+    expect(view.isFree(point.x, point.z)).toBe(true);
+    const crate = view.crates.get("soap-crate")!;
+    expect(crate.isEnabled()).toBe(true);
+    const bounds = crate.getHierarchyBoundingVectors(true);
+    const origin = new Vector3(point.x, 1.45, point.z - 1.1);
+    const ray = new Ray(origin, bounds.min.add(bounds.max).scale(0.5).subtract(origin).normalize(), 2.6);
+    const pick = scene.pickWithRay(ray, (mesh) => mesh.isPickable && mesh.isEnabled());
+    expect(pick?.pickedMesh?.metadata.interaction).toMatchObject({ kind: "crate", crateId: "soap-crate" });
+    const reloaded = harness(JSON.parse(JSON.stringify(state)) as SimState);
+    expect(reloaded.crates.get("soap-crate")!.isEnabled()).toBe(true);
+    state = command(state, { type: "PICK_CRATE", crateId: "milk-crate" });
+    view.state = state; view.camera.position.set(point.x, 1.65, point.z - 1.1); view.syncInventory();
+    expect(view.getNearestDrop()).not.toEqual(point);
+    state = command(state, { type: "DROP_HELD", position: state.crates.find((entry) => entry.id === "milk-crate")!.position });
+    state = command(state, { type: "PICK_CRATE", crateId: "soap-crate" });
+    state = command(state, { type: "RECYCLE_CRATE" });
+    view.state = state; view.syncInventory();
+    expect(view.crates.has("soap-crate")).toBe(false);
+    expect(crate.isDisposed()).toBe(true);
+    expect(view.products.size).toBe(1);
+    expect([...view.products.values()][0]!.isEnabled()).toBe(true);
+    state = command(state, { type: "PICK_CRATE", crateId: "milk-crate" });
+    view.state = state; view.syncInventory();
+    expect(view.getNearestDrop()).toEqual(point);
+  });
+
   it("dynamically renders a soap-only purchase, hand/inspection, shelving, basket and single-item checkout", () => {
     const shop = createShop(scene, { catalogFixtures: true }); const fixtures = createCatalogFixtures(scene, PRODUCTS);
     let state = createFirstDayState(); const view = harness(state, [...shop.colliders, ...fixtures.colliders]);
@@ -238,7 +279,7 @@ describe("all-product game presentation", () => {
     state = command(state, { type: "STOCK", productId: "soap", slot: 0 });
     state = command(state, { type: "DROP_HELD", position: state.crates.find((crate) => crate.id === "soap-crate")!.position });
     view.state = state; view.syncInventory();
-    expect(view.crates.get("soap-crate")!.isEnabled()).toBe(false);
+    expect(view.crates.get("soap-crate")!.isEnabled()).toBe(true);
     expect(visual.position.asArray()).toEqual(Object.values(PRODUCT_DISPLAYS.soap.slots[0]!));
     state = command(state, { type: "OPEN_STORE" }); view.state = state; view.syncInventory(); view.setCustomerRoute(true);
     expect(getCustomerOrder(state)).toEqual(["soap"]); expect(view.customerRouteBlocked).toBe(false);

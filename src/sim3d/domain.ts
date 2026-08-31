@@ -42,6 +42,7 @@ export function isWalkablePosition(position: Position, radius = 0): boolean {
 export const UPGRADE_COST_PENCE = 800;
 export const INITIAL_CAPITAL_PENCE = 1200;
 export const CRATE_CAPACITY = 8;
+export const RECYCLING_REWARD_PENCE = 5;
 export const DAY_CUSTOMER_TARGET = 3;
 export const PURCHASE_PAIR_COST_PENCE = PRODUCTS.milk.costPence + PRODUCTS.bread.costPence;
 export const PURCHASE_PAIR_OPTIONS = [1, 3, 6] as const;
@@ -117,7 +118,7 @@ export interface SimDay {
   openingInventoryValuePence: number;
   openingStockUnits: number;
 }
-export interface SimDaySummary {
+export interface SimDaySummaryV6 {
   dayNumber: number;
   paidCustomers: number;
   targetCustomers: 3;
@@ -131,13 +132,34 @@ export interface SimDaySummary {
   remainingStockUnits: number;
   remainingInventoryValuePence: number;
 }
-export interface SimSettlement extends SimDaySummary {
+export interface SimDaySummary extends SimDaySummaryV6 {
+  recycledCrates: number;
+  recyclingIncomePence: number;
+}
+export interface SimSettlementV6 extends SimDaySummaryV6 {
   transactionStart: number;
   transactionEnd: number;
   purchaseStart: number;
   purchaseEnd: number;
   openingInventoryValuePence: number;
   openingStockUnits: number;
+}
+export interface SimSettlement extends SimSettlementV6, SimDaySummary {}
+export interface SimRecyclingBatch {
+  id: string;
+  productId: ProductId;
+  /** Receipt assigns sources to a physical box before any recycling reward is claimed. */
+  purchaseIds: string[];
+}
+export interface SimRecyclingRecord {
+  id: string;
+  productId: ProductId;
+  dayNumber: number;
+  /** Null identifies free opening/return containers, which never earn income. */
+  batchId: string | null;
+  /** All previously unclaimed paid sources merged into this one physical crate. */
+  purchaseIds: string[];
+  amountPence: number;
 }
 interface SimEconomyState extends SimWorldState {
   /** Presentation-only random seed; absent in older v4 saves, which remain valid. */
@@ -146,16 +168,24 @@ interface SimEconomyState extends SimWorldState {
   openingKind: "first-day" | "legacy-s0";
   day: SimDay;
   upgradeDay: number | null;
-  settlements: SimSettlement[];
+  settlements: SimSettlementV6[];
 }
 export interface SimStateV4 extends SimEconomyState { schemaVersion: 4; purchases: SimPurchaseV4[] }
 export interface SimStateV5 extends SimEconomyState { schemaVersion: 5; purchases: SimPurchaseV5[] }
-export interface SimState extends SimEconomyState {
+export interface SimStateV6 extends SimEconomyState {
   schemaVersion: 6;
   purchases: SimPurchase[];
   customer: { phase: CustomerPhase; number: number; shoppingList: ProductId[] };
 }
-type EconomySnapshot = SimState | SimStateV4 | SimStateV5;
+export interface SimState extends Omit<SimStateV6, "schemaVersion" | "settlements"> {
+  schemaVersion: 7;
+  recyclingBatches: SimRecyclingBatch[];
+  recyclingRecords: SimRecyclingRecord[];
+  settlements: SimSettlement[];
+}
+type EconomySnapshot = SimState | SimStateV4 | SimStateV5 | SimStateV6;
+export interface RecyclingOffer { allowed: boolean; rewardPence: number; reason?: string }
+export interface RecyclingSummary { recycledToday: number; incomeTodayPence: number }
 export interface DeliverySummary {
   pendingOrders: number;
   pendingUnits: number;
@@ -176,6 +206,7 @@ export interface PurchaseOffer {
 export type SimCommand =
   | { type: "PICK_CRATE"; crateId: CrateId }
   | { type: "DROP_HELD"; position: Position }
+  | { type: "RECYCLE_CRATE" }
   | { type: "TAKE_ITEM"; itemId: string }
   | { type: "RETURN_ITEM" }
   | { type: "STOCK"; productId: ProductId; slot: number }
@@ -245,9 +276,9 @@ export function createInitialSimState(): SimState {
 export function createFirstDayState(): SimState {
   const world = createLegacyInitialState();
   return {
-    ...world, schemaVersion: 6, items: [], cashPence: INITIAL_CAPITAL_PENCE,
+    ...world, schemaVersion: 7, items: [], cashPence: INITIAL_CAPITAL_PENCE,
     customer: { ...world.customer, shoppingList: [] },
-    openingKind: "first-day", day: firstDay("first-day"), purchases: [], upgradeDay: null, settlements: [],
+    openingKind: "first-day", day: firstDay("first-day"), purchases: [], upgradeDay: null, settlements: [], recyclingBatches: [], recyclingRecords: [],
   };
 }
 
@@ -258,9 +289,9 @@ export function migrateLegacySimState(value: unknown): SimState {
   const day = firstDay("legacy-s0");
   day.phase = legacy.customer.phase === "outside" ? "preparing" : "open";
   const migrated: SimState = {
-    ...legacy, schemaVersion: 6, openingKind: "legacy-s0", day,
+    ...legacy, schemaVersion: 7, openingKind: "legacy-s0", day,
     customer: { ...legacy.customer, shoppingList: legacy.customer.phase === "outside" ? [] : [...LEGACY_PRODUCT_IDS] },
-    purchases: [], upgradeDay: legacy.upgraded ? 1 : null, settlements: [],
+    purchases: [], upgradeDay: legacy.upgraded ? 1 : null, settlements: [], recyclingBatches: [], recyclingRecords: [],
   };
   if (!validateSimState(migrated)) throw new Error("旧版 3D 存档迁移校验失败，原始存档未改变。");
   return migrated;
@@ -271,10 +302,12 @@ export function migrateV4SimState(value: unknown): SimState {
   if (!validateV4SimState(value)) throw new Error("旧版 v4 存档校验失败，不能迁移这份库存或金额。");
   const previous = structuredClone(value);
   const migrated: SimState = {
-    ...previous, schemaVersion: 6,
+    ...previous, schemaVersion: 7, recyclingBatches: [], recyclingRecords: [],
+    settlements: previous.settlements.map((record) => ({ ...record, recycledCrates: 0, recyclingIncomePence: 0 })),
     customer: { ...previous.customer, shoppingList: previous.customer.phase === "outside" ? [] : [...LEGACY_PRODUCT_IDS] },
     purchases: previous.purchases.map((purchase) => ({ ...purchase, lines: pairLines(purchase.pairs), receivedDay: purchase.dayNumber })),
   };
+  recordReceivedCrateBatches(migrated, migrated.purchases);
   if (!validateSimState(migrated)) throw new Error("旧版 v4 存档迁移校验失败，原始存档未改变。");
   return migrated;
 }
@@ -284,11 +317,26 @@ export function migrateV5SimState(value: unknown): SimState {
   if (!validateV5SimState(value)) throw new Error("旧版 v5 存档校验失败，不能迁移这份库存或金额。");
   const previous = structuredClone(value);
   const migrated: SimState = {
-    ...previous, schemaVersion: 6,
+    ...previous, schemaVersion: 7, recyclingBatches: [], recyclingRecords: [],
+    settlements: previous.settlements.map((record) => ({ ...record, recycledCrates: 0, recyclingIncomePence: 0 })),
     customer: { ...previous.customer, shoppingList: previous.customer.phase === "outside" ? [] : [...LEGACY_PRODUCT_IDS] },
     purchases: previous.purchases.map((purchase) => ({ ...purchase, lines: pairLines(purchase.pairs) })),
   };
+  recordReceivedCrateBatches(migrated, migrated.purchases.filter((purchase) => purchase.receivedDay !== null));
   if (!validateSimState(migrated)) throw new Error("旧版 v5 存档迁移校验失败，原始存档未改变。");
+  return migrated;
+}
+
+/** Validate the original reusable-crate ledger before allowing empty crates to be removed. */
+export function migrateV6SimState(value: unknown): SimState {
+  if (!validateV6SimState(value)) throw new Error("旧版 v6 存档校验失败，不能迁移这份库存或金额。");
+  const previous = structuredClone(value);
+  const migrated: SimState = {
+    ...previous, schemaVersion: 7, recyclingBatches: [], recyclingRecords: [],
+    settlements: previous.settlements.map((record) => ({ ...record, recycledCrates: 0, recyclingIncomePence: 0 })),
+  };
+  recordReceivedCrateBatches(migrated, migrated.purchases.filter((purchase) => purchase.receivedDay !== null));
+  if (!validateSimState(migrated)) throw new Error("旧版 v6 存档迁移校验失败，原始存档未改变。");
   return migrated;
 }
 
@@ -412,6 +460,39 @@ export function getDeliverySummary(state: SimState): DeliverySummary {
   return { ...summary, canReceive: true };
 }
 
+function activeRecyclingBatch(state: SimState, productId: ProductId): SimRecyclingBatch | undefined {
+  const recycled = new Set(state.recyclingRecords.map((record) => record.batchId));
+  return state.recyclingBatches.find((batch) => batch.productId === productId && !recycled.has(batch.id));
+}
+
+/** Multiple receipts into a still-existing box keep the same independently audited batch. */
+function recordReceivedCrateBatches(state: SimState, purchases: readonly SimPurchase[]): void {
+  for (const productId of PRODUCT_IDS) {
+    const purchaseIds = purchases.filter((purchase) => purchase.lines.some((line) => line.productId === productId)).map((purchase) => purchase.id);
+    if (!purchaseIds.length) continue;
+    const batch = activeRecyclingBatch(state, productId);
+    if (batch) batch.purchaseIds.push(...purchaseIds);
+    else state.recyclingBatches.push({ id: `crate-batch-${state.recyclingBatches.length + 1}`, productId, purchaseIds });
+  }
+}
+
+/** Paid deliveries earn one small reward per emptied physical box, even when orders were merged. */
+export function getRecyclingOffer(state: SimState): RecyclingOffer {
+  const held = state.held;
+  if (held.kind !== "crate") return { allowed: false, rewardPence: 0, reason: "先抱起需要回收的空货箱。" };
+  const crate = state.crates.find((candidate) => candidate.id === held.crateId);
+  if (!crate) return { allowed: false, rewardPence: 0, reason: "找不到手里的货箱。" };
+  if (state.items.some((item) => item.location.kind === "crate" && item.location.crateId === crate.id)) {
+    return { allowed: false, rewardPence: 0, reason: "箱内还有商品，请先全部上架；回收不会丢弃商品。" };
+  }
+  return { allowed: true, rewardPence: activeRecyclingBatch(state, crate.productId) ? RECYCLING_REWARD_PENCE : 0 };
+}
+
+export function getRecyclingSummary(state: SimState): RecyclingSummary {
+  const today = state.recyclingRecords.filter((record) => record.dayNumber === state.day.number);
+  return { recycledToday: today.length, incomeTodayPence: today.reduce((sum, record) => sum + record.amountPence, 0) };
+}
+
 export function getCustomerOrder(state: SimState): readonly ProductId[] { return state.customer.shoppingList }
 
 export function getShoppingProduct(state: SimState): ProductId | null {
@@ -444,11 +525,14 @@ function summaryForRange(
   const revenuePence = transactions.reduce((total, transaction) => total + transaction.amountPence, 0);
   const procurementPence = purchases.reduce((total, purchase) => total + purchase.amountPence, 0);
   const upgradeSpendPence = state.upgradeDay === day.number ? UPGRADE_COST_PENCE : 0;
+  const recycling = state.schemaVersion === 7 ? state.recyclingRecords.filter((record) => record.dayNumber === day.number) : [];
+  const recyclingIncomePence = recycling.reduce((sum, record) => sum + record.amountPence, 0);
   return {
     dayNumber: day.number, paidCustomers: transactions.length, targetCustomers: DAY_CUSTOMER_TARGET,
     openingCashPence: day.openingCashPence, revenuePence, procurementPence, costOfGoodsPence,
     grossProfitPence: revenuePence - costOfGoodsPence, upgradeSpendPence,
-    closingCashPence: day.openingCashPence + revenuePence - procurementPence - upgradeSpendPence,
+    recycledCrates: recycling.length, recyclingIncomePence,
+    closingCashPence: day.openingCashPence + revenuePence + recyclingIncomePence - procurementPence - upgradeSpendPence,
     remainingStockUnits: day.openingStockUnits + purchases.reduce((sum, purchase) => sum + purchase.itemIds.length, 0)
       - transactions.reduce((sum, sale) => sum + sale.itemIds.length, 0),
     remainingInventoryValuePence: day.openingInventoryValuePence + procurementPence - costOfGoodsPence,
@@ -475,6 +559,10 @@ function settlementFor(state: SimState): SimSettlement {
 }
 
 export function getObjective(state: SimState): string {
+  const recycling = getRecyclingOffer(state);
+  if (recycling.allowed) return recycling.rewardPence
+    ? "货箱已经空了，抱到店外的空箱回收点按 E，腾出双手并获得 £0.05。"
+    : "货箱已经空了，抱到店外的空箱回收点按 E 清走；这个箱子没有新的回收奖励。";
   if (state.day.phase === "settled") return `第 ${state.day.number} 天已日结。可以查看收支、用资金扩充货架，或开始次日继续营业。`;
   if (canSettleDay(state)) return `今天已完成 ${DAY_CUSTOMER_TARGET} 单收款！打开经营面板，日结后查看毛利与库存，再决定扩容。`;
   const delivery = getDeliverySummary(state);
@@ -487,10 +575,6 @@ export function getObjective(state: SimState): string {
     const crate = held.kind === "crate" ? state.crates.find((entry) => entry.id === held.crateId) : undefined;
     const item = held.kind === "item" ? state.items.find((entry) => entry.id === held.itemId) : undefined;
     const heldProduct = crate?.productId ?? item?.productId;
-    if (crate && !state.items.some((entry) => entry.location.kind === "crate" && entry.location.crateId === crate.id)) {
-      if (!unsoldItems(state, crate.productId).length) return "货箱是空的，打开经营面板，从进货清单选择想订购的商品和数量。";
-      return "货箱已经空了，走近安全卸货点按 G 放下，再搬下一箱货。";
-    }
     if (heldProduct) {
       const product = PRODUCTS[heldProduct];
       if (!state.inspectedProducts.includes(heldProduct)) return `先按 F 近看手里的${product.nameZh}，把 ${product.nameEn} 和实物对应起来。`;
@@ -526,11 +610,19 @@ function freeSlot(state: SimState, productId: ProductId): number | undefined {
   return undefined;
 }
 
-function returnUnpaidItem(state: SimState, item: SimItem): void {
+function returnUnpaidItem(state: SimState, item: SimItem): boolean {
   const slot = freeSlot(state, item.productId);
+  if (slot === undefined && !state.crates.some((crate) => crate.productId === item.productId)) {
+    const position = SAFE_DROP_POINTS.find((point) => !state.crates.some((crate) => positionEquals(crate.position, point))
+      && !playerOccupiesDrop(state, item.productId, point));
+    if (!position) return false;
+    // A return container has no new paid source; recycling it cannot mint another reward.
+    state.crates.push({ id: crateIdFor(item.productId), productId: item.productId, position: { ...position } });
+  }
   item.location = slot === undefined
     ? { kind: "crate", crateId: crateIdFor(item.productId) }
     : { kind: "shelf", productId: item.productId, slot };
+  return true;
 }
 
 /** Pure, deterministic commands; rejected input keeps the original state object. */
@@ -562,6 +654,24 @@ export function reduceSim(state: SimState, command: SimCommand): SimResult {
       next.held = { kind: "none" };
       return finish("货箱已放稳。");
     }
+    case "RECYCLE_CRATE": {
+      const offer = getRecyclingOffer(next);
+      if (!offer.allowed) return reject(offer.reason ?? "现在没有可回收的空箱。");
+      const held = next.held;
+      const crate = next.crates.find((candidate) => held.kind === "crate" && candidate.id === held.crateId)!;
+      const batch = activeRecyclingBatch(next, crate.productId);
+      next.recyclingRecords.push({
+        id: `recycle-${next.recyclingRecords.length + 1}`, productId: crate.productId, dayNumber: next.day.number,
+        batchId: batch?.id ?? null, purchaseIds: batch ? [...batch.purchaseIds] : [], amountPence: offer.rewardPence,
+      });
+      next.crates = next.crates.filter((candidate) => candidate.id !== crate.id);
+      next.held = { kind: "none" };
+      next.cashPence += offer.rewardPence;
+      // As with a closing-time upgrade, later cleanup still belongs to the settled business day.
+      if (next.day.phase === "settled") next.settlements[next.settlements.length - 1] = settlementFor(next);
+      return finish(offer.rewardPence ? `空箱已回收 +£${(offer.rewardPence / 100).toFixed(2)}，卸货位置已腾出。`
+        : "空箱已回收，卸货位置已腾出；没有新的进货来源，不重复发放奖励。");
+    }
     case "TAKE_ITEM": {
       if (next.held.kind !== "none") return reject("请先放下手里的物品。");
       const item = next.items.find((candidate) => candidate.id === command.itemId);
@@ -578,7 +688,7 @@ export function reduceSim(state: SimState, command: SimCommand): SimResult {
       const origin = held.returnTo;
       if (origin.kind === "crate") item.location = { ...origin };
       else if (!next.items.some((other) => other.location.kind === "shelf" && other.location.productId === origin.productId && other.location.slot === origin.slot)) item.location = { ...origin };
-      else returnUnpaidItem(next, item);
+      else if (!returnUnpaidItem(next, item)) return reject("暂时没有安全空位归还商品，请先搬开或回收空箱。");
       next.held = { kind: "none" };
       return finish("商品已放回。");
     }
@@ -663,7 +773,11 @@ export function reduceSim(state: SimState, command: SimCommand): SimResult {
     }
     case "CANCEL_CUSTOMER": {
       if (["outside", "leaving", "complete"].includes(next.customer.phase)) return reject("当前没有可以取消的购物流程。");
-      for (const item of next.items) if (item.location.kind === "basket" || item.location.kind === "checkout") returnUnpaidItem(next, item);
+      for (const item of next.items) {
+        if ((item.location.kind === "basket" || item.location.kind === "checkout") && !returnUnpaidItem(next, item)) {
+          return reject("暂时没有安全空位归还商品，请先搬开或回收空箱；本单和商品保持不变。");
+        }
+      }
       next.scannedIds = [];
       next.customer.phase = "leaving";
       return finish("本单已取消，未付款的商品已归还，资金未改变。");
@@ -700,6 +814,7 @@ export function reduceSim(state: SimState, command: SimCommand): SimResult {
       if (!delivery.canReceive) return reject(delivery.reason ?? "当前无法签收送货。");
       const placements = deliveryPlacements(next);
       if (!placements) return reject("卸货区暂时没有足够的安全空位。");
+      recordReceivedCrateBatches(next, next.purchases.filter((purchase) => purchase.receivedDay === null));
       for (const purchase of next.purchases) if (purchase.receivedDay === null) purchase.receivedDay = next.day.number;
       for (const item of next.items) if (item.location.kind === "delivery") item.location = { kind: "crate", crateId: crateIdFor(item.productId) };
       for (const { productId, position } of placements) {
@@ -752,7 +867,7 @@ export function canUnlockAdvancedUpgrade(input: {
     && input.requiredTaskIds.every((id) => id.length > 0 && input.completedIndependentTaskIds.includes(id));
 }
 
-function validPose(value: unknown, version: 3 | 4 | 5 | 6): value is PlayerPose {
+function validPose(value: unknown, version: 3 | 4 | 5 | 6 | 7): value is PlayerPose {
   return isRecord(value) && isFiniteNumber(value.x) && isFiniteNumber(value.z) && isFiniteNumber(value.yaw) && isFiniteNumber(value.pitch)
     && (version >= 5 ? isWalkablePosition({ x: value.x, z: value.z })
       : value.x >= INDOOR_BOUNDS.minX && value.x <= INDOOR_BOUNDS.maxX && value.z >= INDOOR_BOUNDS.minZ && value.z <= INDOOR_BOUNDS.maxZ)
@@ -766,12 +881,12 @@ function validReturnLocation(value: unknown, productId: ProductId, capacity: num
 }
 
 /** Shared physical ownership checks; S0 additionally requires its fixed eight-unit grant. */
-function validateWorldState(value: unknown, version: 3 | 4 | 5 | 6): value is SimState | SimStateV4 | SimStateV5 | LegacySimState {
+function validateWorldState(value: unknown, version: 3 | 4 | 5 | 6 | 7): value is EconomySnapshot | LegacySimState {
   const legacy = version === 3;
-  const knownProduct = (input: unknown): input is ProductId => version === 6 ? isProductId(input) : isLegacyProductId(input);
+  const knownProduct = (input: unknown): input is ProductId => version >= 6 ? isProductId(input) : isLegacyProductId(input);
   if (!isRecord(value) || value.schemaVersion !== version || !isInteger(value.revision) || value.revision < 0
     || typeof value.upgraded !== "boolean" || !isInteger(value.cashPence) || value.cashPence < 0 || !validPose(value.playerPose, version)) return false;
-  if (!Array.isArray(value.crates) || (version === 6 ? value.crates.length < 2 || value.crates.length > PRODUCT_IDS.length : value.crates.length !== 2)
+  if (!Array.isArray(value.crates) || (version >= 6 ? value.crates.length < (version === 7 ? 0 : 2) || value.crates.length > PRODUCT_IDS.length : value.crates.length !== 2)
     || !Array.isArray(value.items) || (legacy && value.items.length !== 8)
     || !Array.isArray(value.transactions) || (legacy && value.transactions.length > 4) || !Array.isArray(value.scannedIds)
     || !Array.isArray(value.inspectedProducts) || value.inspectedProducts.some((id) => !knownProduct(id))
@@ -782,7 +897,7 @@ function validateWorldState(value: unknown, version: 3 | 4 | 5 | 6): value is Si
     if (!isRecord(crate) || !knownProduct(crate.productId) || typeof crate.id !== "string" || crate.id !== crateIdFor(crate.productId)
       || !isRecord(crate.position) || !isFiniteNumber(crate.position.x) || !isFiniteNumber(crate.position.z)) return false;
     const position = { x: crate.position.x, z: crate.position.z };
-    const allowedPoints = version === 6 ? SAFE_DROP_POINTS : version === 5 ? [...INDOOR_DROP_POINTS, ...LEGACY_DELIVERY_DROP_POINTS] : INDOOR_DROP_POINTS;
+    const allowedPoints = version >= 6 ? SAFE_DROP_POINTS : version === 5 ? [...INDOOR_DROP_POINTS, ...LEGACY_DELIVERY_DROP_POINTS] : INDOOR_DROP_POINTS;
     if (!allowedPoints.some((point) => positionEquals(point, position)) || crateIds.has(crate.id)
       || cratePositions.some((previous) => positionEquals(previous, position))) return false;
     crateIds.add(crate.id);
@@ -828,7 +943,7 @@ function validateWorldState(value: unknown, version: 3 | 4 | 5 | 6): value is Si
     if (value.held.returnTo.kind === "crate" && !crateIds.has(crateIdFor(item.productId))) return false;
   } else return false;
   let shoppingList: ProductId[] = [...LEGACY_PRODUCT_IDS];
-  if (version === 6) {
+  if (version >= 6) {
     const list = value.customer.shoppingList;
     if (!Array.isArray(list) || list.some((id) => !knownProduct(id)) || new Set(list).size !== list.length
       || (value.customer.phase === "outside" ? list.length !== 0 : list.length < 1 || list.length > 2)
@@ -857,7 +972,7 @@ function validateWorldState(value: unknown, version: 3 | 4 | 5 | 6): value is Si
       || transaction.customerNumber > value.customer.number || transaction.id !== `sale-${transaction.customerNumber}`
       || transactionIds.has(transaction.id) || !isInteger(transaction.amountPence)
       || !Array.isArray(transaction.itemIds)
-      || (version === 6 ? transaction.itemIds.length < 1 || transaction.itemIds.length > 2 : transaction.itemIds.length !== 2)
+      || (version >= 6 ? transaction.itemIds.length < 1 || transaction.itemIds.length > 2 : transaction.itemIds.length !== 2)
       || new Set(transaction.itemIds).size !== transaction.itemIds.length) return false;
     if (transaction.customerNumber === value.customer.number && value.customer.phase !== "leaving" && value.customer.phase !== "complete") return false;
     const goods: SimItem[] = [];
@@ -867,10 +982,10 @@ function validateWorldState(value: unknown, version: 3 | 4 | 5 | 6): value is Si
       soldIds.add(item.id);
       goods.push(item);
     }
-    if ((version === 6 ? new Set(goods.map((item) => item.productId)).size !== goods.length
+    if ((version >= 6 ? new Set(goods.map((item) => item.productId)).size !== goods.length
       : !LEGACY_PRODUCT_IDS.every((productId) => goods.some((item) => item.productId === productId)))
       || transaction.amountPence !== goods.reduce((sum, item) => sum + PRODUCTS[item.productId].pricePence, 0)) return false;
-    if (version === 6 && transaction.customerNumber === value.customer.number && !matchesOrder(goods)) return false;
+    if (version >= 6 && transaction.customerNumber === value.customer.number && !matchesOrder(goods)) return false;
     transactionIds.add(transaction.id);
     grossPence += transaction.amountPence;
     previousCustomerNumber = transaction.customerNumber;
@@ -888,9 +1003,10 @@ const SUMMARY_FIELDS = [
   "dayNumber", "paidCustomers", "targetCustomers", "openingCashPence", "revenuePence", "procurementPence",
   "costOfGoodsPence", "grossProfitPence", "upgradeSpendPence", "closingCashPence", "remainingStockUnits", "remainingInventoryValuePence",
 ] as const;
+const RECYCLING_SUMMARY_FIELDS = ["recycledCrates", "recyclingIncomePence"] as const;
 
 /** The ledger proves each item source, purchase quantity, paid sale, daily carry and cash balance. */
-function validateEconomyState(value: unknown, version: 4 | 5 | 6): value is EconomySnapshot {
+function validateEconomyState(value: unknown, version: 4 | 5 | 6 | 7): value is EconomySnapshot {
   if (!validateWorldState(value, version) || value.schemaVersion === 3) return false;
   if (value.customerSeed !== undefined && (!isInteger(value.customerSeed) || value.customerSeed < 0 || value.customerSeed > 0xffffffff)) return false;
   if (value.openingKind !== "first-day" && value.openingKind !== "legacy-s0") return false;
@@ -924,7 +1040,7 @@ function validateEconomyState(value: unknown, version: 4 | 5 | 6): value is Econ
       || !isInteger(purchase.dayNumber) || purchase.dayNumber < purchaseDay || purchase.dayNumber > value.day.number
       || !Array.isArray(purchase.itemIds)) return false;
     let lines: PurchaseLine[];
-    if (version === 6) {
+    if (version >= 6) {
       const normalized = normalizeSelection(purchase.lines);
       if (normalized.reason || !Array.isArray(purchase.lines) || !sameLines(purchase.lines, normalized.lines)) return false;
       lines = normalized.lines;
@@ -957,6 +1073,72 @@ function validateEconomyState(value: unknown, version: 4 | 5 | 6): value is Econ
   }
   if (sourceIds.size !== value.items.length || value.items.some((item) => !sourceIds.has(item.id))) return false;
   if (version === 6 && (value.crates.length !== expectedCrateIds.size || value.crates.some((crate) => !expectedCrateIds.has(crate.id)))) return false;
+  let recyclingIncomePence = 0;
+  if (value.schemaVersion === 7) {
+    if (!Array.isArray(value.recyclingRecords) || !Array.isArray(value.recyclingBatches)) return false;
+    const sourceBatches = new Map<string, string>();
+    const batchById = new Map<string, SimRecyclingBatch>();
+    const recycledProducts = new Set<ProductId>();
+    const recycledBatches = new Set<string>();
+    const purchaseById = new Map(value.purchases.map((purchase) => [purchase.id, purchase]));
+    for (const [index, batch] of value.recyclingBatches.entries()) {
+      if (!isRecord(batch) || batch.id !== `crate-batch-${index + 1}` || !isProductId(batch.productId)
+        || !Array.isArray(batch.purchaseIds) || !batch.purchaseIds.length || new Set(batch.purchaseIds).size !== batch.purchaseIds.length) return false;
+      for (const purchaseId of batch.purchaseIds) {
+        if (typeof purchaseId !== "string") return false;
+        const purchase = purchaseById.get(purchaseId);
+        const sourceKey = `${batch.productId}:${purchaseId}`;
+        if (!purchase || purchase.receivedDay === null || !purchase.lines.some((line) => line.productId === batch.productId)
+          || sourceBatches.has(sourceKey)) return false;
+        sourceBatches.set(sourceKey, batch.id);
+      }
+      batchById.set(batch.id, batch);
+    }
+    // A receipt assigns each paid SKU source exactly once, even before the box is emptied.
+    for (const purchase of value.purchases) if (purchase.receivedDay !== null) {
+      if (purchase.lines.some((line) => !sourceBatches.has(`${line.productId}:${purchase.id}`))) return false;
+    }
+    let recyclingDay = 1;
+    for (const [index, record] of value.recyclingRecords.entries()) {
+      if (!isRecord(record) || record.id !== `recycle-${index + 1}` || !isProductId(record.productId)
+        || !expectedCrateIds.has(crateIdFor(record.productId))
+        || !isInteger(record.dayNumber) || record.dayNumber < recyclingDay || record.dayNumber > value.day.number
+        || !Array.isArray(record.purchaseIds) || new Set(record.purchaseIds).size !== record.purchaseIds.length
+        || record.amountPence !== (record.purchaseIds.length ? RECYCLING_REWARD_PENCE : 0)) return false;
+      if (record.batchId === null) {
+        if (record.purchaseIds.length !== 0) return false;
+      } else {
+        if (typeof record.batchId !== "string") return false;
+        const batch = batchById.get(record.batchId);
+        if (!batch || recycledBatches.has(batch.id) || batch.productId !== record.productId
+          || batch.purchaseIds.length !== record.purchaseIds.length
+          || batch.purchaseIds.some((id, sourceIndex) => id !== record.purchaseIds[sourceIndex])) return false;
+        recycledBatches.add(batch.id);
+      }
+      if (!LEGACY_PRODUCT_IDS.some((productId) => productId === record.productId)
+        && !value.purchases.some((purchase) => purchase.receivedDay !== null && purchase.receivedDay <= record.dayNumber
+          && purchase.lines.some((line) => line.productId === record.productId))) return false;
+      for (const purchaseId of record.purchaseIds) {
+        const purchase = purchaseById.get(purchaseId);
+        if (!purchase || purchase.receivedDay === null || purchase.receivedDay > record.dayNumber) return false;
+      }
+      recycledProducts.add(record.productId);
+      recyclingDay = record.dayNumber;
+      recyclingIncomePence += record.amountPence;
+    }
+    if (value.crates.some((crate) => !expectedCrateIds.has(crate.id))) return false;
+    const activeProducts = new Set<ProductId>();
+    for (const batch of value.recyclingBatches) if (!recycledBatches.has(batch.id)) {
+      if (activeProducts.has(batch.productId) || !value.crates.some((crate) => crate.productId === batch.productId)) return false;
+      activeProducts.add(batch.productId);
+    }
+    for (const crateId of expectedCrateIds) {
+      if (value.crates.some((crate) => crate.id === crateId)) continue;
+      const productId = PRODUCT_IDS.find((id) => crateIdFor(id) === crateId)!;
+      // Every missing box needs a disposal record; unpaid return containers may be rebuilt later.
+      if (!recycledProducts.has(productId)) return false;
+    }
+  }
   for (const productId of PRODUCT_IDS) {
     const held = value.held;
     const reserved = held.kind === "item" && held.returnTo.kind === "crate" && held.returnTo.crateId === crateIdFor(productId) ? 1 : 0;
@@ -965,7 +1147,7 @@ function validateEconomyState(value: unknown, version: 4 | 5 | 6): value is Econ
   }
   const opening = firstDay(value.openingKind);
   const grossPence = value.transactions.reduce((sum, transaction) => sum + transaction.amountPence, 0);
-  const expectedCash = opening.openingCashPence + grossPence - purchaseSpendPence - (value.upgraded ? UPGRADE_COST_PENCE : 0);
+  const expectedCash = opening.openingCashPence + grossPence + recyclingIncomePence - purchaseSpendPence - (value.upgraded ? UPGRADE_COST_PENCE : 0);
   if (!isInteger(expectedCash) || value.cashPence !== expectedCash) return false;
 
   const expectedSettlementCount = value.day.number - (value.day.phase === "settled" ? 0 : 1);
@@ -989,6 +1171,7 @@ function validateEconomyState(value: unknown, version: 4 | 5 | 6): value is Econ
     const maxPaid = value.openingKind === "legacy-s0" && number === 1 ? 4 : DAY_CUSTOMER_TARGET;
     if (summary.paidCustomers < DAY_CUSTOMER_TARGET || summary.paidCustomers > maxPaid
       || SUMMARY_FIELDS.some((field) => !isInteger(record[field]) || record[field] !== summary[field])
+      || (value.schemaVersion === 7 && RECYCLING_SUMMARY_FIELDS.some((field) => !isInteger(record[field]) || record[field] !== summary[field]))
       || summary.closingCashPence < 0 || summary.remainingStockUnits < 0 || summary.remainingInventoryValuePence < 0) return false;
     if (value.purchases.slice(purchaseStart, record.purchaseEnd).some((purchase) => purchase.dayNumber !== number)) return false;
     if (value.transactions.slice(transactionStart, record.transactionEnd)
@@ -1028,6 +1211,10 @@ export function validateV5SimState(value: unknown): value is SimStateV5 {
   return validateEconomyState(value, 5) && value.schemaVersion === 5;
 }
 
-export function validateSimState(value: unknown): value is SimState {
+export function validateV6SimState(value: unknown): value is SimStateV6 {
   return validateEconomyState(value, 6) && value.schemaVersion === 6;
+}
+
+export function validateSimState(value: unknown): value is SimState {
+  return validateEconomyState(value, 7) && value.schemaVersion === 7;
 }

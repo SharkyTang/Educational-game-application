@@ -13,16 +13,17 @@ import { createCatalogFixtures, createReceivingPads } from "./productFixtures";
 import { basketPlacement, checkoutPlacement, crateDimensions, cratePlacement, findCustomerRoute, fitProduct, PRODUCT_DISPLAYS } from "./productLayout";
 import { crateRestingHeight, measureCrateSupport, ProductVisuals, productDimensions, type CrateSupport } from "./productPresentation";
 import { createStreet, setDeliveryTruckStatus, setStreetVenueStatus, type StreetEnvironment } from "./street";
+import { createRecyclingStation, RECYCLING_POINT } from "./recyclingStation";
 import { STREET_VENUES, getVenueProgress, type VenueId } from "./progression";
 import {
-  countAt, canSettleDay, canStartCustomer, getCheckoutTotal, getCustomerOrder, getShoppingProduct, getDaySummary, getDeliverySummary, isWalkablePosition, PRODUCTS, PRODUCT_IDS, SAFE_DROP_POINTS, type CrateId, type CustomerPhase,
+  countAt, canSettleDay, canStartCustomer, getCheckoutTotal, getCustomerOrder, getShoppingProduct, getDaySummary, getDeliverySummary, getRecyclingOffer, getRecyclingSummary, isWalkablePosition, PRODUCTS, PRODUCT_IDS, SAFE_DROP_POINTS, type CrateId, type CustomerPhase,
   type PlayerPose, type Position, type ProductId, type SimState,
 } from "./domain";
 
 export type Quality = "standard" | "low";
 export interface InteractionTarget {
   id: string;
-  kind: "crate" | "shelf" | "item" | "counter" | "open-sign" | "drop-zone" | "delivery" | "venue";
+  kind: "crate" | "shelf" | "item" | "counter" | "open-sign" | "drop-zone" | "delivery" | "venue" | "recycling";
   productId?: ProductId;
   itemId?: string;
   crateId?: CrateId;
@@ -155,6 +156,9 @@ export class ShopWorld {
     this.colliders.push(...fixtures.colliders);
     this.street = createStreet(this.scene);
     this.colliders.push(...this.street.colliders);
+    const recycling = createRecyclingStation(this.scene);
+    this.colliders.push(recycling.collider);
+    this.tag(recycling.root, { id: "cardboard-recycling", kind: "recycling", position: { ...RECYCLING_POINT } });
     for (const target of this.street.targets) {
       this.tag(target.mesh, {
         id: target.id, kind: target.kind,
@@ -259,6 +263,9 @@ export class ShopWorld {
     const crateContents = new Map<CrateId, typeof activeItems>();
     const basketItems = activeItems.filter((item) => item.location.kind === "basket");
     const checkoutItems = activeItems.filter((item) => item.location.kind === "checkout");
+    // Keep used empty boxes available after dropping or reloading; opening placeholders stay hidden.
+    const receivedProducts = new Set<ProductId>();
+    for (const item of state.items) if (item.location.kind !== "delivery") receivedProducts.add(item.productId);
     this.occupiedCrates.clear();
     for (const item of activeItems) if (item.location.kind === "crate") {
       const siblings = crateContents.get(item.location.crateId) ?? [];
@@ -278,7 +285,7 @@ export class ShopWorld {
     }
     for (const crate of state.crates) {
       const held = state.held.kind === "crate" && state.held.crateId === crate.id;
-      const visible = this.occupiedCrates.has(crate.id) || held;
+      const visible = receivedProducts.has(crate.productId) || held;
       let root = this.crates.get(crate.id);
       if (!root && !visible) continue;
       if (!root) {
@@ -708,6 +715,7 @@ export class ShopWorld {
     for (const box of this.colliders) {
       if (x > box.minX - radius && x < box.maxX + radius && z > box.minZ - radius && z < box.maxZ + radius) return false;
     }
+    // Empty boxes remain pickable and reserve their bay, but do not block walking.
     for (const crate of this.state.crates) {
       if (!this.occupiedCrates.has(crate.id)) continue;
       if (this.state.held.kind === "crate" && this.state.held.crateId === crate.id) continue;
@@ -743,12 +751,13 @@ export class ShopWorld {
     let inspectable = !!product;
     if (data.kind === "crate") {
       const remaining = this.state.items.filter((item) => item.location.kind === "crate" && item.location.crateId === data.crateId).length;
-      label = `${product?.nameEn} · ${product?.nameZh}货箱 · ${remaining} 件`;
-      action = this.state.held.kind === "none" ? "抱起货箱" : "先放下手里的货物";
+      label = remaining ? `${product?.nameEn} · ${product?.nameZh}货箱 · ${remaining} 件` : `Empty box · ${product?.nameZh}空箱 · 可回收`;
+      action = this.state.held.kind === "none" ? remaining ? "抱起货箱" : "抱起空箱 · 送往回收点" : "先放下手里的货物";
       inspectable = remaining > 0;
     } else if (data.kind === "shelf") {
       label = data.productId ? `${product?.nameEn} · ${PRODUCT_DISPLAYS[data.productId].shelfName}` : "商品货架";
       action = this.state.held.kind === "none" ? "先抱起对应货箱" : `摆放一件${product?.nameZh ?? "商品"}`;
+      if (getRecyclingOffer(this.state).allowed) action = "货箱已空 · 送往门旁绿色回收点";
       inspectable = !!data.productId && countAt(this.state, data.productId, "shelf") > 0;
     } else if (data.kind === "item") {
       const item = this.state.items.find((entry) => entry.id === data.itemId);
@@ -778,6 +787,13 @@ export class ShopWorld {
       const venue = STREET_VENUES.find((entry) => entry.id === data.venueId);
       label = venue ? `${venue.nameEn} · ${venue.nameZh}` : "High Street · 商业街";
       action = data.venueId ? `${getVenueProgress(this.state, data.venueId).statusText} · 查看条件` : "查看开放条件";
+      inspectable = false;
+    } else if (data.kind === "recycling") {
+      const offer = getRecyclingOffer(this.state);
+      const summary = getRecyclingSummary(this.state);
+      label = `Cardboard recycling · 空箱回收 · 今日 ${summary.recycledToday} 箱`;
+      action = offer.allowed ? offer.rewardPence > 0 ? `回收空箱 +£${(offer.rewardPence / 100).toFixed(2)}` : "回收空箱 · 无新奖励"
+        : this.state.held.kind === "none" ? "抱起空箱后按 E 回收 · 不限量" : offer.reason ?? "请先把箱内商品全部上架";
       inspectable = false;
     } else {
       label = "Delivery · 安全卸货点";
@@ -809,22 +825,21 @@ export class ShopWorld {
   private updateGuide(): void {
     const state = this.state;
     const delivery = getDeliverySummary(state);
+    const recycling = getRecyclingOffer(state);
     let point: Position;
     let title: string;
-    if (state.day.phase === "settled" || canSettleDay(state)) {
+    if (recycling.allowed) {
+      point = RECYCLING_POINT;
+      title = recycling.rewardPence > 0 ? `空箱回收点 · 按 E +£${(recycling.rewardPence / 100).toFixed(2)}` : "空箱回收点 · 按 E 清走";
+    } else if (state.day.phase === "settled" || canSettleDay(state)) {
       this.callbacks.onGuide?.(state.day.phase === "settled" ? "今日已日结 · 点“营业 / 日结”开始下一天" : "三单已完成 · 点“营业 / 日结”查看今天的收支");
       return;
-    }
-    if (state.customer.phase === "checkout" || state.customer.phase === "to-checkout") {
+    } else if (state.customer.phase === "checkout" || state.customer.phase === "to-checkout") {
       point = { x: -2.2, z: -1.0 }; title = "收银台内侧";
     } else if (state.held.kind === "crate") {
       const crate = state.crates.find((entry) => state.held.kind === "crate" && entry.id === state.held.crateId)!;
-      if (!state.items.some((item) => item.location.kind === "crate" && item.location.crateId === crate.id)) {
-        point = this.getNearestDrop() ?? SAFE_DROP_POINTS[2]!; title = "安全落箱点 · 按 G";
-      } else {
-        point = PRODUCT_DISPLAYS[crate.productId].approach;
-        title = `${PRODUCTS[crate.productId].nameEn} · ${PRODUCT_DISPLAYS[crate.productId].shelfName}`;
-      }
+      point = PRODUCT_DISPLAYS[crate.productId].approach;
+      title = `${PRODUCTS[crate.productId].nameEn} · ${PRODUCT_DISPLAYS[crate.productId].shelfName}`;
     } else if (delivery.pendingUnits > 0) {
       if (this.truckPhase === "arriving") {
         this.callbacks.onGuide?.(`送货车正在靠边 · ${delivery.pendingUnits} 件货待签收 · 请留出车道`);

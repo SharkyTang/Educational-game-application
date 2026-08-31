@@ -114,7 +114,7 @@ describe("3D S0 conserved physical inventory", () => {
     expect(getObjective(state)).toContain("牛奶冰柜");
     expect(getObjective(state)).not.toContain("面包");
     for (let slot = 0; slot < 4; slot += 1) state = act(state, { type: "STOCK", productId: "milk", slot });
-    expect(getObjective(state)).toContain("按 G 放下");
+    expect(getObjective(state)).toContain("空箱回收点按 E");
     state = act(state, { type: "DROP_HELD", position: SAFE_DROP_POINTS[0]! });
     expect(getObjective(state)).toContain("面包货箱");
   });

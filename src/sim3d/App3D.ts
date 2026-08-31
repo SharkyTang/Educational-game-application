@@ -2,6 +2,7 @@ import {
   PRODUCTS, PRODUCT_IDS, UPGRADE_COST_PENCE, capacityFor, countAt,
   createFirstDayState, getCheckoutTotal, getObjective, reduceSim,
   getDaySummary, getPurchaseOffer, getDeliverySummary, getCustomerOrder, getShoppingProduct,
+  getRecyclingOffer, getRecyclingSummary, RECYCLING_REWARD_PENCE,
   canSettleDay, canStartCustomer, CRATE_CAPACITY, DAY_CUSTOMER_TARGET,
   type PlayerPose, type ProductId, type PurchaseLine, type SimCommand, type SimState,
 } from "./domain";
@@ -73,6 +74,11 @@ export function commandForInteraction(state: SimState, target: InteractionTarget
   if (!target) return {};
   if (!interactionInReach(target)) return { message: "再走近一点，才能操作这件物品。" };
   switch (target.kind) {
+    case "recycling": {
+      const offer = getRecyclingOffer(state);
+      return offer.allowed ? { command: { type: "RECYCLE_CRATE" } }
+        : { message: offer.reason ?? "抱起空纸箱，到这里按 E 回收。" };
+    }
     case "delivery": {
       const delivery = getDeliverySummary(state);
       if (!delivery.pendingOrders) return { management: "supply" };
@@ -283,7 +289,7 @@ export class App3D {
   private renderShell(): void {
     this.root.innerHTML = `
       <main class="sim3d-app" aria-label="英语商业街 3D 小店">
-        <canvas id="s3-canvas" class="s3-canvas" tabindex="0" aria-label="第一人称小店与商业街：WASD 移动，按住 Shift 加速，鼠标观察，E 互动与签收，F 近看商品，G 放下货箱，M 商业街，Esc 暂停"></canvas>
+        <canvas id="s3-canvas" class="s3-canvas" tabindex="0" aria-label="第一人称小店与商业街：WASD 移动，按住 Shift 加速，鼠标观察，E 互动、签收与空箱回收，F 近看商品，G 放下货箱，M 商业街，Esc 暂停"></canvas>
         <audio id="s3-word-audio" preload="none" hidden></audio>
         <div id="s3-hud" class="s3-hud" hidden>
           <div class="s3-top-left">
@@ -410,13 +416,15 @@ export class App3D {
               <p id="s3-supply-error" class="s3-inline-reason" role="status"></p>
               <button id="s3-purchase" class="s3-primary-button" type="button" disabled>先选择商品与数量</button>
               <p class="s3-supply-capacity-note">每种商品箱内和待收货合计最多 ${CRATE_CAPACITY} 件。确认扣款一次，门口签收不再收费。</p>
+              <p class="s3-supply-capacity-note">上架后把空箱送到店门旁绿色回收点，按 E 投入。每个新进货空箱回收 ${money(RECYCLING_REWARD_PENCE)}，即投即清，不设容量上限。</p>
             </div>
           </section>
           <section id="s3-panel-day" class="s3-management-panel" aria-labelledby="s3-day-title" hidden>
             <p id="s3-day-eyebrow" class="s3-eyebrow">TODAY AT THE CORNER SHOP</p><h3 id="s3-day-title">今天的小店</h3>
             <p id="s3-day-progress" class="s3-muted"></p>
-            <dl class="s3-account-lines"><div><dt>今日营业收入</dt><dd id="s3-day-revenue"></dd></div><div><dt>已售商品成本</dt><dd id="s3-day-cogs"></dd></div><div class="s3-account-result"><dt>商品毛利</dt><dd id="s3-day-profit"></dd></div><div><dt>今日进货支出</dt><dd id="s3-day-procurement"></dd></div><div><dt>今日扩容支出</dt><dd id="s3-day-investment"></dd></div><div><dt>当前剩余资金</dt><dd id="s3-day-cash"></dd></div><div><dt>未售商品 / 成本价值</dt><dd id="s3-day-inventory"></dd></div></dl>
-            <p class="s3-muted">毛利 = 收入 − 已售商品成本。进货中尚未卖出的部分仍是存货；扩容是投资，不把钱包余额当利润。</p>
+            <dl class="s3-account-lines"><div><dt>今日营业收入</dt><dd id="s3-day-revenue"></dd></div><div><dt>已售商品成本</dt><dd id="s3-day-cogs"></dd></div><div class="s3-account-result"><dt>商品毛利</dt><dd id="s3-day-profit"></dd></div><div><dt>空箱回收收入</dt><dd id="s3-day-recycling"></dd></div><div><dt>今日进货支出</dt><dd id="s3-day-procurement"></dd></div><div><dt>今日扩容支出</dt><dd id="s3-day-investment"></dd></div><div><dt>当前剩余资金</dt><dd id="s3-day-cash"></dd></div><div><dt>未售商品 / 成本价值</dt><dd id="s3-day-inventory"></dd></div></dl>
+            <p id="s3-day-recycling-count" class="s3-muted"></p>
+            <p class="s3-muted">商品毛利 = 营业收入 − 已售商品成本。回收收入单独记账，投入时即入账，日结不再发一次。进货中尚未卖出的部分仍是存货；扩容是投资，不把钱包余额当利润。</p>
             <p id="s3-day-reason" class="s3-inline-reason" role="status"></p>
             <div class="s3-management-buttons"><button id="s3-settle-day" class="s3-primary-button" type="button">结束营业并结算</button><button id="s3-next-day" class="s3-primary-button" type="button" hidden>开始下一天</button><button id="s3-day-to-upgrade" class="s3-secondary-button" type="button">看看 £8 普通扩容</button></div>
           </section>
@@ -644,7 +652,9 @@ export class App3D {
     if (this.state.held.kind !== "crate") { this.notify("手里没有需要放下的货箱。"); return }
     const position = this.world?.getNearestDrop();
     if (position) this.dispatch({ type: "DROP_HELD", position });
-    else this.notify("走近货箱卸货点再按 G；通道中不能随意放箱，以免挡住顾客。");
+    else this.notify(getRecyclingOffer(this.state).allowed
+      ? "空箱可送到店门旁的绿色回收点，看向它按 E；想暂放则靠近卸货点按 G。"
+      : "走近货箱卸货点再按 G；通道中不能随意放箱，以免挡住顾客。");
   }
 
   private inspectableProduct(): ProductId | null {
@@ -963,9 +973,11 @@ export class App3D {
     this.renderSupply();
     this.text("s3-day-title", `第 ${day.dayNumber} 天${this.state.day.phase === "settled" ? " · 日结完成" : " · 营业账本"}`);
     this.text("s3-day-progress", `已收款 ${day.paidCustomers} / ${day.targetCustomers} 单 · 开始时资金 ${money(day.openingCashPence)}`);
-    for (const [suffix, value] of [["revenue", day.revenuePence], ["cogs", day.costOfGoodsPence], ["profit", day.grossProfitPence], ["procurement", day.procurementPence], ["investment", day.upgradeSpendPence], ["cash", day.closingCashPence]] as const) {
+    for (const [suffix, value] of [["revenue", day.revenuePence], ["cogs", day.costOfGoodsPence], ["profit", day.grossProfitPence], ["recycling", day.recyclingIncomePence], ["procurement", day.procurementPence], ["investment", day.upgradeSpendPence], ["cash", day.closingCashPence]] as const) {
       this.text(`s3-day-${suffix}`, money(value));
     }
+    const recycling = getRecyclingSummary(this.state);
+    this.text("s3-day-recycling-count", `今日回收 ${recycling.recycledToday} 箱 · 店门旁回收点按 E 投入，无容量上限。新进货空箱每箱 ${money(RECYCLING_REWARD_PENCE)}，同批来源不重复奖励。`);
     this.text("s3-day-inventory", `${day.remainingStockUnits} 件 / ${money(day.remainingInventoryValuePence)}`);
     const settled = this.state.day.phase === "settled";
     const canSettle = canSettleDay(this.state);
@@ -1084,7 +1096,10 @@ export class App3D {
     const inReach = interactionInReach(target);
     this.text("s3-target-label", inReach ? `${target.label} · ${target.distance.toFixed(1)} m` : "看向身边的物品");
     const delivery = inReach && target.kind === "delivery" ? getDeliverySummary(this.state) : null;
-    this.text("s3-target-action", delivery ? delivery.pendingOrders ? `签收 ${delivery.pendingUnits} 件送货` : "查看今日进货单" : inReach ? target.action : "走近物品后互动");
+    const recycling = inReach && target.kind === "recycling" ? getRecyclingOffer(this.state) : null;
+    this.text("s3-target-action", recycling
+      ? recycling.allowed ? `回收空箱${recycling.rewardPence ? ` +${money(recycling.rewardPence)}` : " · 不重复奖励"}` : recycling.reason ?? "抱起空箱后回收"
+      : delivery ? delivery.pendingOrders ? `签收 ${delivery.pendingUnits} 件送货` : "查看今日进货单" : inReach ? target.action : "走近物品后互动");
     this.el<HTMLButtonElement>("s3-interact").disabled = !inReach;
     this.el<HTMLButtonElement>("s3-inspect-button").disabled = this.inspectableProduct() === null;
     this.el("s3-reticle").classList.toggle("s3-reticle-active", inReach);
@@ -1095,7 +1110,8 @@ export class App3D {
     if (held.kind === "crate") {
       const crate = this.state.crates.find((candidate) => candidate.id === held.crateId);
       const count = this.state.items.filter((item) => item.location.kind === "crate" && item.location.crateId === held.crateId).length;
-      this.text("s3-held", `手中 · ${crate ? PRODUCTS[crate.productId].nameZh : "商品"}箱 · 剩余 ${count} 件`);
+      this.text("s3-held", count > 0 ? `手中 · ${crate ? PRODUCTS[crate.productId].nameZh : "商品"}箱 · 剩余 ${count} 件`
+        : "手中 · 空纸箱 · 送到店门旁绿色回收点，按 E 回收");
     } else if (held.kind === "item") {
       const item = this.state.items.find((candidate) => candidate.id === held.itemId);
       this.text("s3-held", item ? `手中 · ${PRODUCTS[item.productId].nameEn} / ${PRODUCTS[item.productId].nameZh}` : "手中 · 商品");

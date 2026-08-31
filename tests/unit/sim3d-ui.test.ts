@@ -117,6 +117,35 @@ describe("3D accessible interaction decisions", () => {
     expect(inspectableProduct(createFirstDayState(), sign)).toBeNull();
   });
 
+  it("recycles only a held empty box through the real, nearby recycling target", () => {
+    let state = reduceSim(createFirstDayState(), { type: "PURCHASE_STOCK", orderId: "recycling-ui", lines: [{ productId: "milk", quantity: 1 }] }).state;
+    state = reduceSim(state, { type: "RECEIVE_DELIVERY" }).state;
+    const station = target({ id: "cardboard-recycling", kind: "recycling", productId: undefined, crateId: undefined, inspectable: false });
+    expect(commandForInteraction(state, station).command).toBeUndefined();
+    state = reduceSim(state, { type: "PICK_CRATE", crateId: "milk-crate" }).state;
+    expect(commandForInteraction(state, station).command).toBeUndefined();
+    state = reduceSim(state, { type: "STOCK", productId: "milk", slot: 0 }).state;
+    expect(commandForInteraction(state, null).command).toBeUndefined();
+    expect(commandForInteraction(state, { ...station, distance: 2.61 }).command).toBeUndefined();
+    const recycle = commandForInteraction(state, station).command!;
+    expect(recycle).toEqual({ type: "RECYCLE_CRATE" });
+    const recycled = reduceSim(state, recycle).state;
+    expect(recycled.cashPence).toBe(state.cashPence + 5);
+    expect(recycled.held.kind).toBe("none");
+    expect(recycled.crates.some((crate) => crate.id === "milk-crate")).toBe(false);
+    expect(commandForInteraction(recycled, station).command).toBeUndefined();
+    expect(inspectableProduct(recycled, station)).toBeNull();
+  });
+
+  it("keeps G/drop-zone placement separate from recycling and never discards held merchandise", () => {
+    const state = reduceSim(createInitialSimState(), { type: "TAKE_ITEM", itemId: "milk-1" }).state;
+    const station = target({ id: "cardboard-recycling", kind: "recycling", inspectable: false });
+    expect(commandForInteraction(state, station).command).toBeUndefined();
+    const dropZone = target({ kind: "drop-zone", position: { x: -1.1, z: 2.6 } });
+    expect(commandForInteraction(state, dropZone).command).toEqual({ type: "RETURN_ITEM" });
+    expect(state.items.find((item) => item.id === "milk-1")?.location.kind).toBe("hand");
+  });
+
   it("uses the opening sign to explain end-of-day deliveries instead of starting an extra customer", () => {
     let state = createInitialSimState();
     for (const productId of ["milk", "bread"] as const) {
