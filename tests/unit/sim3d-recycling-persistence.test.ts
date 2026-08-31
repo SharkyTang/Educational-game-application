@@ -1,3 +1,4 @@
+import { createInitialRenovation } from "../../src/sim3d/shopDevelopment";
 import { describe, expect, it } from "vitest";
 import { payScannedCheckout, preCashTransactions } from "../helpers/sim3dPayment";
 import {
@@ -105,7 +106,7 @@ describe("read-only v6 migration into the recycling ledger", () => {
     expect(loaded.source).toBe("v6");
     expect(loaded.warning).toContain("不会额外发钱");
     expect(loaded.state).toEqual({
-      ...old, schemaVersion: 9, payment: null, recyclingRecords: [],
+      ...old, schemaVersion: 10, renovation: createInitialRenovation(), payment: null, recyclingRecords: [],
       day: { ...old.day, targetCustomers: null, elapsedOpenMs: 0, nextCustomerAtMs: null, closeReason: null },
       recyclingBatches: [
         { id: "crate-batch-1", productId: "milk", purchaseIds: ["paid-opening"] },

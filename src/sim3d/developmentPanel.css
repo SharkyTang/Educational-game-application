@@ -1,0 +1,56 @@
+.s3-pause.s3-pause-development { width: min(900px, calc(100vw - 32px)); }
+.s3-pause.s3-pause-layout { width: min(1040px, calc(100vw - 32px)); }
+.s3-management-tabs { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.s3-development-heading, .s3-achievement-heading { display: flex; justify-content: space-between; align-items: center; gap: 16px; }
+.s3-shop-type { padding: 6px 11px; border: 1px solid #c7d2b8; border-radius: 30px; background: #e9efdf; color: #47613f; font-size: 12px; white-space: nowrap; }
+.s3-development-stats { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; margin: 22px 0 12px; }
+.s3-development-stats > div { display: flex; flex-direction: column; gap: 7px; padding: 17px; background: #f3f2e6; border: 1px solid #dddfc9; border-radius: 8px; }
+.s3-development-stats span { font-size: 12px; color: #65745a; }
+.s3-development-stats strong { font-size: 27px; font-weight: 600; color: #314d3c; font-variant-numeric: tabular-nums; }
+.s3-development-stats small { color: #6a7461; font-size: 11px; line-height: 1.6; }
+.s3-development-progress { height: 5px; background: #e4e8d9; overflow: hidden; border-radius: 10px; margin-bottom: 24px; }
+.s3-development-progress span { display: block; height: 100%; background: #71855d; }
+.s3-extension-card { padding: 22px; background: #eef1e3; border: 1px solid #c9d2b9; border-radius: 9px; }
+.s3-extension-card h4 { margin: 5px 0 9px; font-size: 21px; font-weight: 600; }
+.s3-extension-card p { color: #607057; line-height: 1.75; font-size: 12px; }
+.s3-extension-card dl { display: flex; gap: 30px; margin: 20px 0 13px; }
+.s3-extension-card dl > div { display: grid; gap: 6px; }
+.s3-extension-card dt { font-size: 11px; color: #65745a; }
+.s3-extension-card dd { margin: 0; font-size: 18px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.s3-extension-card .s3-confirm { margin-top: 18px; background: #fffaf0; }
+#s3-layout-availability { margin-top: 11px; }
+.s3-shop-roadmap { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); margin: 22px 0 26px; padding: 0; list-style: none; border: 1px solid #dedfce; border-radius: 8px; overflow: hidden; }
+.s3-shop-roadmap li { display: flex; flex-direction: column; gap: 7px; padding: 15px; background: #f8f6ed; color: #7b7e70; }
+.s3-shop-roadmap li + li { border-left: 1px solid #dedfce; }
+.s3-shop-roadmap li.is-available { color: #456044; background: #eef3e4; }
+.s3-shop-roadmap span { font-size: 10px; letter-spacing: .1em; }
+.s3-shop-roadmap strong { font-size: 12px; font-weight: 600; }
+.s3-shop-roadmap small { font-size: 10px; line-height: 1.6; }
+.s3-achievement-heading { margin: 16px 0 12px; }
+.s3-achievement-heading h4 { margin: 0; font-size: 17px; font-weight: 600; }
+.s3-achievement-heading > span { font-size: 10px; color: #78816e; }
+.s3-achievement-list { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 9px; }
+.s3-achievement { display: flex; gap: 11px; padding: 14px; border: 1px solid #e0e1d3; border-radius: 7px; background: #fbfaf3; }
+.s3-achievement.is-complete { border-color: #c2cfb0; background: #f0f5e7; }
+.s3-achievement-mark { display: grid; place-items: center; width: 28px; height: 28px; flex: 0 0 28px; border-radius: 50%; background: #eceee2; color: #6d7b5e; font-size: 16px; }
+.s3-achievement.is-complete .s3-achievement-mark { background: #6d8659; color: #fffdf0; }
+.s3-achievement > div:last-child { min-width: 0; flex: 1; }
+.s3-achievement-title { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+.s3-achievement-title strong { color: #3d513c; font-size: 12px; font-weight: 600; }
+.s3-achievement-title span { font-size: 9px; color: #88907c; }
+.s3-achievement p { margin: 6px 0; color: #75806a; font-size: 10px; line-height: 1.65; }
+.s3-achievement small { font-size: 10px; color: #728662; }
+.s3-development-footnote { margin-top: 18px; }
+@media (max-width: 680px) {
+  .s3-management-tabs { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .s3-development-stats { gap: 6px; }
+  .s3-development-stats > div { padding: 12px 9px; }
+  .s3-development-stats strong { font-size: 21px; }
+  .s3-development-stats small { font-size: 9px; }
+  .s3-extension-card { padding: 16px; }
+  .s3-shop-roadmap { grid-template-columns: 1fr; }
+  .s3-shop-roadmap li + li { border-left: 0; border-top: 1px solid #dedfce; }
+  .s3-achievement-list { grid-template-columns: 1fr; }
+  .s3-achievement-heading { align-items: flex-start; flex-direction: column; gap: 5px; }
+  .s3-development-heading { align-items: flex-start; }
+}

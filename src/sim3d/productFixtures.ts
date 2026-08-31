@@ -1,9 +1,10 @@
 import { Color3, DynamicTexture, Mesh, MeshBuilder, PBRMaterial, Scene, TransformNode, Vector3 } from "@babylonjs/core";
 import { PRODUCT_ASSETS, type ProductAssetId } from "./product-library/catalog";
 import { CATALOG_RACKS, PRODUCT_DISPLAYS, RACK_DEPTH, RACK_WIDTH, rackCollider, type LayoutCollider } from "./productLayout";
+import { furnitureBounds, transformLayoutPoint, type FurnitureId, type ShopLayout } from "./shopLayout";
 
 interface FixtureTarget { id: string; kind: "shelf"; productId: ProductAssetId; position: Vector3; mesh: Mesh }
-export interface CatalogFixtures { root: TransformNode; targets: FixtureTarget[]; colliders: LayoutCollider[] }
+export interface CatalogFixtures { root: TransformNode; targets: FixtureTarget[]; colliders: LayoutCollider[]; applyLayout(layout: ShopLayout): void }
 const caches = new WeakMap<Scene, Map<string, PBRMaterial>>();
 
 function cacheFor(scene: Scene): Map<string, PBRMaterial> {
@@ -48,13 +49,18 @@ function sign(scene: Scene, parent: TransformNode, name: string, width: number, 
 }
 
 /** Empty, labelled compartments only. Stock is created exclusively from inventory. */
-export function createCatalogFixtures(scene: Scene, prices: Partial<Record<ProductAssetId, { pricePence: number }>>): CatalogFixtures {
+export function createCatalogFixtures(scene: Scene, prices: Partial<Record<ProductAssetId, { pricePence: number }>>, layout?: ShopLayout): CatalogFixtures {
   const root = new TransformNode("catalog-shop-fixtures", scene);
   const targets: FixtureTarget[] = [];
   const colliders = CATALOG_RACKS.map(rackCollider);
+  const racks: { id: FurnitureId; root: TransformNode; position: { x: number; z: number }; yaw: number }[] = [];
+  const anchors: { id: FurnitureId; target: FixtureTarget; position: Vector3 }[] = [];
   for (const rack of CATALOG_RACKS) {
+    const id = rack.id as FurnitureId;
     const rackRoot = new TransformNode(`catalog-rack-${rack.id}`, scene);
     rackRoot.parent = root; rackRoot.position.set(rack.position.x, 0, rack.position.z); rackRoot.rotation.y = rack.yaw;
+    rackRoot.metadata = { furnitureId: id };
+    racks.push({ id, root: rackRoot, position: { ...rack.position }, yaw: rack.yaw });
     const body = material(scene, rack.kind === "chiller" ? "dark" : rack.kind === "household" ? "sage" : "wood");
     const surface = material(scene, rack.kind === "chiller" ? "metal" : "wood");
     const lining = material(scene, rack.kind === "chiller" ? "ivory" : "sage");
@@ -78,12 +84,29 @@ export function createCatalogFixtures(scene: Scene, prices: Partial<Record<Produ
       sign(scene, cellRoot, `${productId}-price`, 0.526, 0.138, 0, -0.073, -0.294, definition.nameEn, `${definition.nameZh}${price === undefined ? "" : ` · £${(price / 100).toFixed(2)}`}`, true);
       sign(scene, cellRoot, `${productId}-capacity-note`, 0.49, 0.19, 0, 0.53, -0.263, "EXTRA SPACE", "扩充后启用 · 4 → 8", true);
       const targetPosition = display.slots[0]!;
-      targets.push({ id: `${productId}-shelf`, kind: "shelf", productId, position: new Vector3(targetPosition.x, baseY + 0.14, targetPosition.z), mesh: cellRoot });
+      const target: FixtureTarget = { id: `${productId}-shelf`, kind: "shelf", productId, position: new Vector3(targetPosition.x, baseY + 0.14, targetPosition.z), mesh: cellRoot };
+      targets.push(target);
+      anchors.push({ id, target, position: target.position.clone() });
     });
     if (rack.products.length === 3) sign(scene, rackRoot, `${rack.id}-quiet-panel`, 0.50, 0.23, 0.30, 1.75, 0.236, "A LITTLE LOCAL", "GOOD FOOD · GOOD COMPANY");
   }
   root.metadata = { productIds: targets.map((target) => target.productId), noDecorativeStock: true };
-  return { root, targets, colliders };
+  function applyLayout(nextLayout: ShopLayout): void {
+    racks.forEach((rack, index) => {
+      const placement = nextLayout.placements.find((entry) => entry.id === rack.id)!;
+      const point = transformLayoutPoint(nextLayout, rack.id, rack.position);
+      rack.root.position.set(point.x, 0, point.z);
+      rack.root.rotation.y = rack.yaw + placement.rotation * Math.PI / 2;
+      rack.root.computeWorldMatrix(true);
+      Object.assign(colliders[index]!, furnitureBounds(placement));
+    });
+    for (const anchor of anchors) {
+      const point = transformLayoutPoint(nextLayout, anchor.id, { x: anchor.position.x, y: anchor.position.y, z: anchor.position.z });
+      anchor.target.position.set(point.x, point.y, point.z);
+    }
+  }
+  if (layout) applyLayout(layout);
+  return { root, targets, colliders, applyLayout };
 }
 
 /** Extra bays extend down the existing delivery pavement, keeping the entrance clear. */

@@ -3,7 +3,8 @@ import { Vector3, type Engine, type Scene, type TransformNode, type UniversalCam
 import {
   CUSTOMER_EXIT_STOP_SECONDS, CUSTOMER_STOP_SECONDS, CUSTOMER_WALK_SPEED,
 } from "../../src/sim3d/customerSelection";
-import { createFirstDayState, type CrateId, type CustomerPhase, type PlayerPose, type Position, type SimState } from "../../src/sim3d/domain";
+import { createFirstDayState, type CrateId, type CustomerPhase, type PlayerPose, type Position, type ProductId, type SimState } from "../../src/sim3d/domain";
+import type { ProductDisplay } from "../../src/sim3d/productLayout";
 import { ShopWorld, type WorldCallbacks } from "../../src/sim3d/world";
 
 /**
@@ -18,6 +19,7 @@ interface MotionRuntime {
   camera: Pick<UniversalCamera, "position" | "rotation">;
   customer: Pick<TransformNode, "position" | "rotation" | "isEnabled" | "setEnabled">;
   state: SimState;
+  displays: Record<ProductId, ProductDisplay>;
   callbacks: Pick<WorldCallbacks, "onCustomerArrive" | "onFrame" | "onStatus">;
   colliders: { minX: number; maxX: number; minZ: number; maxZ: number }[];
   occupiedCrates: Set<CrateId>;
@@ -45,6 +47,7 @@ interface MotionRuntime {
   updateTarget(): void;
   updateGuide(): void;
   playCustomerAnimation(walking: boolean): void;
+  createDisplays(layout: SimState["renovation"]["layout"]): Record<ProductId, ProductDisplay>;
 }
 
 function createMotionWorld(phase: CustomerPhase = "to-milk") {
@@ -76,6 +79,7 @@ function createMotionWorld(phase: CustomerPhase = "to-milk") {
     movePlayer, updateTruck, playCustomerAnimation: animate,
     updateTarget: vi.fn(), updateGuide: vi.fn(),
   });
+  world.displays = world.createDisplays(world.state.renovation.layout);
   return {
     world, onArrive, onFrame, animate, movePlayer, updateTruck, renderScene,
     frame(milliseconds: number): void {

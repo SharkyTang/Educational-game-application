@@ -249,14 +249,14 @@ describe("safe crate placement around the player", () => {
   });
 });
 
-describe("v9 snapshot persistence and read-only v3 migration", () => {
+describe("v10 snapshot persistence and read-only v3 migration", () => {
   it("starts the new namespace with £12 and empty crates without rewriting unrelated 2D data", () => {
     const storage = new MemoryStorage();
     storage.data.set("english-high-street:save:v2", "legacy-2d-content");
     const before = [...storage.data];
     expect(loadSimState(storage)).toEqual({ state: createFirstDayState(), source: "new" });
     expect([...storage.data]).toEqual(before);
-    expect(SIM_STORAGE_KEY).toBe("english-high-street:sim3d:v9");
+    expect(SIM_STORAGE_KEY).toBe("english-high-street:sim3d:v10");
   });
 
   it("migrates the valid v3 world once and leaves both original v3 keys byte-for-byte intact", () => {
@@ -270,7 +270,7 @@ describe("v9 snapshot persistence and read-only v3 migration", () => {
     expect(migrated.source).toBe("legacy");
     expect(migrated.warning).toContain("不会额外发放");
     expect(migrated.state.cashPence).toBe(400);
-    expect(migrated.state.schemaVersion).toBe(9);
+    expect(migrated.state.schemaVersion).toBe(10);
     expect(migrated.state.transactions).toEqual(oldSnapshot().transactions.map((transaction) => ({ ...transaction, paymentMethod: "card", tenderedPence: transaction.amountPence, changePence: 0 })));
     expect([...storage.data]).toEqual(before);
     saveSimState(migrated.state, storage);
@@ -537,7 +537,7 @@ describe("strict v5 selected-stock migration to the current schema", () => {
     const untouched = [...storage.data];
     const result = loadSimState(storage);
     expect(result.source).toBe("v5");
-    expect(result.state.schemaVersion).toBe(9);
+    expect(result.state.schemaVersion).toBe(10);
     expect(validateSimState(result.state)).toBe(true);
     expect(result.state.cashPence).toBe(old.cashPence);
     expect(result.state.items).toEqual(old.items);

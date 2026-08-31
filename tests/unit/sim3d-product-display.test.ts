@@ -3,7 +3,7 @@ import { Mesh, NullEngine, Ray, Scene, TransformNode, UniversalCamera, Vector3 }
 import { createCrate, createShop, setShelfCapacity } from "../../src/sim3d/assets";
 import { createCatalogFixtures, createReceivingPads } from "../../src/sim3d/productFixtures";
 import { PRODUCT_ASSET_IDS } from "../../src/sim3d/product-library/catalog";
-import { basketPlacement, checkoutPlacement, crateDimensions, cratePlacement, findCustomerRoute, fitProduct, PRODUCT_DISPLAYS, segmentClear, type LayoutCollider } from "../../src/sim3d/productLayout";
+import { basketPlacement, checkoutPlacement, crateDimensions, cratePlacement, findCustomerRoute, fitProduct, PRODUCT_DISPLAYS, segmentClear, type LayoutCollider, type ProductDisplay } from "../../src/sim3d/productLayout";
 import { crateRestingHeight, measureCrateSupport, ProductVisuals, productDimensions, type CrateSupport } from "../../src/sim3d/productPresentation";
 import { createStreet } from "../../src/sim3d/street";
 import { ShopWorld } from "../../src/sim3d/world";
@@ -23,6 +23,7 @@ interface RendererHarness {
   inspect(id: ProductId | null): void;
   isFree(x: number, z: number): boolean;
   getNearestDrop(): { x: number; z: number } | null;
+  createDisplays(layout: SimState["renovation"]["layout"]): Record<ProductId, ProductDisplay>;
 }
 
 /** Test the real renderer methods using a NullEngine, without browser input or NPC downloads. */
@@ -45,10 +46,11 @@ describe("all-product game presentation", () => {
     const customer = new TransformNode("harness-customer", scene);
     const basket = new TransformNode("harness-basket", scene); basket.parent = customer;
     const world = Object.create(ShopWorld.prototype) as RendererHarness;
+    const displays = world.createDisplays(state.renovation.layout);
     Object.assign(world, {
       state, scene, camera: new UniversalCamera("harness-camera", new Vector3(0, 1.65, -3.5), scene), canvas: { clientWidth: 1000 },
       colliders, crateSupports, productVisuals: new ProductVisuals(scene), occupiedCrates: new Set(), products: new Map(), crates: new Map(),
-      shelfSlots: Object.fromEntries(PRODUCT_ASSET_IDS.map((id) => [id, PRODUCT_DISPLAYS[id].slots.map((point) => new Vector3(point.x, point.y, point.z))])),
+      displays, shelfSlots: Object.fromEntries(PRODUCT_ASSET_IDS.map((id) => [id, displays[id].slots.map((point) => new Vector3(point.x, point.y, point.z))])),
       hands: new TransformNode("harness-hands", scene), basket, customer, inspection: new Map(), inspectionProduct: null,
       shadow: { addShadowCaster: vi.fn(), removeShadowCaster: vi.fn() }, callbacks: { onStatus: vi.fn() },
       customerPhase: state.customer.phase, customerObstacleSignature: "", route: [],

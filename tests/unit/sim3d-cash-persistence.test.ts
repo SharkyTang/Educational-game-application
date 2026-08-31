@@ -1,3 +1,4 @@
+import { createInitialRenovation } from "../../src/sim3d/shopDevelopment";
 import { describe, expect, it } from "vitest";
 import {
   createFirstDayState, getCheckoutTotal, getDaySummary, reduceSim, validateSimState, validateV7SimState, validateV8SimState,
@@ -84,10 +85,10 @@ function v7Snapshot(state: SimState = partialCash()): SimStateV7 {
   };
 }
 
-describe("v9 read-only migration of cash and pre-cash save sources", () => {
-  it("uses a new v9 namespace, preserving the cross-version writer lock", () => {
-    expect(SIM_STORAGE_KEY).toBe("english-high-street:sim3d:v9");
-    expect(SIM_BACKUP_KEY).toBe("english-high-street:sim3d:v9:backup");
+describe("v10 read-only migration of cash and pre-cash save sources", () => {
+  it("uses a new v10 namespace, preserving the cross-version writer lock", () => {
+    expect(SIM_STORAGE_KEY).toBe("english-high-street:sim3d:v10");
+    expect(SIM_BACKUP_KEY).toBe("english-high-street:sim3d:v10:backup");
     expect(SIM_WRITER_LOCK).toBe("english-high-street:sim3d:v4:writer");
   });
 
@@ -160,7 +161,7 @@ describe("v9 read-only migration of cash and pre-cash save sources", () => {
     const loaded = loadSimState(storage);
     expect(loaded.source).toBe("v7");
     expect(loaded.state).toEqual({
-      ...old, schemaVersion: 9, payment: { method: "card" },
+      ...old, schemaVersion: 10, renovation: createInitialRenovation(), payment: { method: "card" },
       day: { ...old.day, targetCustomers: null, elapsedOpenMs: 0, nextCustomerAtMs: null, closeReason: null },
       transactions: old.transactions.map((transaction) => ({ ...transaction, paymentMethod: "card", tenderedPence: transaction.amountPence, changePence: 0 })),
     });

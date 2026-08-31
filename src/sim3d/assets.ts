@@ -15,6 +15,7 @@ import {
 } from "@babylonjs/core";
 import { PRODUCT_ASSET_IDS, PRODUCT_ASSETS, type ProductAssetId } from "./product-library/catalog";
 import { crateDimensions } from "./productLayout";
+import { furnitureBounds, transformLayoutPoint, type FurnitureId, type ShopLayout } from "./shopLayout";
 
 /** All distances are metres. Products and crates are anchored at their bottom. */
 type ProductId = "milk" | "bread";
@@ -35,6 +36,7 @@ export interface ShopEnvironment {
   root: TransformNode;
   colliders: ShopCollider[];
   targets: ShopTarget[];
+  applyLayout(layout: ShopLayout): void;
 }
 
 type MaterialName =
@@ -516,22 +518,43 @@ export function createCrate(scene: Scene, productId: ProductAssetId, name: strin
   return root;
 }
 
-function wallPanels(scene: Scene, root: TransformNode): void {
+function wallPanels(scene: Scene, root: TransformNode): (extension: number) => void {
+  const stretched: { mesh: Mesh; depth: number }[] = [];
+  const rear: Mesh[] = [];
+  const extraPanels = new TransformNode("expanded-wall-details", scene);
+  extraPanels.parent = root;
+  extraPanels.setEnabled(false);
   for (const side of [-1, 1]) {
-    box(scene, root, `wall-${side}`, new Vector3(0.18, 3, 9.35), new Vector3(side * 3.49, 1.5, 0), "plaster");
-    box(scene, root, `wainscot-${side}`, new Vector3(0.038, 1.05, 9.2), new Vector3(side * 3.389, 0.525, 0), "sage");
-    box(scene, root, `dado-${side}`, new Vector3(0.065, 0.052, 9.2), new Vector3(side * 3.37, 1.075, 0), "sageLight");
-    box(scene, root, `skirting-${side}`, new Vector3(0.067, 0.14, 9.2), new Vector3(side * 3.368, 0.07, 0), "sageDark");
-    for (let panel = 0; panel < 15; panel += 1) {
-      box(scene, root, `wainscot-stile-${side}-${panel}`, new Vector3(0.04, 0.91, 0.038), new Vector3(side * 3.355, 0.575, -4.4 + panel * 0.625), "sageLight");
+    stretched.push({ mesh: box(scene, root, `wall-${side}`, new Vector3(0.18, 3, 9.35), new Vector3(side * 3.49, 1.5, 0), "plaster"), depth: 9.35 });
+    stretched.push({ mesh: box(scene, root, `wainscot-${side}`, new Vector3(0.038, 1.05, 9.2), new Vector3(side * 3.389, 0.525, 0), "sage"), depth: 9.2 });
+    stretched.push({ mesh: box(scene, root, `dado-${side}`, new Vector3(0.065, 0.052, 9.2), new Vector3(side * 3.37, 1.075, 0), "sageLight"), depth: 9.2 });
+    stretched.push({ mesh: box(scene, root, `skirting-${side}`, new Vector3(0.067, 0.14, 9.2), new Vector3(side * 3.368, 0.07, 0), "sageDark"), depth: 9.2 });
+    for (let panel = 0; panel < 20; panel += 1) {
+      box(scene, panel < 15 ? root : extraPanels, `wainscot-stile-${side}-${panel}`, new Vector3(0.04, 0.91, 0.038), new Vector3(side * 3.355, 0.575, -4.4 + panel * 0.625), "sageLight");
     }
   }
-  box(scene, root, "back-plaster", new Vector3(6.8, 3, 0.18), new Vector3(0, 1.5, 4.69), "plaster");
-  box(scene, root, "back-wainscot", new Vector3(6.8, 1.05, 0.05), new Vector3(0, 0.525, 4.578), "sage");
-  box(scene, root, "back-dado", new Vector3(6.8, 0.052, 0.068), new Vector3(0, 1.075, 4.56), "sageLight");
-  box(scene, root, "back-skirting", new Vector3(6.8, 0.14, 0.08), new Vector3(0, 0.07, 4.55), "sageDark");
-  box(scene, root, "shop-ceiling", new Vector3(7.0, 0.10, 9.5), new Vector3(0, 3.08, 0), "ceiling");
-  for (const z of [-4.50, 4.50]) box(scene, root, `ceiling-cornice-${z}`, new Vector3(6.8, 0.07, 0.09), new Vector3(0, 2.98, z), "ceiling");
+  rear.push(box(scene, root, "back-plaster", new Vector3(6.8, 3, 0.18), new Vector3(0, 1.5, 4.69), "plaster"));
+  rear.push(box(scene, root, "back-wainscot", new Vector3(6.8, 1.05, 0.05), new Vector3(0, 0.525, 4.578), "sage"));
+  rear.push(box(scene, root, "back-dado", new Vector3(6.8, 0.052, 0.068), new Vector3(0, 1.075, 4.56), "sageLight"));
+  rear.push(box(scene, root, "back-skirting", new Vector3(6.8, 0.14, 0.08), new Vector3(0, 0.07, 4.55), "sageDark"));
+  stretched.push({ mesh: box(scene, root, "shop-ceiling", new Vector3(7.0, 0.10, 9.5), new Vector3(0, 3.08, 0), "ceiling"), depth: 9.5 });
+  for (const z of [-4.50, 4.50]) {
+    const cornice = box(scene, root, `ceiling-cornice-${z}`, new Vector3(6.8, 0.07, 0.09), new Vector3(0, 2.98, z), "ceiling");
+    if (z > 0) rear.push(cornice);
+  }
+  const rearAnchors = rear.map((mesh) => ({ mesh, z: mesh.position.z }));
+  return (extension) => {
+    for (const { mesh, depth } of stretched) {
+      mesh.position.z = extension / 2;
+      mesh.scaling.z = (depth + extension) / depth;
+      mesh.computeWorldMatrix(true);
+    }
+    for (const { mesh, z } of rearAnchors) {
+      mesh.position.z = z + extension;
+      mesh.computeWorldMatrix(true);
+    }
+    extraPanels.setEnabled(extension > 0);
+  };
 }
 
 function plant(scene: Scene, parent: TransformNode, name: string, position: Vector3, scale: number): void {
@@ -671,7 +694,7 @@ function entrance(scene: Scene, root: TransformNode): ShopTarget {
   return { id: "open-sign", kind: "open-sign", position: new Vector3(0.62, 1.73, -4.40), mesh: hanging };
 }
 
-export function createShop(scene: Scene, options: { catalogFixtures?: boolean } = {}): ShopEnvironment {
+export function createShop(scene: Scene, options: { catalogFixtures?: boolean; layout?: ShopLayout } = {}): ShopEnvironment {
   const root = new TransformNode("corner-shop-environment", scene);
   const targets: ShopTarget[] = [];
   const floor = finish(MeshBuilder.CreateGround("oak-floor", { width: 6.8, height: 9.2 }, scene), root, material(scene, "oak"), Vector3.Zero());
@@ -686,8 +709,14 @@ export function createShop(scene: Scene, options: { catalogFixtures?: boolean } 
     floorMaterial.roughness = 0.74;
     floor.material = floorMaterial;
   }
-  wallPanels(scene, root);
-  targets.push(createCounter(scene, root), createFridge(scene, root), createBreadRack(scene, root), entrance(scene, root));
+  const applyWallExpansion = wallPanels(scene, root);
+  const furniture = [
+    { id: "checkout-counter" as const, target: createCounter(scene, root) },
+    { id: "milk-fridge" as const, target: createFridge(scene, root) },
+    { id: "bread-rack" as const, target: createBreadRack(scene, root) },
+  ].map((entry) => ({ ...entry, originalPosition: entry.target.mesh.position.clone(), originalTarget: entry.target.position.clone() }));
+  for (const { id, target } of furniture) target.mesh.metadata = { ...target.mesh.metadata, furnitureId: id };
+  targets.push(...furniture.map((entry) => entry.target), entrance(scene, root));
   if (!options.catalogFixtures) pantry(scene, root);
 
   const door = box(scene, root, "stockroom-door", new Vector3(0.91, 2.13, 0.072), new Vector3(-2.01, 1.065, 4.49), "sageDark");
@@ -700,18 +729,23 @@ export function createShop(scene: Scene, options: { catalogFixtures?: boolean } 
   sphere(scene, door, "brass-door-knob", new Vector3(0.054, 0.054, 0.059), new Vector3(0.34, -0.10, -0.076), "brass");
   sign(scene, door, "staff-door-plaque", 0.37, 0.123, new Vector3(0, 0.66, -0.060), "STAFF ONLY");
   plant(scene, root, "back-corner-plant", new Vector3(-0.90, 0, 4.02), 1.42);
-  plant(scene, root, "window-plant", new Vector3(-3.01, 0, -3.62), 1.5);
+  // Keep a real walking gap around the original counter's cashier side.
+  plant(scene, root, "window-plant", new Vector3(-3.01, 0, -4.10), 1.5);
 
   const frame = box(scene, root, "local-grocer-frame", new Vector3(0.66, 0.83, 0.046), new Vector3(-3.325, 1.99, 1.67), "oakEdge");
   frame.rotation.y = -Math.PI / 2;
   sign(scene, frame, "local-grocer-poster", 0.574, 0.75, new Vector3(0, 0, -0.025), "YOUR LOCAL", "A little shop. A good day.", true);
-  sign(scene, root, "back-wall-shop-mark", 0.87, 0.26, new Vector3(0, 2.61, 4.576), "CORNER SHOP", "EST. 2026", true);
+  const backMark = sign(scene, root, "back-wall-shop-mark", 0.87, 0.26, new Vector3(0, 2.61, 4.576), "CORNER SHOP", "EST. 2026", true);
 
-  for (const z of [-1.5, 2.0]) {
-    cylinder(scene, root, `pendant-cable-${z}`, 0.008, 0.008, 0.36, new Vector3(0, 2.83, z), "black", 8);
-    cylinder(scene, root, `pendant-shade-${z}`, 0.47, 0.11, 0.19, new Vector3(0, 2.58, z), "sageDark", 40);
-    cylinder(scene, root, `pendant-inner-${z}`, 0.425, 0.10, 0.16, new Vector3(0, 2.567, z), "milkPaper", 40);
-    sphere(scene, root, `pendant-bulb-${z}`, new Vector3(0.08, 0.1, 0.08), new Vector3(0, 2.52, z), "bulb");
+  const extraLighting = new TransformNode("expanded-shop-lighting", scene);
+  extraLighting.parent = root;
+  extraLighting.setEnabled(false);
+  for (const z of [-1.5, 2.0, 5.5]) {
+    const parent = z > 4.6 ? extraLighting : root;
+    cylinder(scene, parent, `pendant-cable-${z}`, 0.008, 0.008, 0.36, new Vector3(0, 2.83, z), "black", 8);
+    cylinder(scene, parent, `pendant-shade-${z}`, 0.47, 0.11, 0.19, new Vector3(0, 2.58, z), "sageDark", 40);
+    cylinder(scene, parent, `pendant-inner-${z}`, 0.425, 0.10, 0.16, new Vector3(0, 2.567, z), "milkPaper", 40);
+    sphere(scene, parent, `pendant-bulb-${z}`, new Vector3(0.08, 0.1, 0.08), new Vector3(0, 2.52, z), "bulb");
   }
   const dropPositions = [new Vector3(1.35, 0.006, -2.9), new Vector3(2.2, 0.006, -2.9), new Vector3(-1.1, 0.006, 2.6), new Vector3(1.8, 0.006, 1.35)];
   dropPositions.forEach((position, index) => {
@@ -720,11 +754,13 @@ export function createShop(scene: Scene, options: { catalogFixtures?: boolean } 
     label.rotation.x = Math.PI / 2;
     targets.push({ id: `drop-${index}`, kind: "drop-zone", position: position.clone(), mesh: mat });
   });
+  const originalSlots = {
+    milk: [0.94, 1.40].flatMap((y) => [-0.30, -0.10, 0.10, 0.30].map((x) => new Vector3(x, y, 3.77))),
+    bread: [0.82, 1.30].flatMap((y) => [-0.21, 0.13, 0.47, 0.81].map((z) => new Vector3(2.78, y, z))),
+  };
+  const shelfSlots = { milk: originalSlots.milk.map((point) => point.clone()), bread: originalSlots.bread.map((point) => point.clone()) };
   root.metadata = {
-    shelfSlots: {
-      milk: [0.94, 1.40].flatMap((y) => [-0.30, -0.10, 0.10, 0.30].map((x) => new Vector3(x, y, 3.77))),
-      bread: [0.82, 1.30].flatMap((y) => [-0.21, 0.13, 0.47, 0.81].map((z) => new Vector3(2.78, y, z))),
-    },
+    shelfSlots,
     productYaw: { milk: 0, bread: Math.PI / 2 },
     counterTop: 1.0,
   };
@@ -738,10 +774,46 @@ export function createShop(scene: Scene, options: { catalogFixtures?: boolean } 
     { minX: -0.51, maxX: 0.51, minZ: 3.62, maxZ: 4.51 },
     { minX: 2.59, maxX: 3.29, minZ: -0.62, maxZ: 1.22 },
     ...(!options.catalogFixtures ? [{ minX: 1.44, maxX: 2.42, minZ: 3.86, maxZ: 4.52 }] : []),
-    { minX: -3.22, maxX: -2.81, minZ: -3.83, maxZ: -3.41 },
+    { minX: -3.22, maxX: -2.81, minZ: -4.31, maxZ: -3.89 },
     { minX: -1.10, maxX: -0.70, minZ: 3.82, maxZ: 4.22 },
   ];
-  return { root, colliders, targets };
+  function applyLayout(layout: ShopLayout): void {
+    const extension = layout.expansion * 3;
+    floor.position.z = extension / 2;
+    floor.scaling.z = (9.2 + extension) / 9.2;
+    floor.computeWorldMatrix(true);
+    if (floorMaterial?.albedoTexture instanceof Texture) floorMaterial.albedoTexture.vScale = (9.2 + extension) / 1.2;
+    applyWallExpansion(extension);
+    door.position.z = 4.49 + extension;
+    door.computeWorldMatrix(true);
+    backMark.position.z = 4.576 + extension;
+    backMark.computeWorldMatrix(true);
+    extraLighting.setEnabled(extension > 0);
+    colliders[0]!.maxZ = 4.8 + extension;
+    colliders[1]!.maxZ = 4.8 + extension;
+    colliders[2]!.minZ = 4.56 + extension;
+    colliders[2]!.maxZ = 4.8 + extension;
+    furniture.forEach(({ id, target, originalPosition, originalTarget }, index) => {
+      const placement = layout.placements.find((entry) => entry.id === id)!;
+      const position = transformLayoutPoint(layout, id, { x: originalPosition.x, y: originalPosition.y, z: originalPosition.z });
+      target.mesh.position.set(position.x, position.y, position.z);
+      target.mesh.rotation.y = placement.rotation * Math.PI / 2;
+      target.mesh.computeWorldMatrix(true);
+      const point = transformLayoutPoint(layout, id, { x: originalTarget.x, y: originalTarget.y, z: originalTarget.z });
+      target.position.set(point.x, point.y, point.z);
+      Object.assign(colliders[index + 5]!, furnitureBounds(placement));
+    });
+    for (const [productId, id] of [["milk", "milk-fridge"], ["bread", "bread-rack"]] as const satisfies readonly (readonly [ProductId, FurnitureId])[]) {
+      originalSlots[productId].forEach((original, index) => {
+        const point = transformLayoutPoint(layout, id, { x: original.x, y: original.y, z: original.z });
+        shelfSlots[productId][index]!.set(point.x, point.y, point.z);
+      });
+      const placement = layout.placements.find((entry) => entry.id === id)!;
+      root.metadata.productYaw[productId] = (productId === "bread" ? Math.PI / 2 : 0) + placement.rotation * Math.PI / 2;
+    }
+  }
+  if (options.layout) applyLayout(options.layout);
+  return { root, colliders, targets, applyLayout };
 }
 
 export function createPlayerHands(scene: Scene): TransformNode {

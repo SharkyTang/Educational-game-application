@@ -3,7 +3,7 @@ import {
   createFirstDayState, getCheckoutTotal, getObjective, reduceSim,
   getDaySummary, getPurchaseOffer, getDeliverySummary, getCustomerOrder, getShoppingProduct,
   getRecyclingOffer, getRecyclingSummary, RECYCLING_REWARD_PENCE,
-  canSettleDay, canStartCustomer, CRATE_CAPACITY,
+  canSettleDay, canStartCustomer, getShopLayoutObstacles, CRATE_CAPACITY,
   type PlayerPose, type ProductId, type PurchaseLine, type SimCommand, type SimState,
 } from "./domain";
 import { loadSimState, parseImportedSimState, SimSaveConflictError, SimSaveSession, SIM_STORAGE_KEY } from "./persistence";
@@ -15,17 +15,21 @@ import { getBusinessClock } from "./businessTime";
 import { BusinessClockDriver, isBusinessTimeRunning } from "./businessClockDriver";
 import { cashRegisterMarkup } from "./cashRegister";
 import { CashRegisterController } from "./cashRegisterController";
+import { LayoutEditor } from "./layoutEditor";
+import { DevelopmentPanel } from "./developmentPanel";
+import { shopRenovationReason } from "./shopDevelopment";
 import { STREET_VENUES, getStreetProgress, getVenueProgress } from "./progression";
 import { PRODUCT_ASSETS, PRODUCT_CATEGORIES, type ProductCategoryId } from "./product-library/catalog";
 import type { PointerMode } from "./pointerAccess";
 import "./styles.css";
 import "./cashRegister.css";
 import "./businessTime.css";
+import "./developmentPanel.css";
 
 type ScreenMode = "loading" | "start" | "playing" | "paused" | "inspecting" | "cashier" | "readonly" | "error";
-type ManagementSection = "supply" | "day" | "upgrade" | "street";
+type ManagementSection = "supply" | "day" | "upgrade" | "development" | "layout" | "street";
 type StreetVenueId = (typeof STREET_VENUES)[number]["id"];
-const MANAGEMENT_SECTIONS: readonly ManagementSection[] = ["supply", "day", "upgrade", "street"];
+const MANAGEMENT_SECTIONS: readonly ManagementSection[] = ["supply", "day", "upgrade", "development", "layout", "street"];
 interface InteractionDecision {
   command?: SimCommand;
   message?: string;
@@ -177,6 +181,9 @@ export class App3D {
   private readonly events = new AbortController();
   private readonly shopAudio: ShopAudio;
   private readonly cashRegister: CashRegisterController;
+  private readonly layoutEditor: LayoutEditor;
+  private readonly developmentPanel: DevelopmentPanel;
+  private pendingLayoutExit: ManagementSection | "resume" | null = null;
   private audioForeground = true;
 
   constructor(root: HTMLElement) {
@@ -234,6 +241,14 @@ export class App3D {
       },
       speak: (clip, rate) => this.speak(clip, rate, undefined, true),
     }, this.events.signal);
+    this.layoutEditor = new LayoutEditor(this.el("s3-layout-editor"), {
+      onApply: (layout) => this.mode === "paused" && this.dispatch({ type: "APPLY_SHOP_LAYOUT", layout }),
+      onDirtyChange: (dirty) => { if (!dirty) this.cancelLayoutExit(false) },
+    });
+    this.developmentPanel = new DevelopmentPanel(this.el("s3-development-host"), {
+      onExpand: () => this.mode === "paused" && this.dispatch({ type: "BUY_SPACE_EXPANSION" }),
+      onLayout: () => this.showManagementSection("layout"),
+    });
     this.bindEvents();
     this.renderState();
     activeInstances.add(this);
@@ -266,6 +281,8 @@ export class App3D {
       this.state = snapshot.source === "new" && admitted
         ? { ...snapshot.state, customerSeed: createCustomerSeed() }
         : snapshot.state;
+      this.layoutEditor.setState(this.state.renovation.layout, { editable: false, resetDraft: true });
+      this.cancelLayoutExit(false);
       this.loadedSession = snapshot.source !== "new";
       this.loadWarning = snapshot.warning ?? "";
       this.writerWarning = admitted ? "" : "另一页面正在营业。此页面只读，不能修改进度或设置；关闭另一页面后，可以读取最新进度并接管。";
@@ -337,7 +354,7 @@ export class App3D {
   private renderShell(): void {
     this.root.innerHTML = `
       <main class="sim3d-app" aria-label="英语商业街 3D 小店">
-        <canvas id="s3-canvas" class="s3-canvas" tabindex="0" aria-label="第一人称小店与商业街：WASD 移动，按住 Shift 加速，鼠标观察，E 互动、签收与空箱回收，F 近看商品，G 放下货箱，M 商业街，Esc 暂停"></canvas>
+        <canvas id="s3-canvas" class="s3-canvas" tabindex="0" aria-label="第一人称小店与商业街：WASD 移动，按住 Shift 加速，鼠标观察，E 互动、签收与空箱回收，F 近看商品，G 放下货箱，P 装修，M 商业街，Esc 暂停"></canvas>
         <audio id="s3-word-audio" preload="none" hidden></audio>
         <div id="s3-hud" class="s3-hud" hidden>
           <div class="s3-top-left">
@@ -356,6 +373,7 @@ export class App3D {
               <button id="s3-open-supply" type="button">进货 <kbd>B</kbd></button>
               <button id="s3-open-day" type="button">营业 / 日结</button>
               <button id="s3-open-upgrade" type="button">扩容 <kbd>U</kbd></button>
+              <button id="s3-open-layout" type="button">装修 <kbd>P</kbd></button>
               <button id="s3-open-street" type="button">商业街 <kbd>M</kbd></button>
             </nav>
           </div>
@@ -439,10 +457,13 @@ export class App3D {
           <p class="s3-muted">这里会暂停营业，顾客会等你。返回后鼠标保持可点击；按 Tab 再切回自由转头。</p>
           <p id="s3-pause-alert" class="s3-pause-alert" role="alert" hidden></p>
           <p id="s3-pause-notice" class="s3-pause-notice" role="status" hidden></p>
+          <section id="s3-layout-exit-confirm" class="s3-confirm" aria-labelledby="s3-layout-exit-title" hidden><h3 id="s3-layout-exit-title">还有未应用的装修修改</h3><p>当前只是平面图草稿，尚未改变店内设备。可以继续装修并应用，或放弃草稿后离开。</p><div><button id="s3-layout-exit-keep" class="s3-primary-button" type="button">继续装修</button><button id="s3-layout-exit-discard" class="s3-secondary-button" type="button">放弃修改并离开</button></div></section>
           <nav class="s3-management-tabs" aria-label="经营管理分类">
             <button id="s3-tab-supply" type="button" aria-pressed="true">进货</button>
             <button id="s3-tab-day" type="button" aria-pressed="false">营业与日结</button>
             <button id="s3-tab-upgrade" type="button" aria-pressed="false">普通扩容</button>
+            <button id="s3-tab-development" type="button" aria-pressed="false">店铺成长</button>
+            <button id="s3-tab-layout" type="button" aria-pressed="false">自由装修</button>
             <button id="s3-tab-street" type="button" aria-pressed="false">商业街</button>
           </nav>
           <section id="s3-panel-supply" class="s3-management-panel" aria-labelledby="s3-supply-title">
@@ -478,7 +499,7 @@ export class App3D {
             <p id="s3-day-eyebrow" class="s3-eyebrow">TODAY AT THE CORNER SHOP</p><h3 id="s3-day-title">今天的小店</h3>
             <p id="s3-day-progress" class="s3-muted"></p>
             <p id="s3-day-clock" class="s3-day-clock"></p>
-            <dl class="s3-account-lines"><div><dt>今日营业收入</dt><dd id="s3-day-revenue"></dd></div><div><dt>已售商品成本</dt><dd id="s3-day-cogs"></dd></div><div class="s3-account-result"><dt>商品毛利</dt><dd id="s3-day-profit"></dd></div><div><dt>空箱回收收入</dt><dd id="s3-day-recycling"></dd></div><div><dt>今日进货支出</dt><dd id="s3-day-procurement"></dd></div><div><dt>今日扩容支出</dt><dd id="s3-day-investment"></dd></div><div><dt>当前剩余资金</dt><dd id="s3-day-cash"></dd></div><div><dt>未售商品 / 成本价值</dt><dd id="s3-day-inventory"></dd></div></dl>
+            <dl class="s3-account-lines"><div><dt>今日营业收入</dt><dd id="s3-day-revenue"></dd></div><div><dt>已售商品成本</dt><dd id="s3-day-cogs"></dd></div><div class="s3-account-result"><dt>商品毛利</dt><dd id="s3-day-profit"></dd></div><div><dt>空箱回收收入</dt><dd id="s3-day-recycling"></dd></div><div><dt>今日进货支出</dt><dd id="s3-day-procurement"></dd></div><div><dt>货架扩容支出</dt><dd id="s3-day-investment"></dd></div><div><dt>店面扩建支出</dt><dd id="s3-day-expansion"></dd></div><div><dt>当前剩余资金</dt><dd id="s3-day-cash"></dd></div><div><dt>未售商品 / 成本价值</dt><dd id="s3-day-inventory"></dd></div></dl>
             <p id="s3-day-recycling-count" class="s3-muted"></p>
             <p class="s3-muted">商品毛利 = 营业收入 − 已售商品成本。回收收入单独记账，投入时即入账，日结不再发一次。进货中尚未卖出的部分仍是存货；扩容是投资，不把钱包余额当利润。</p>
             <p id="s3-day-reason" class="s3-inline-reason" role="status"></p>
@@ -494,6 +515,8 @@ export class App3D {
             <p class="s3-muted">£8 一次性启用各商品陈列区的预留层位。只检查资金，不设英语等级门槛；不会凭空补货，也不是店面扩建。</p>
             <p id="s3-upgrade-status" class="s3-inline-reason" role="status"></p><button id="s3-upgrade" class="s3-primary-button" type="button">£8 · 扩充货架容量</button><span id="s3-upgrade-badge" class="s3-upgrade-badge">£8</span>
           </section>
+          <section id="s3-panel-development" class="s3-management-panel" aria-label="店铺成长与成就" hidden><div id="s3-development-host"></div></section>
+          <section id="s3-panel-layout" class="s3-management-panel" aria-label="自由装修" hidden><div id="s3-layout-editor"></div></section>
           <section id="s3-panel-street" class="s3-management-panel s3-street-panel" aria-labelledby="s3-street-title" hidden>
             <p class="s3-eyebrow">A LITTLE SHOP, A BIGGER STREET</p><h3 id="s3-street-title">从街角小店，走向整条街</h3>
             <p class="s3-muted">走出小店，看看街上的未来邻居。尚未满足等级与成就条件的店铺会显示“暂未开放”。</p>
@@ -509,7 +532,7 @@ export class App3D {
               </section>`).join("")}
             <p class="s3-street-walk-note">返回场景，沿店门前的人行道走近店铺门牌，按 E 也能查看这家店的条件。当前版本尚未开放这些店铺的内部经营。</p>
           </section>
-          <details class="s3-pause-section"><summary>看看怎么操作</summary><dl class="s3-controls-list"><div><dt>走动 / 观察</dt><dd><kbd>W A S D</kbd> / 鼠标</dd></div><div><dt>按住加速 / 松开恢复</dt><dd><kbd>Shift</kbd>（左右均可）</dd></div><div><dt>签收、拿箱、上架、扫描、收款</dt><dd><kbd>E</kbd></dd></div><div><dt>近看商品 / 返回</dt><dd><kbd>F</kbd></dd></div><div><dt>安全放下货箱 / 放回单品</dt><dd><kbd>G</kbd></dd></div><div><dt>切换可点击鼠标 / 转头</dt><dd><kbd>Tab</kbd></dd></div><div><dt>重听顾客</dt><dd><kbd>R</kbd></dd></div><div><dt>进货 / 普通扩容 / 商业街</dt><dd><kbd>B</kbd> / <kbd>U</kbd> / <kbd>M</kbd></dd></div><div><dt>暂停与管理</dt><dd><kbd>Esc</kbd></dd></div><div><dt>视角备用按键</dt><dd><kbd>I J K L</kbd></dd></div></dl><p class="s3-muted">先看向物品并走近，再按键操作。也可以释放鼠标后点击底部操作按钮；按钮不会隔空签收、拿货或上架。浏览器不允许锁定鼠标时，可按住画面左键拖动视角。</p></details>
+          <details class="s3-pause-section"><summary>看看怎么操作</summary><dl class="s3-controls-list"><div><dt>走动 / 观察</dt><dd><kbd>W A S D</kbd> / 鼠标</dd></div><div><dt>按住加速 / 松开恢复</dt><dd><kbd>Shift</kbd>（左右均可）</dd></div><div><dt>签收、拿箱、上架、扫描、收款</dt><dd><kbd>E</kbd></dd></div><div><dt>近看商品 / 返回</dt><dd><kbd>F</kbd></dd></div><div><dt>安全放下货箱 / 放回单品</dt><dd><kbd>G</kbd></dd></div><div><dt>切换可点击鼠标 / 转头</dt><dd><kbd>Tab</kbd></dd></div><div><dt>重听顾客</dt><dd><kbd>R</kbd></dd></div><div><dt>进货 / 普通扩容 / 商业街</dt><dd><kbd>B</kbd> / <kbd>U</kbd> / <kbd>M</kbd></dd></div><div><dt>自由装修 / 布局中旋转</dt><dd><kbd>P</kbd> / <kbd>R</kbd></dd></div><div><dt>暂停与管理</dt><dd><kbd>Esc</kbd></dd></div><div><dt>视角备用按键</dt><dd><kbd>I J K L</kbd></dd></div></dl><p class="s3-muted">先看向物品并走近，再按键操作。也可以释放鼠标后点击底部操作按钮；按钮不会隔空签收、拿货或上架。浏览器不允许锁定鼠标时，可按住画面左键拖动视角。</p></details>
           <details class="s3-pause-section"><summary>画面与操作</summary><div class="s3-settings-grid">
             <label for="s3-sensitivity">鼠标灵敏度 <output id="s3-sensitivity-value">1.0</output></label><input id="s3-sensitivity" type="range" min="0.3" max="2" step="0.1" value="1">
             <label for="s3-quality">画质</label><select id="s3-quality"><option value="standard">标准 · 优先细节</option><option value="low">流畅 · 降低渲染负担</option></select>
@@ -560,7 +583,16 @@ export class App3D {
     click("s3-open-supply", () => this.openManagement("supply"));
     click("s3-open-day", () => this.openManagement("day"));
     click("s3-open-upgrade", () => this.openManagement("upgrade"));
+    click("s3-open-layout", () => this.openManagement("layout"));
     click("s3-open-street", () => this.openManagement("street"));
+    click("s3-layout-exit-keep", () => this.cancelLayoutExit(true));
+    click("s3-layout-exit-discard", () => {
+      const destination = this.pendingLayoutExit;
+      this.layoutEditor.discard();
+      this.cancelLayoutExit(false);
+      if (destination === "resume") this.resume(false);
+      else if (destination) this.showManagementSection(destination);
+    });
     for (const section of MANAGEMENT_SECTIONS) {
       click(`s3-tab-${section}`, () => this.showManagementSection(section));
     }
@@ -844,6 +876,12 @@ export class App3D {
   }
 
   private showManagementSection(section: ManagementSection): void {
+    if (section !== this.managementSection && this.layoutEditor.hasUnsavedChanges()) {
+      this.requestLayoutExit(section);
+      return;
+    }
+    this.cancelLayoutExit(false);
+    this.developmentPanel.cancelConfirmation();
     this.managementSection = section;
     this.closeConfirmation = false;
     for (const candidate of MANAGEMENT_SECTIONS) {
@@ -851,6 +889,18 @@ export class App3D {
       this.el(`s3-tab-${candidate}`).setAttribute("aria-pressed", String(candidate === section));
     }
     this.renderManagement();
+  }
+
+  private requestLayoutExit(destination: ManagementSection | "resume"): void {
+    this.pendingLayoutExit = destination;
+    this.el("s3-layout-exit-confirm").hidden = false;
+    this.el("s3-layout-exit-keep").focus();
+  }
+
+  private cancelLayoutExit(focusEditor: boolean): void {
+    this.pendingLayoutExit = null;
+    this.el("s3-layout-exit-confirm").hidden = true;
+    if (focusEditor) this.el("s3-layout-select").focus();
   }
 
   private cancelCloseConfirmation(): void {
@@ -890,6 +940,12 @@ export class App3D {
 
   private resume(lockPointer: boolean): void {
     if (this.mode !== "paused") return;
+    if (this.pendingLayoutExit) { this.cancelLayoutExit(true); return }
+    if (!this.el("s3-extension-confirm").hidden) {
+      this.developmentPanel.cancelConfirmation();
+      this.el("s3-buy-space").focus();
+      return;
+    }
     if (this.closeConfirmation) { this.cancelCloseConfirmation(); return }
     if (!this.el("s3-import-confirm").hidden) { this.cancelImport(); this.el("s3-resume").focus(); return }
     if (!this.el("s3-restart-confirm").hidden) {
@@ -897,6 +953,7 @@ export class App3D {
       this.el("s3-resume").focus();
       return;
     }
+    if (this.layoutEditor.hasUnsavedChanges()) { this.requestLayoutExit("resume"); return }
     try { this.saveSession?.assertCurrent() }
     catch (error) { this.enterReadOnly(error instanceof Error ? error.message : "存档写入权限不可用。"); return }
     this.el<HTMLDialogElement>("s3-pause").close();
@@ -926,9 +983,9 @@ export class App3D {
         this.world?.setCursorFree(this.pointerMode === "locked");
         return;
       }
-      if (event.code === "KeyB" || event.code === "KeyU" || event.code === "KeyM") {
+      if (event.code === "KeyB" || event.code === "KeyU" || event.code === "KeyM" || event.code === "KeyP") {
         event.preventDefault(); event.stopImmediatePropagation();
-        this.openManagement(event.code === "KeyB" ? "supply" : event.code === "KeyU" ? "upgrade" : "street");
+        this.openManagement(event.code === "KeyB" ? "supply" : event.code === "KeyU" ? "upgrade" : event.code === "KeyP" ? "layout" : "street");
         return;
       }
       if (event.code === "KeyR") {
@@ -951,11 +1008,15 @@ export class App3D {
       if (!this.saveSession.canWrite) return false;
       this.capturePose();
       const result = reduceSim(this.state, command);
+      const renovation = command.type === "APPLY_SHOP_LAYOUT" || command.type === "BUY_SPACE_EXPANSION";
+      // Keep the draft and the existing room until the entire proposed snapshot
+      // is safely stored. A quota failure must not clear the editor or spend cash.
+      if (result.changed && renovation && !this.persist(result.state)) return false;
       this.state = result.state;
       if (result.changed) {
         if (command.type === "OPEN_STORE") this.businessClock.resume(performance.now());
         if (command.type === "CLOSE_STORE" || command.type === "START_NEXT_DAY") this.businessClock.reset();
-        this.persist();
+        if (!renovation) this.persist();
         if (!this.saveSession.canWrite) return false;
         this.world?.setState(this.state);
         this.renderState();
@@ -1004,18 +1065,21 @@ export class App3D {
     this.persist();
   }
 
-  private persist(): void {
-    if (!this.saveSession?.canWrite) return;
+  private persist(snapshot = this.state): boolean {
+    if (!this.saveSession?.canWrite) return false;
+    let saved = false;
     try {
-      this.saveSession.save(this.state);
+      this.saveSession.save(snapshot);
       this.saveError = "";
       this.lastSaveText = `已保存 ${new Date().toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" })}`;
+      saved = true;
     } catch (error) {
-      if (error instanceof SimSaveConflictError) { this.enterReadOnly(error.message); return }
+      if (error instanceof SimSaveConflictError) { this.enterReadOnly(error.message); return false }
       this.saveError = "本次进度尚未保存：浏览器空间或权限不足。请暂停并下载存档备份，勿直接关闭页面。";
       this.lastSaveText = "尚未保存";
     }
     this.renderSaveStatus();
+    return saved;
   }
 
   /** Only time is updated on routine frames; full world/ledger work stays at save and action boundaries. */
@@ -1143,6 +1207,8 @@ export class App3D {
     const delivery = getDeliverySummary(this.state);
     this.el("s3-pause").classList.toggle("s3-pause-street", this.managementSection === "street");
     this.el("s3-pause").classList.toggle("s3-pause-supply", this.managementSection === "supply");
+    this.el("s3-pause").classList.toggle("s3-pause-development", this.managementSection === "development");
+    this.el("s3-pause").classList.toggle("s3-pause-layout", this.managementSection === "layout");
     for (const candidate of MANAGEMENT_SECTIONS) {
       this.el(`s3-panel-${candidate}`).hidden = candidate !== this.managementSection;
     }
@@ -1150,7 +1216,7 @@ export class App3D {
     this.text("s3-day-title", `第 ${day.dayNumber} 天${this.state.day.phase === "settled" ? " · 日结完成" : " · 营业账本"}`);
     this.text("s3-day-progress", `已收款 ${day.paidCustomers} 单 · 开始时资金 ${money(day.openingCashPence)}`);
     this.renderBusinessClock();
-    for (const [suffix, value] of [["revenue", day.revenuePence], ["cogs", day.costOfGoodsPence], ["profit", day.grossProfitPence], ["recycling", day.recyclingIncomePence], ["procurement", day.procurementPence], ["investment", day.upgradeSpendPence], ["cash", day.closingCashPence]] as const) {
+    for (const [suffix, value] of [["revenue", day.revenuePence], ["cogs", day.costOfGoodsPence], ["profit", day.grossProfitPence], ["recycling", day.recyclingIncomePence], ["procurement", day.procurementPence], ["investment", day.upgradeSpendPence], ["expansion", day.expansionSpendPence], ["cash", day.closingCashPence]] as const) {
       this.text(`s3-day-${suffix}`, money(value));
     }
     const recycling = getRecyclingSummary(this.state);
@@ -1184,6 +1250,13 @@ export class App3D {
     this.el("s3-open-upgrade").setAttribute("aria-label", this.state.upgraded ? "货架已扩容，查看详情 U" : availableUpgrade ? "资金足够，查看扩容 U" : "查看扩容条件 U");
     this.el("s3-open-day").classList.toggle("s3-upgrade-ready", canSettle);
     this.renderStreet();
+    this.developmentPanel.render(this.state, writable && this.mode === "paused");
+    const reason = !writable ? "此页面只读，不能修改设备布局。" : shopRenovationReason(this.state);
+    this.layoutEditor.setState(this.state.renovation.layout, {
+      editable: writable && this.mode === "paused" && !reason,
+      reason,
+      obstacles: getShopLayoutObstacles(this.state),
+    });
   }
 
   private renderSupply(): void {
@@ -1796,6 +1869,8 @@ export class App3D {
       return;
     }
     this.state = fresh;
+    this.layoutEditor.setState(fresh.renovation.layout, { editable: false, resetDraft: true });
+    this.cancelLayoutExit(false);
     this.purchaseQuantities.clear();
     this.purchaseOrderId = "";
     this.loadedSession = false;
@@ -1838,6 +1913,8 @@ export class App3D {
     if (this.statusTimer) clearTimeout(this.statusTimer);
     this.stopSpeech();
     this.shopAudio.dispose();
+    this.layoutEditor.dispose();
+    this.developmentPanel.dispose();
     this.releasePointer();
     this.world?.dispose();
     this.world = null;

@@ -49,6 +49,26 @@ const doubles = vi.hoisted(() => {
 
 vi.mock("../../src/sim3d/world", () => ({ ShopWorld: doubles.World }));
 vi.mock("../../src/sim3d/shopAudio", () => ({ ShopAudio: doubles.ShopAudio }));
+// The SVG editor and growth panel have their own real-browser coverage. These
+// startup tests keep their existing minimal DOM and isolate widget rendering.
+vi.mock("../../src/sim3d/layoutEditor", () => ({
+  LayoutEditor: class {
+    readonly setState = vi.fn();
+    readonly hasUnsavedChanges = vi.fn(() => false);
+    readonly discard = vi.fn();
+    readonly dispose = vi.fn();
+  },
+}));
+vi.mock("../../src/sim3d/developmentPanel", () => ({
+  DevelopmentPanel: class {
+    readonly render = vi.fn();
+    readonly dispose = vi.fn();
+    constructor(private readonly host: HTMLElement) {
+      host.innerHTML = '<section id="s3-extension-confirm" hidden></section>';
+    }
+    cancelConfirmation(): void { this.host.querySelector<HTMLElement>("#s3-extension-confirm")!.hidden = true }
+  },
+}));
 import { App3D } from "../../src/sim3d/App3D";
 
 class MemoryStorage implements StorageLike {
@@ -119,7 +139,11 @@ class ElementDouble extends EventTarget {
       this.elements.set(match[2]!, element);
     }
   }
-  querySelector(selector: string): ElementDouble | null { return this.elements.get(selector.slice(1)) ?? null }
+  querySelector(selector: string): ElementDouble | null {
+    return this.elements.get(selector.slice(1))
+      ?? [...this.elements.values()].map((element) => element.querySelector(selector)).find((element) => element !== null)
+      ?? null;
+  }
   querySelectorAll(): ElementDouble[] { return [] }
   setAttribute(name: string, value: string): void { this.attributes.set(name, value) }
   getAttribute(name: string): string | null { return this.attributes.get(name) ?? null }
@@ -615,7 +639,7 @@ describe("cursor access and directly reachable business panels", () => {
     expect(view.world.requestPointerLock).toHaveBeenCalledOnce();
   });
 
-  it.each([["KeyB", "supply"], ["KeyU", "upgrade"], ["KeyM", "street"]] as const)("opens %s directly and returns with clickable pointer", async (code, section) => {
+  it.each([["KeyB", "supply"], ["KeyU", "upgrade"], ["KeyM", "street"], ["KeyP", "layout"]] as const)("opens %s directly and returns with clickable pointer", async (code, section) => {
     const view = await readyGame();
     view.world.callbacks.onPointerMode?.("locked");
     expect(key(code).defaultPrevented).toBe(true);

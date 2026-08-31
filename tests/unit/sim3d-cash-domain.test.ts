@@ -86,7 +86,7 @@ function finishCash(state: SimState, selection?: number[]): SimState {
 describe("cash payment domain lifecycle and atomic settlement", () => {
   it("freezes the method on entry while keeping the original shopping list, models and inventory choice independent", () => {
     let state = stocked();
-    expect(state.schemaVersion).toBe(9);
+    expect(state.schemaVersion).toBe(10);
     expect(state.payment).toBeNull();
     state = act(state, { type: "OPEN_STORE" });
     expect(state.payment).toEqual({ method: "card" });
