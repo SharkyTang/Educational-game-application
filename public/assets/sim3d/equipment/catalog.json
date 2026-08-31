@@ -1,0 +1,5114 @@
+{
+  "version": "corner-shop-equipment@1.0.0",
+  "units": "metres",
+  "origin": "bottom-centre",
+  "front": "-Z",
+  "source": "Project-authored procedural Babylon.js geometry and original equipment signage.",
+  "integrationNote": "Art assets only. No equipment purchase, stock capacity, self-checkout automation, refrigeration or saved layout is activated by this library.",
+  "capacityNote": "Each capacity is the count of labelled standard display envelopes, not litres, warehouse stock, customer throughput or guaranteed fit for every product. Match maxSize and mount before placing a product.",
+  "factory": "src/sim3d/equipment-library/index.ts#createEquipmentAsset",
+  "categories": [
+    {
+      "id": "checkout",
+      "nameZh": "自助收银台",
+      "nameEn": "Self-checkout"
+    },
+    {
+      "id": "refrigeration",
+      "nameZh": "横式冷柜",
+      "nameEn": "Refrigerated cases"
+    },
+    {
+      "id": "display",
+      "nameZh": "货架与陈列柜",
+      "nameEn": "Shelves & displays"
+    }
+  ],
+  "equipment": [
+    {
+      "nameZh": "紧凑自助收银台",
+      "nameEn": "Compact self-checkout",
+      "category": "checkout",
+      "size": [
+        1.04,
+        1.63,
+        0.82
+      ],
+      "description": "立式触屏、扫码窗、支付终端、小票口与右侧商品暂存台。",
+      "style": "小店紧凑型 · 鼠尾草绿与象牙白",
+      "capacityLabel": "台面暂存位",
+      "placementSlots": [
+        {
+          "id": "slot-01",
+          "position": [
+            0.32,
+            0.87,
+            -0.105
+          ],
+          "maxSize": [
+            0.28,
+            0.3,
+            0.19
+          ],
+          "rotationY": 0,
+          "mount": "bagging"
+        },
+        {
+          "id": "slot-02",
+          "position": [
+            0.32,
+            0.87,
+            0.105
+          ],
+          "maxSize": [
+            0.28,
+            0.3,
+            0.19
+          ],
+          "rotationY": 0,
+          "mount": "bagging"
+        }
+      ],
+      "recommendedProducts": [
+        "milk",
+        "cola",
+        "apple"
+      ],
+      "suggestedFrontClearance": 1.05,
+      "id": "self-checkout-compact",
+      "capacity": 2,
+      "modelReady": true,
+      "gameplay": "library-only",
+      "modelUrl": "/assets/sim3d/equipment/self-checkout-compact.glb",
+      "thumbnailUrl": "/assets/sim3d/equipment/self-checkout-compact.png",
+      "servicePoints": [
+        {
+          "id": "front",
+          "role": "customer",
+          "position": [
+            0,
+            0,
+            -1.06
+          ],
+          "facing": [
+            0,
+            0,
+            1
+          ]
+        }
+      ]
+    },
+    {
+      "nameZh": "宽台自助收银台",
+      "nameEn": "Self-checkout with bagging station",
+      "category": "checkout",
+      "size": [
+        1.64,
+        1.73,
+        0.96
+      ],
+      "description": "独立扫描台、加宽装袋区、触屏与状态灯，提供更宽的商品暂存面。",
+      "style": "超市宽台型 · 深绿金属",
+      "capacityLabel": "台面暂存位",
+      "placementSlots": [
+        {
+          "id": "slot-01",
+          "position": [
+            0.26749999999999996,
+            0.86,
+            -0.125
+          ],
+          "maxSize": [
+            0.29,
+            0.3,
+            0.22
+          ],
+          "rotationY": 0,
+          "mount": "bagging"
+        },
+        {
+          "id": "slot-02",
+          "position": [
+            0.5925,
+            0.86,
+            -0.125
+          ],
+          "maxSize": [
+            0.29,
+            0.3,
+            0.22
+          ],
+          "rotationY": 0,
+          "mount": "bagging"
+        },
+        {
+          "id": "slot-03",
+          "position": [
+            0.26749999999999996,
+            0.86,
+            0.125
+          ],
+          "maxSize": [
+            0.29,
+            0.3,
+            0.22
+          ],
+          "rotationY": 0,
+          "mount": "bagging"
+        },
+        {
+          "id": "slot-04",
+          "position": [
+            0.5925,
+            0.86,
+            0.125
+          ],
+          "maxSize": [
+            0.29,
+            0.3,
+            0.22
+          ],
+          "rotationY": 0,
+          "mount": "bagging"
+        }
+      ],
+      "recommendedProducts": [
+        "milk",
+        "crisps",
+        "apple"
+      ],
+      "suggestedFrontClearance": 1.2,
+      "id": "self-checkout-bagging",
+      "capacity": 4,
+      "modelReady": true,
+      "gameplay": "library-only",
+      "modelUrl": "/assets/sim3d/equipment/self-checkout-bagging.glb",
+      "thumbnailUrl": "/assets/sim3d/equipment/self-checkout-bagging.png",
+      "servicePoints": [
+        {
+          "id": "front",
+          "role": "customer",
+          "position": [
+            0,
+            0,
+            -1.13
+          ],
+          "facing": [
+            0,
+            0,
+            1
+          ]
+        }
+      ]
+    },
+    {
+      "nameZh": "双层横式冷柜 · 24位",
+      "nameEn": "Compact chest chiller",
+      "category": "refrigeration",
+      "size": [
+        1.3,
+        1,
+        0.9
+      ],
+      "description": "横向玻璃滑盖、双层分格篮与前置散热格栅，适合小店冷藏区。",
+      "style": "紧凑滑盖型",
+      "capacityLabel": "商品陈列位",
+      "placementSlots": [
+        {
+          "id": "slot-01",
+          "position": [
+            -0.39,
+            0.26,
+            -0.22
+          ],
+          "maxSize": [
+            0.23,
+            0.25,
+            0.19
+          ],
+          "rotationY": 0,
+          "mount": "basket"
+        },
+        {
+          "id": "slot-02",
+          "position": [
+            -0.13,
+            0.26,
+            -0.22
+          ],
+          "maxSize": [
+            0.23,
+            0.25,
+            0.19
+          ],
+          "rotationY": 0,
+          "mount": "basket"
+        },
+        {
+          "id": "slot-03",
+          "position": [
+            0.13,
+            0.26,
+            -0.22
+          ],
+          "maxSize": [
+            0.23,
+            0.25,
+            0.19
+          ],
+          "rotationY": 0,
+          "mount": "basket"
+        },
+        {
+          "id": "slot-04",
+          "position": [
+            0.39,
+            0.26,
+            -0.22
+          ],
+          "maxSize": [
+            0.23,
+            0.25,
+            0.19
+          ],
+          "rotationY": 0,
+          "mount": "basket"
+        },
+        {
+          "id": "slot-05",
+          "position": [
+            -0.39,
+            0.26,
+            0
+          ],
+          "maxSize": [
+            0.23,
+            0.25,
+            0.19
+          ],
+          "rotationY": 0,
+          "mount": "basket"
+        },
+        {
+          "id": "slot-06",
+          "position": [
+            -0.13,
+            0.26,
+            0
+          ],
+          "maxSize": [
+            0.23,
+            0.25,
+            0.19
+          ],
+          "rotationY": 0,
+          "mount": "basket"
+        },
+        {
+          "id": "slot-07",
+          "position": [
+            0.13,
+            0.26,
+            0
+          ],
+          "maxSize": [
+            0.23,
+            0.25,
+            0.19
+          ],
+          "rotationY": 0,
+          "mount": "basket"
+        },
+        {
+          "id": "slot-08",
+          "position": [
+            0.39,
+            0.26,
+            0
+          ],
+          "maxSize": [
+            0.23,
+            0.25,
+            0.19
+          ],
+          "rotationY": 0,
+          "mount": "basket"
+        },
+        {
+          "id": "slot-09",
+          "position": [
+            -0.39,
+            0.26,
+            0.22
+          ],
+          "maxSize": [
+            0.23,
+            0.25,
+            0.19
+          ],
+          "rotationY": 0,
+          "mount": "basket"
+        },
+        {
+          "id": "slot-10",
+          "position": [
+            -0.13,
+            0.26,
+            0.22
+          ],
+          "maxSize": [
+            0.23,
+            0.25,
+            0.19
+          ],
+          "rotationY": 0,
+          "mount": "basket"
+        },
+        {
+          "id": "slot-11",
+          "position": [
+            0.13,
+            0.26,
+            0.22
+          ],
+          "maxSize": [
+            0.23,
+            0.25,
+            0.19
+          ],
+          "rotationY": 0,
+          "mount": "basket"
+        },
+        {
+          "id": "slot-12",
+          "position": [
+            0.39,
+            0.26,
+            0.22
+          ],
+          "maxSize": [
+            0.23,
+            0.25,
+            0.19
+          ],
+          "rotationY": 0,
+          "mount": "basket"
+        },
+        {
+          "id": "slot-13",
+          "position": [
+            -0.39,
+            0.57,
+            -0.22
+          ],
+          "maxSize": [
+            0.23,
+            0.25,
+            0.19
+          ],
+          "rotationY": 0,
+          "mount": "basket"
+        },
+        {
+          "id": "slot-14",
+          "position": [
+            -0.13,
+            0.57,
+            -0.22
+          ],
+          "maxSize": [
+            0.23,
+            0.25,
+            0.19
+          ],
+          "rotationY": 0,
+          "mount": "basket"
+        },
+        {
+          "id": "slot-15",
+          "position": [
+            0.13,
+            0.57,
+            -0.22
+          ],
+          "maxSize": [
+            0.23,
+            0.25,
+            0.19
+          ],
+          "rotationY": 0,
+          "mount": "basket"
+        },
+        {
+          "id": "slot-16",
+          "position": [
+            0.39,
+            0.57,
+            -0.22
+          ],
+          "maxSize": [
+            0.23,
+            0.25,
+            0.19
+          ],
+          "rotationY": 0,
+          "mount": "basket"
+        },
+        {
+          "id": "slot-17",
+          "position": [
+            -0.39,
+            0.57,
+            0
+          ],
+          "maxSize": [
+            0.23,
+            0.25,
+            0.19
+          ],
+          "rotationY": 0,
+          "mount": "basket"
+        },
+        {
+          "id": "slot-18",
+          "position": [
+            -0.13,
+            0.57,
+            0
+          ],
+          "maxSize": [
+            0.23,
+            0.25,
+            0.19
+          ],
+          "rotationY": 0,
+          "mount": "basket"
+        },
+        {
+          "id": "slot-19",
+          "position": [
+            0.13,
+            0.57,
+            0
+          ],
+          "maxSize": [
+            0.23,
+            0.25,
+            0.19
+          ],
+          "rotationY": 0,
+          "mount": "basket"
+        },
+        {
+          "id": "slot-20",
+          "position": [
+            0.39,
+            0.57,
+            0
+          ],
+          "maxSize": [
+            0.23,
+            0.25,
+            0.19
+          ],
+          "rotationY": 0,
+          "mount": "basket"
+        },
+        {
+          "id": "slot-21",
+          "position": [
+            -0.39,
+            0.57,
+            0.22
+          ],
+          "maxSize": [
+            0.23,
+            0.25,
+            0.19
+          ],
+          "rotationY": 0,
+          "mount": "basket"
+        },
+        {
+          "id": "slot-22",
+          "position": [
+            -0.13,
+            0.57,
+            0.22
+          ],
+          "maxSize": [
+            0.23,
+            0.25,
+            0.19
+          ],
+          "rotationY": 0,
+          "mount": "basket"
+        },
+        {
+          "id": "slot-23",
+          "position": [
+            0.13,
+            0.57,
+            0.22
+          ],
+          "maxSize": [
+            0.23,
+            0.25,
+            0.19
+          ],
+          "rotationY": 0,
+          "mount": "basket"
+        },
+        {
+          "id": "slot-24",
+          "position": [
+            0.39,
+            0.57,
+            0.22
+          ],
+          "maxSize": [
+            0.23,
+            0.25,
+            0.19
+          ],
+          "rotationY": 0,
+          "mount": "basket"
+        }
+      ],
+      "recommendedProducts": [
+        "milk",
+        "yoghurt",
+        "butter"
+      ],
+      "suggestedFrontClearance": 0.95,
+      "id": "chest-chiller-compact",
+      "capacity": 24,
+      "modelReady": true,
+      "gameplay": "library-only",
+      "modelUrl": "/assets/sim3d/equipment/chest-chiller-compact.glb",
+      "thumbnailUrl": "/assets/sim3d/equipment/chest-chiller-compact.png",
+      "servicePoints": [
+        {
+          "id": "front",
+          "role": "customer",
+          "position": [
+            0,
+            0,
+            -1.1
+          ],
+          "facing": [
+            0,
+            0,
+            1
+          ]
+        }
+      ]
+    },
+    {
+      "nameZh": "加宽横式冷柜 · 48位",
+      "nameEn": "Wide chest chiller",
+      "category": "refrigeration",
+      "size": [
+        1.96,
+        1.04,
+        1.04
+      ],
+      "description": "加宽双滑盖、双层分格篮、缓冲护条与独立压缩机检修面。",
+      "style": "大容量双滑盖型",
+      "capacityLabel": "商品陈列位",
+      "placementSlots": [
+        {
+          "id": "slot-01",
+          "position": [
+            -0.7000000000000001,
+            0.26,
+            -0.30000000000000004
+          ],
+          "maxSize": [
+            0.25,
+            0.27,
+            0.17
+          ],
+          "rotationY": 0,
+          "mount": "basket"
+        },
+        {
+          "id": "slot-02",
+          "position": [
+            -0.42,
+            0.26,
+            -0.30000000000000004
+          ],
+          "maxSize": [
+            0.25,
+            0.27,
+            0.17
+          ],
+          "rotationY": 0,
+          "mount": "basket"
+        },
+        {
+          "id": "slot-03",
+          "position": [
+            -0.13999999999999999,
+            0.26,
+            -0.30000000000000004
+          ],
+          "maxSize": [
+            0.25,
+            0.27,
+            0.17
+          ],
+          "rotationY": 0,
+          "mount": "basket"
+        },
+        {
+          "id": "slot-04",
+          "position": [
+            0.13999999999999999,
+            0.26,
+            -0.30000000000000004
+          ],
+          "maxSize": [
+            0.25,
+            0.27,
+            0.17
+          ],
+          "rotationY": 0,
+          "mount": "basket"
+        },
+        {
+          "id": "slot-05",
+          "position": [
+            0.42,
+            0.26,
+            -0.30000000000000004
+          ],
+          "maxSize": [
+            0.25,
+            0.27,
+            0.17
+          ],
+          "rotationY": 0,
+          "mount": "basket"
+        },
+        {
+          "id": "slot-06",
+          "position": [
+            0.7000000000000001,
+            0.26,
+            -0.30000000000000004
+          ],
+          "maxSize": [
+            0.25,
+            0.27,
+            0.17
+          ],
+          "rotationY": 0,
+          "mount": "basket"
+        },
+        {
+          "id": "slot-07",
+          "position": [
+            -0.7000000000000001,
+            0.26,
+            -0.1
+          ],
+          "maxSize": [
+            0.25,
+            0.27,
+            0.17
+          ],
+          "rotationY": 0,
+          "mount": "basket"
+        },
+        {
+          "id": "slot-08",
+          "position": [
+            -0.42,
+            0.26,
+            -0.1
+          ],
+          "maxSize": [
+            0.25,
+            0.27,
+            0.17
+          ],
+          "rotationY": 0,
+          "mount": "basket"
+        },
+        {
+          "id": "slot-09",
+          "position": [
+            -0.13999999999999999,
+            0.26,
+            -0.1
+          ],
+          "maxSize": [
+            0.25,
+            0.27,
+            0.17
+          ],
+          "rotationY": 0,
+          "mount": "basket"
+        },
+        {
+          "id": "slot-10",
+          "position": [
+            0.13999999999999999,
+            0.26,
+            -0.1
+          ],
+          "maxSize": [
+            0.25,
+            0.27,
+            0.17
+          ],
+          "rotationY": 0,
+          "mount": "basket"
+        },
+        {
+          "id": "slot-11",
+          "position": [
+            0.42,
+            0.26,
+            -0.1
+          ],
+          "maxSize": [
+            0.25,
+            0.27,
+            0.17
+          ],
+          "rotationY": 0,
+          "mount": "basket"
+        },
+        {
+          "id": "slot-12",
+          "position": [
+            0.7000000000000001,
+            0.26,
+            -0.1
+          ],
+          "maxSize": [
+            0.25,
+            0.27,
+            0.17
+          ],
+          "rotationY": 0,
+          "mount": "basket"
+        },
+        {
+          "id": "slot-13",
+          "position": [
+            -0.7000000000000001,
+            0.26,
+            0.1
+          ],
+          "maxSize": [
+            0.25,
+            0.27,
+            0.17
+          ],
+          "rotationY": 0,
+          "mount": "basket"
+        },
+        {
+          "id": "slot-14",
+          "position": [
+            -0.42,
+            0.26,
+            0.1
+          ],
+          "maxSize": [
+            0.25,
+            0.27,
+            0.17
+          ],
+          "rotationY": 0,
+          "mount": "basket"
+        },
+        {
+          "id": "slot-15",
+          "position": [
+            -0.13999999999999999,
+            0.26,
+            0.1
+          ],
+          "maxSize": [
+            0.25,
+            0.27,
+            0.17
+          ],
+          "rotationY": 0,
+          "mount": "basket"
+        },
+        {
+          "id": "slot-16",
+          "position": [
+            0.13999999999999999,
+            0.26,
+            0.1
+          ],
+          "maxSize": [
+            0.25,
+            0.27,
+            0.17
+          ],
+          "rotationY": 0,
+          "mount": "basket"
+        },
+        {
+          "id": "slot-17",
+          "position": [
+            0.42,
+            0.26,
+            0.1
+          ],
+          "maxSize": [
+            0.25,
+            0.27,
+            0.17
+          ],
+          "rotationY": 0,
+          "mount": "basket"
+        },
+        {
+          "id": "slot-18",
+          "position": [
+            0.7000000000000001,
+            0.26,
+            0.1
+          ],
+          "maxSize": [
+            0.25,
+            0.27,
+            0.17
+          ],
+          "rotationY": 0,
+          "mount": "basket"
+        },
+        {
+          "id": "slot-19",
+          "position": [
+            -0.7000000000000001,
+            0.26,
+            0.30000000000000004
+          ],
+          "maxSize": [
+            0.25,
+            0.27,
+            0.17
+          ],
+          "rotationY": 0,
+          "mount": "basket"
+        },
+        {
+          "id": "slot-20",
+          "position": [
+            -0.42,
+            0.26,
+            0.30000000000000004
+          ],
+          "maxSize": [
+            0.25,
+            0.27,
+            0.17
+          ],
+          "rotationY": 0,
+          "mount": "basket"
+        },
+        {
+          "id": "slot-21",
+          "position": [
+            -0.13999999999999999,
+            0.26,
+            0.30000000000000004
+          ],
+          "maxSize": [
+            0.25,
+            0.27,
+            0.17
+          ],
+          "rotationY": 0,
+          "mount": "basket"
+        },
+        {
+          "id": "slot-22",
+          "position": [
+            0.13999999999999999,
+            0.26,
+            0.30000000000000004
+          ],
+          "maxSize": [
+            0.25,
+            0.27,
+            0.17
+          ],
+          "rotationY": 0,
+          "mount": "basket"
+        },
+        {
+          "id": "slot-23",
+          "position": [
+            0.42,
+            0.26,
+            0.30000000000000004
+          ],
+          "maxSize": [
+            0.25,
+            0.27,
+            0.17
+          ],
+          "rotationY": 0,
+          "mount": "basket"
+        },
+        {
+          "id": "slot-24",
+          "position": [
+            0.7000000000000001,
+            0.26,
+            0.30000000000000004
+          ],
+          "maxSize": [
+            0.25,
+            0.27,
+            0.17
+          ],
+          "rotationY": 0,
+          "mount": "basket"
+        },
+        {
+          "id": "slot-25",
+          "position": [
+            -0.7000000000000001,
+            0.59,
+            -0.30000000000000004
+          ],
+          "maxSize": [
+            0.25,
+            0.27,
+            0.17
+          ],
+          "rotationY": 0,
+          "mount": "basket"
+        },
+        {
+          "id": "slot-26",
+          "position": [
+            -0.42,
+            0.59,
+            -0.30000000000000004
+          ],
+          "maxSize": [
+            0.25,
+            0.27,
+            0.17
+          ],
+          "rotationY": 0,
+          "mount": "basket"
+        },
+        {
+          "id": "slot-27",
+          "position": [
+            -0.13999999999999999,
+            0.59,
+            -0.30000000000000004
+          ],
+          "maxSize": [
+            0.25,
+            0.27,
+            0.17
+          ],
+          "rotationY": 0,
+          "mount": "basket"
+        },
+        {
+          "id": "slot-28",
+          "position": [
+            0.13999999999999999,
+            0.59,
+            -0.30000000000000004
+          ],
+          "maxSize": [
+            0.25,
+            0.27,
+            0.17
+          ],
+          "rotationY": 0,
+          "mount": "basket"
+        },
+        {
+          "id": "slot-29",
+          "position": [
+            0.42,
+            0.59,
+            -0.30000000000000004
+          ],
+          "maxSize": [
+            0.25,
+            0.27,
+            0.17
+          ],
+          "rotationY": 0,
+          "mount": "basket"
+        },
+        {
+          "id": "slot-30",
+          "position": [
+            0.7000000000000001,
+            0.59,
+            -0.30000000000000004
+          ],
+          "maxSize": [
+            0.25,
+            0.27,
+            0.17
+          ],
+          "rotationY": 0,
+          "mount": "basket"
+        },
+        {
+          "id": "slot-31",
+          "position": [
+            -0.7000000000000001,
+            0.59,
+            -0.1
+          ],
+          "maxSize": [
+            0.25,
+            0.27,
+            0.17
+          ],
+          "rotationY": 0,
+          "mount": "basket"
+        },
+        {
+          "id": "slot-32",
+          "position": [
+            -0.42,
+            0.59,
+            -0.1
+          ],
+          "maxSize": [
+            0.25,
+            0.27,
+            0.17
+          ],
+          "rotationY": 0,
+          "mount": "basket"
+        },
+        {
+          "id": "slot-33",
+          "position": [
+            -0.13999999999999999,
+            0.59,
+            -0.1
+          ],
+          "maxSize": [
+            0.25,
+            0.27,
+            0.17
+          ],
+          "rotationY": 0,
+          "mount": "basket"
+        },
+        {
+          "id": "slot-34",
+          "position": [
+            0.13999999999999999,
+            0.59,
+            -0.1
+          ],
+          "maxSize": [
+            0.25,
+            0.27,
+            0.17
+          ],
+          "rotationY": 0,
+          "mount": "basket"
+        },
+        {
+          "id": "slot-35",
+          "position": [
+            0.42,
+            0.59,
+            -0.1
+          ],
+          "maxSize": [
+            0.25,
+            0.27,
+            0.17
+          ],
+          "rotationY": 0,
+          "mount": "basket"
+        },
+        {
+          "id": "slot-36",
+          "position": [
+            0.7000000000000001,
+            0.59,
+            -0.1
+          ],
+          "maxSize": [
+            0.25,
+            0.27,
+            0.17
+          ],
+          "rotationY": 0,
+          "mount": "basket"
+        },
+        {
+          "id": "slot-37",
+          "position": [
+            -0.7000000000000001,
+            0.59,
+            0.1
+          ],
+          "maxSize": [
+            0.25,
+            0.27,
+            0.17
+          ],
+          "rotationY": 0,
+          "mount": "basket"
+        },
+        {
+          "id": "slot-38",
+          "position": [
+            -0.42,
+            0.59,
+            0.1
+          ],
+          "maxSize": [
+            0.25,
+            0.27,
+            0.17
+          ],
+          "rotationY": 0,
+          "mount": "basket"
+        },
+        {
+          "id": "slot-39",
+          "position": [
+            -0.13999999999999999,
+            0.59,
+            0.1
+          ],
+          "maxSize": [
+            0.25,
+            0.27,
+            0.17
+          ],
+          "rotationY": 0,
+          "mount": "basket"
+        },
+        {
+          "id": "slot-40",
+          "position": [
+            0.13999999999999999,
+            0.59,
+            0.1
+          ],
+          "maxSize": [
+            0.25,
+            0.27,
+            0.17
+          ],
+          "rotationY": 0,
+          "mount": "basket"
+        },
+        {
+          "id": "slot-41",
+          "position": [
+            0.42,
+            0.59,
+            0.1
+          ],
+          "maxSize": [
+            0.25,
+            0.27,
+            0.17
+          ],
+          "rotationY": 0,
+          "mount": "basket"
+        },
+        {
+          "id": "slot-42",
+          "position": [
+            0.7000000000000001,
+            0.59,
+            0.1
+          ],
+          "maxSize": [
+            0.25,
+            0.27,
+            0.17
+          ],
+          "rotationY": 0,
+          "mount": "basket"
+        },
+        {
+          "id": "slot-43",
+          "position": [
+            -0.7000000000000001,
+            0.59,
+            0.30000000000000004
+          ],
+          "maxSize": [
+            0.25,
+            0.27,
+            0.17
+          ],
+          "rotationY": 0,
+          "mount": "basket"
+        },
+        {
+          "id": "slot-44",
+          "position": [
+            -0.42,
+            0.59,
+            0.30000000000000004
+          ],
+          "maxSize": [
+            0.25,
+            0.27,
+            0.17
+          ],
+          "rotationY": 0,
+          "mount": "basket"
+        },
+        {
+          "id": "slot-45",
+          "position": [
+            -0.13999999999999999,
+            0.59,
+            0.30000000000000004
+          ],
+          "maxSize": [
+            0.25,
+            0.27,
+            0.17
+          ],
+          "rotationY": 0,
+          "mount": "basket"
+        },
+        {
+          "id": "slot-46",
+          "position": [
+            0.13999999999999999,
+            0.59,
+            0.30000000000000004
+          ],
+          "maxSize": [
+            0.25,
+            0.27,
+            0.17
+          ],
+          "rotationY": 0,
+          "mount": "basket"
+        },
+        {
+          "id": "slot-47",
+          "position": [
+            0.42,
+            0.59,
+            0.30000000000000004
+          ],
+          "maxSize": [
+            0.25,
+            0.27,
+            0.17
+          ],
+          "rotationY": 0,
+          "mount": "basket"
+        },
+        {
+          "id": "slot-48",
+          "position": [
+            0.7000000000000001,
+            0.59,
+            0.30000000000000004
+          ],
+          "maxSize": [
+            0.25,
+            0.27,
+            0.17
+          ],
+          "rotationY": 0,
+          "mount": "basket"
+        }
+      ],
+      "recommendedProducts": [
+        "milk",
+        "orange-juice",
+        "eggs"
+      ],
+      "suggestedFrontClearance": 1.05,
+      "id": "chest-chiller-wide",
+      "capacity": 48,
+      "modelReady": true,
+      "gameplay": "library-only",
+      "modelUrl": "/assets/sim3d/equipment/chest-chiller-wide.glb",
+      "thumbnailUrl": "/assets/sim3d/equipment/chest-chiller-wide.png",
+      "servicePoints": [
+        {
+          "id": "front",
+          "role": "customer",
+          "position": [
+            0,
+            0,
+            -1.17
+          ],
+          "facing": [
+            0,
+            0,
+            1
+          ]
+        }
+      ]
+    },
+    {
+      "nameZh": "岛式横柜 · 72位",
+      "nameEn": "Large island chiller",
+      "category": "refrigeration",
+      "size": [
+        2.82,
+        1.06,
+        1.08
+      ],
+      "description": "长岛式柜体、三段玻璃滑盖与双层分区篮，适合扩建后的冷藏陈列。",
+      "style": "超市岛式长柜",
+      "capacityLabel": "商品陈列位",
+      "placementSlots": [
+        {
+          "id": "slot-01",
+          "position": [
+            -1.12,
+            0.26,
+            -0.315
+          ],
+          "maxSize": [
+            0.25,
+            0.27,
+            0.18
+          ],
+          "rotationY": 0,
+          "mount": "basket"
+        },
+        {
+          "id": "slot-02",
+          "position": [
+            -0.8400000000000001,
+            0.26,
+            -0.315
+          ],
+          "maxSize": [
+            0.25,
+            0.27,
+            0.18
+          ],
+          "rotationY": 0,
+          "mount": "basket"
+        },
+        {
+          "id": "slot-03",
+          "position": [
+            -0.56,
+            0.26,
+            -0.315
+          ],
+          "maxSize": [
+            0.25,
+            0.27,
+            0.18
+          ],
+          "rotationY": 0,
+          "mount": "basket"
+        },
+        {
+          "id": "slot-04",
+          "position": [
+            -0.28,
+            0.26,
+            -0.315
+          ],
+          "maxSize": [
+            0.25,
+            0.27,
+            0.18
+          ],
+          "rotationY": 0,
+          "mount": "basket"
+        },
+        {
+          "id": "slot-05",
+          "position": [
+            0,
+            0.26,
+            -0.315
+          ],
+          "maxSize": [
+            0.25,
+            0.27,
+            0.18
+          ],
+          "rotationY": 0,
+          "mount": "basket"
+        },
+        {
+          "id": "slot-06",
+          "position": [
+            0.28,
+            0.26,
+            -0.315
+          ],
+          "maxSize": [
+            0.25,
+            0.27,
+            0.18
+          ],
+          "rotationY": 0,
+          "mount": "basket"
+        },
+        {
+          "id": "slot-07",
+          "position": [
+            0.56,
+            0.26,
+            -0.315
+          ],
+          "maxSize": [
+            0.25,
+            0.27,
+            0.18
+          ],
+          "rotationY": 0,
+          "mount": "basket"
+        },
+        {
+          "id": "slot-08",
+          "position": [
+            0.8400000000000001,
+            0.26,
+            -0.315
+          ],
+          "maxSize": [
+            0.25,
+            0.27,
+            0.18
+          ],
+          "rotationY": 0,
+          "mount": "basket"
+        },
+        {
+          "id": "slot-09",
+          "position": [
+            1.12,
+            0.26,
+            -0.315
+          ],
+          "maxSize": [
+            0.25,
+            0.27,
+            0.18
+          ],
+          "rotationY": 0,
+          "mount": "basket"
+        },
+        {
+          "id": "slot-10",
+          "position": [
+            -1.12,
+            0.26,
+            -0.105
+          ],
+          "maxSize": [
+            0.25,
+            0.27,
+            0.18
+          ],
+          "rotationY": 0,
+          "mount": "basket"
+        },
+        {
+          "id": "slot-11",
+          "position": [
+            -0.8400000000000001,
+            0.26,
+            -0.105
+          ],
+          "maxSize": [
+            0.25,
+            0.27,
+            0.18
+          ],
+          "rotationY": 0,
+          "mount": "basket"
+        },
+        {
+          "id": "slot-12",
+          "position": [
+            -0.56,
+            0.26,
+            -0.105
+          ],
+          "maxSize": [
+            0.25,
+            0.27,
+            0.18
+          ],
+          "rotationY": 0,
+          "mount": "basket"
+        },
+        {
+          "id": "slot-13",
+          "position": [
+            -0.28,
+            0.26,
+            -0.105
+          ],
+          "maxSize": [
+            0.25,
+            0.27,
+            0.18
+          ],
+          "rotationY": 0,
+          "mount": "basket"
+        },
+        {
+          "id": "slot-14",
+          "position": [
+            0,
+            0.26,
+            -0.105
+          ],
+          "maxSize": [
+            0.25,
+            0.27,
+            0.18
+          ],
+          "rotationY": 0,
+          "mount": "basket"
+        },
+        {
+          "id": "slot-15",
+          "position": [
+            0.28,
+            0.26,
+            -0.105
+          ],
+          "maxSize": [
+            0.25,
+            0.27,
+            0.18
+          ],
+          "rotationY": 0,
+          "mount": "basket"
+        },
+        {
+          "id": "slot-16",
+          "position": [
+            0.56,
+            0.26,
+            -0.105
+          ],
+          "maxSize": [
+            0.25,
+            0.27,
+            0.18
+          ],
+          "rotationY": 0,
+          "mount": "basket"
+        },
+        {
+          "id": "slot-17",
+          "position": [
+            0.8400000000000001,
+            0.26,
+            -0.105
+          ],
+          "maxSize": [
+            0.25,
+            0.27,
+            0.18
+          ],
+          "rotationY": 0,
+          "mount": "basket"
+        },
+        {
+          "id": "slot-18",
+          "position": [
+            1.12,
+            0.26,
+            -0.105
+          ],
+          "maxSize": [
+            0.25,
+            0.27,
+            0.18
+          ],
+          "rotationY": 0,
+          "mount": "basket"
+        },
+        {
+          "id": "slot-19",
+          "position": [
+            -1.12,
+            0.26,
+            0.105
+          ],
+          "maxSize": [
+            0.25,
+            0.27,
+            0.18
+          ],
+          "rotationY": 0,
+          "mount": "basket"
+        },
+        {
+          "id": "slot-20",
+          "position": [
+            -0.8400000000000001,
+            0.26,
+            0.105
+          ],
+          "maxSize": [
+            0.25,
+            0.27,
+            0.18
+          ],
+          "rotationY": 0,
+          "mount": "basket"
+        },
+        {
+          "id": "slot-21",
+          "position": [
+            -0.56,
+            0.26,
+            0.105
+          ],
+          "maxSize": [
+            0.25,
+            0.27,
+            0.18
+          ],
+          "rotationY": 0,
+          "mount": "basket"
+        },
+        {
+          "id": "slot-22",
+          "position": [
+            -0.28,
+            0.26,
+            0.105
+          ],
+          "maxSize": [
+            0.25,
+            0.27,
+            0.18
+          ],
+          "rotationY": 0,
+          "mount": "basket"
+        },
+        {
+          "id": "slot-23",
+          "position": [
+            0,
+            0.26,
+            0.105
+          ],
+          "maxSize": [
+            0.25,
+            0.27,
+            0.18
+          ],
+          "rotationY": 0,
+          "mount": "basket"
+        },
+        {
+          "id": "slot-24",
+          "position": [
+            0.28,
+            0.26,
+            0.105
+          ],
+          "maxSize": [
+            0.25,
+            0.27,
+            0.18
+          ],
+          "rotationY": 0,
+          "mount": "basket"
+        },
+        {
+          "id": "slot-25",
+          "position": [
+            0.56,
+            0.26,
+            0.105
+          ],
+          "maxSize": [
+            0.25,
+            0.27,
+            0.18
+          ],
+          "rotationY": 0,
+          "mount": "basket"
+        },
+        {
+          "id": "slot-26",
+          "position": [
+            0.8400000000000001,
+            0.26,
+            0.105
+          ],
+          "maxSize": [
+            0.25,
+            0.27,
+            0.18
+          ],
+          "rotationY": 0,
+          "mount": "basket"
+        },
+        {
+          "id": "slot-27",
+          "position": [
+            1.12,
+            0.26,
+            0.105
+          ],
+          "maxSize": [
+            0.25,
+            0.27,
+            0.18
+          ],
+          "rotationY": 0,
+          "mount": "basket"
+        },
+        {
+          "id": "slot-28",
+          "position": [
+            -1.12,
+            0.26,
+            0.315
+          ],
+          "maxSize": [
+            0.25,
+            0.27,
+            0.18
+          ],
+          "rotationY": 0,
+          "mount": "basket"
+        },
+        {
+          "id": "slot-29",
+          "position": [
+            -0.8400000000000001,
+            0.26,
+            0.315
+          ],
+          "maxSize": [
+            0.25,
+            0.27,
+            0.18
+          ],
+          "rotationY": 0,
+          "mount": "basket"
+        },
+        {
+          "id": "slot-30",
+          "position": [
+            -0.56,
+            0.26,
+            0.315
+          ],
+          "maxSize": [
+            0.25,
+            0.27,
+            0.18
+          ],
+          "rotationY": 0,
+          "mount": "basket"
+        },
+        {
+          "id": "slot-31",
+          "position": [
+            -0.28,
+            0.26,
+            0.315
+          ],
+          "maxSize": [
+            0.25,
+            0.27,
+            0.18
+          ],
+          "rotationY": 0,
+          "mount": "basket"
+        },
+        {
+          "id": "slot-32",
+          "position": [
+            0,
+            0.26,
+            0.315
+          ],
+          "maxSize": [
+            0.25,
+            0.27,
+            0.18
+          ],
+          "rotationY": 0,
+          "mount": "basket"
+        },
+        {
+          "id": "slot-33",
+          "position": [
+            0.28,
+            0.26,
+            0.315
+          ],
+          "maxSize": [
+            0.25,
+            0.27,
+            0.18
+          ],
+          "rotationY": 0,
+          "mount": "basket"
+        },
+        {
+          "id": "slot-34",
+          "position": [
+            0.56,
+            0.26,
+            0.315
+          ],
+          "maxSize": [
+            0.25,
+            0.27,
+            0.18
+          ],
+          "rotationY": 0,
+          "mount": "basket"
+        },
+        {
+          "id": "slot-35",
+          "position": [
+            0.8400000000000001,
+            0.26,
+            0.315
+          ],
+          "maxSize": [
+            0.25,
+            0.27,
+            0.18
+          ],
+          "rotationY": 0,
+          "mount": "basket"
+        },
+        {
+          "id": "slot-36",
+          "position": [
+            1.12,
+            0.26,
+            0.315
+          ],
+          "maxSize": [
+            0.25,
+            0.27,
+            0.18
+          ],
+          "rotationY": 0,
+          "mount": "basket"
+        },
+        {
+          "id": "slot-37",
+          "position": [
+            -1.12,
+            0.6,
+            -0.315
+          ],
+          "maxSize": [
+            0.25,
+            0.27,
+            0.18
+          ],
+          "rotationY": 0,
+          "mount": "basket"
+        },
+        {
+          "id": "slot-38",
+          "position": [
+            -0.8400000000000001,
+            0.6,
+            -0.315
+          ],
+          "maxSize": [
+            0.25,
+            0.27,
+            0.18
+          ],
+          "rotationY": 0,
+          "mount": "basket"
+        },
+        {
+          "id": "slot-39",
+          "position": [
+            -0.56,
+            0.6,
+            -0.315
+          ],
+          "maxSize": [
+            0.25,
+            0.27,
+            0.18
+          ],
+          "rotationY": 0,
+          "mount": "basket"
+        },
+        {
+          "id": "slot-40",
+          "position": [
+            -0.28,
+            0.6,
+            -0.315
+          ],
+          "maxSize": [
+            0.25,
+            0.27,
+            0.18
+          ],
+          "rotationY": 0,
+          "mount": "basket"
+        },
+        {
+          "id": "slot-41",
+          "position": [
+            0,
+            0.6,
+            -0.315
+          ],
+          "maxSize": [
+            0.25,
+            0.27,
+            0.18
+          ],
+          "rotationY": 0,
+          "mount": "basket"
+        },
+        {
+          "id": "slot-42",
+          "position": [
+            0.28,
+            0.6,
+            -0.315
+          ],
+          "maxSize": [
+            0.25,
+            0.27,
+            0.18
+          ],
+          "rotationY": 0,
+          "mount": "basket"
+        },
+        {
+          "id": "slot-43",
+          "position": [
+            0.56,
+            0.6,
+            -0.315
+          ],
+          "maxSize": [
+            0.25,
+            0.27,
+            0.18
+          ],
+          "rotationY": 0,
+          "mount": "basket"
+        },
+        {
+          "id": "slot-44",
+          "position": [
+            0.8400000000000001,
+            0.6,
+            -0.315
+          ],
+          "maxSize": [
+            0.25,
+            0.27,
+            0.18
+          ],
+          "rotationY": 0,
+          "mount": "basket"
+        },
+        {
+          "id": "slot-45",
+          "position": [
+            1.12,
+            0.6,
+            -0.315
+          ],
+          "maxSize": [
+            0.25,
+            0.27,
+            0.18
+          ],
+          "rotationY": 0,
+          "mount": "basket"
+        },
+        {
+          "id": "slot-46",
+          "position": [
+            -1.12,
+            0.6,
+            -0.105
+          ],
+          "maxSize": [
+            0.25,
+            0.27,
+            0.18
+          ],
+          "rotationY": 0,
+          "mount": "basket"
+        },
+        {
+          "id": "slot-47",
+          "position": [
+            -0.8400000000000001,
+            0.6,
+            -0.105
+          ],
+          "maxSize": [
+            0.25,
+            0.27,
+            0.18
+          ],
+          "rotationY": 0,
+          "mount": "basket"
+        },
+        {
+          "id": "slot-48",
+          "position": [
+            -0.56,
+            0.6,
+            -0.105
+          ],
+          "maxSize": [
+            0.25,
+            0.27,
+            0.18
+          ],
+          "rotationY": 0,
+          "mount": "basket"
+        },
+        {
+          "id": "slot-49",
+          "position": [
+            -0.28,
+            0.6,
+            -0.105
+          ],
+          "maxSize": [
+            0.25,
+            0.27,
+            0.18
+          ],
+          "rotationY": 0,
+          "mount": "basket"
+        },
+        {
+          "id": "slot-50",
+          "position": [
+            0,
+            0.6,
+            -0.105
+          ],
+          "maxSize": [
+            0.25,
+            0.27,
+            0.18
+          ],
+          "rotationY": 0,
+          "mount": "basket"
+        },
+        {
+          "id": "slot-51",
+          "position": [
+            0.28,
+            0.6,
+            -0.105
+          ],
+          "maxSize": [
+            0.25,
+            0.27,
+            0.18
+          ],
+          "rotationY": 0,
+          "mount": "basket"
+        },
+        {
+          "id": "slot-52",
+          "position": [
+            0.56,
+            0.6,
+            -0.105
+          ],
+          "maxSize": [
+            0.25,
+            0.27,
+            0.18
+          ],
+          "rotationY": 0,
+          "mount": "basket"
+        },
+        {
+          "id": "slot-53",
+          "position": [
+            0.8400000000000001,
+            0.6,
+            -0.105
+          ],
+          "maxSize": [
+            0.25,
+            0.27,
+            0.18
+          ],
+          "rotationY": 0,
+          "mount": "basket"
+        },
+        {
+          "id": "slot-54",
+          "position": [
+            1.12,
+            0.6,
+            -0.105
+          ],
+          "maxSize": [
+            0.25,
+            0.27,
+            0.18
+          ],
+          "rotationY": 0,
+          "mount": "basket"
+        },
+        {
+          "id": "slot-55",
+          "position": [
+            -1.12,
+            0.6,
+            0.105
+          ],
+          "maxSize": [
+            0.25,
+            0.27,
+            0.18
+          ],
+          "rotationY": 0,
+          "mount": "basket"
+        },
+        {
+          "id": "slot-56",
+          "position": [
+            -0.8400000000000001,
+            0.6,
+            0.105
+          ],
+          "maxSize": [
+            0.25,
+            0.27,
+            0.18
+          ],
+          "rotationY": 0,
+          "mount": "basket"
+        },
+        {
+          "id": "slot-57",
+          "position": [
+            -0.56,
+            0.6,
+            0.105
+          ],
+          "maxSize": [
+            0.25,
+            0.27,
+            0.18
+          ],
+          "rotationY": 0,
+          "mount": "basket"
+        },
+        {
+          "id": "slot-58",
+          "position": [
+            -0.28,
+            0.6,
+            0.105
+          ],
+          "maxSize": [
+            0.25,
+            0.27,
+            0.18
+          ],
+          "rotationY": 0,
+          "mount": "basket"
+        },
+        {
+          "id": "slot-59",
+          "position": [
+            0,
+            0.6,
+            0.105
+          ],
+          "maxSize": [
+            0.25,
+            0.27,
+            0.18
+          ],
+          "rotationY": 0,
+          "mount": "basket"
+        },
+        {
+          "id": "slot-60",
+          "position": [
+            0.28,
+            0.6,
+            0.105
+          ],
+          "maxSize": [
+            0.25,
+            0.27,
+            0.18
+          ],
+          "rotationY": 0,
+          "mount": "basket"
+        },
+        {
+          "id": "slot-61",
+          "position": [
+            0.56,
+            0.6,
+            0.105
+          ],
+          "maxSize": [
+            0.25,
+            0.27,
+            0.18
+          ],
+          "rotationY": 0,
+          "mount": "basket"
+        },
+        {
+          "id": "slot-62",
+          "position": [
+            0.8400000000000001,
+            0.6,
+            0.105
+          ],
+          "maxSize": [
+            0.25,
+            0.27,
+            0.18
+          ],
+          "rotationY": 0,
+          "mount": "basket"
+        },
+        {
+          "id": "slot-63",
+          "position": [
+            1.12,
+            0.6,
+            0.105
+          ],
+          "maxSize": [
+            0.25,
+            0.27,
+            0.18
+          ],
+          "rotationY": 0,
+          "mount": "basket"
+        },
+        {
+          "id": "slot-64",
+          "position": [
+            -1.12,
+            0.6,
+            0.315
+          ],
+          "maxSize": [
+            0.25,
+            0.27,
+            0.18
+          ],
+          "rotationY": 0,
+          "mount": "basket"
+        },
+        {
+          "id": "slot-65",
+          "position": [
+            -0.8400000000000001,
+            0.6,
+            0.315
+          ],
+          "maxSize": [
+            0.25,
+            0.27,
+            0.18
+          ],
+          "rotationY": 0,
+          "mount": "basket"
+        },
+        {
+          "id": "slot-66",
+          "position": [
+            -0.56,
+            0.6,
+            0.315
+          ],
+          "maxSize": [
+            0.25,
+            0.27,
+            0.18
+          ],
+          "rotationY": 0,
+          "mount": "basket"
+        },
+        {
+          "id": "slot-67",
+          "position": [
+            -0.28,
+            0.6,
+            0.315
+          ],
+          "maxSize": [
+            0.25,
+            0.27,
+            0.18
+          ],
+          "rotationY": 0,
+          "mount": "basket"
+        },
+        {
+          "id": "slot-68",
+          "position": [
+            0,
+            0.6,
+            0.315
+          ],
+          "maxSize": [
+            0.25,
+            0.27,
+            0.18
+          ],
+          "rotationY": 0,
+          "mount": "basket"
+        },
+        {
+          "id": "slot-69",
+          "position": [
+            0.28,
+            0.6,
+            0.315
+          ],
+          "maxSize": [
+            0.25,
+            0.27,
+            0.18
+          ],
+          "rotationY": 0,
+          "mount": "basket"
+        },
+        {
+          "id": "slot-70",
+          "position": [
+            0.56,
+            0.6,
+            0.315
+          ],
+          "maxSize": [
+            0.25,
+            0.27,
+            0.18
+          ],
+          "rotationY": 0,
+          "mount": "basket"
+        },
+        {
+          "id": "slot-71",
+          "position": [
+            0.8400000000000001,
+            0.6,
+            0.315
+          ],
+          "maxSize": [
+            0.25,
+            0.27,
+            0.18
+          ],
+          "rotationY": 0,
+          "mount": "basket"
+        },
+        {
+          "id": "slot-72",
+          "position": [
+            1.12,
+            0.6,
+            0.315
+          ],
+          "maxSize": [
+            0.25,
+            0.27,
+            0.18
+          ],
+          "rotationY": 0,
+          "mount": "basket"
+        }
+      ],
+      "recommendedProducts": [
+        "milk",
+        "cheese",
+        "water"
+      ],
+      "suggestedFrontClearance": 1.15,
+      "id": "island-chiller",
+      "capacity": 72,
+      "modelReady": true,
+      "gameplay": "library-only",
+      "modelUrl": "/assets/sim3d/equipment/island-chiller.glb",
+      "thumbnailUrl": "/assets/sim3d/equipment/island-chiller.png",
+      "servicePoints": [
+        {
+          "id": "front",
+          "role": "customer",
+          "position": [
+            0,
+            0,
+            -1.19
+          ],
+          "facing": [
+            0,
+            0,
+            1
+          ]
+        },
+        {
+          "id": "back",
+          "role": "customer",
+          "position": [
+            0,
+            0,
+            1.19
+          ],
+          "facing": [
+            0,
+            0,
+            -1
+          ]
+        }
+      ]
+    },
+    {
+      "nameZh": "窄款壁式货架 · 12位",
+      "nameEn": "Narrow wall shelf",
+      "category": "display",
+      "size": [
+        0.98,
+        1.92,
+        0.52
+      ],
+      "description": "四层浅壁架、侧立柱、价格条与可调层板孔，适合狭窄墙面。",
+      "style": "单面 · 窄款金属架",
+      "capacityLabel": "商品陈列位",
+      "placementSlots": [
+        {
+          "id": "slot-01",
+          "position": [
+            -0.26,
+            0.22,
+            -0.01
+          ],
+          "maxSize": [
+            0.23,
+            0.34,
+            0.36
+          ],
+          "rotationY": 0,
+          "mount": "shelf"
+        },
+        {
+          "id": "slot-02",
+          "position": [
+            0,
+            0.22,
+            -0.01
+          ],
+          "maxSize": [
+            0.23,
+            0.34,
+            0.36
+          ],
+          "rotationY": 0,
+          "mount": "shelf"
+        },
+        {
+          "id": "slot-03",
+          "position": [
+            0.26,
+            0.22,
+            -0.01
+          ],
+          "maxSize": [
+            0.23,
+            0.34,
+            0.36
+          ],
+          "rotationY": 0,
+          "mount": "shelf"
+        },
+        {
+          "id": "slot-04",
+          "position": [
+            -0.26,
+            0.62,
+            -0.01
+          ],
+          "maxSize": [
+            0.23,
+            0.34,
+            0.36
+          ],
+          "rotationY": 0,
+          "mount": "shelf"
+        },
+        {
+          "id": "slot-05",
+          "position": [
+            0,
+            0.62,
+            -0.01
+          ],
+          "maxSize": [
+            0.23,
+            0.34,
+            0.36
+          ],
+          "rotationY": 0,
+          "mount": "shelf"
+        },
+        {
+          "id": "slot-06",
+          "position": [
+            0.26,
+            0.62,
+            -0.01
+          ],
+          "maxSize": [
+            0.23,
+            0.34,
+            0.36
+          ],
+          "rotationY": 0,
+          "mount": "shelf"
+        },
+        {
+          "id": "slot-07",
+          "position": [
+            -0.26,
+            1.02,
+            -0.01
+          ],
+          "maxSize": [
+            0.23,
+            0.34,
+            0.36
+          ],
+          "rotationY": 0,
+          "mount": "shelf"
+        },
+        {
+          "id": "slot-08",
+          "position": [
+            0,
+            1.02,
+            -0.01
+          ],
+          "maxSize": [
+            0.23,
+            0.34,
+            0.36
+          ],
+          "rotationY": 0,
+          "mount": "shelf"
+        },
+        {
+          "id": "slot-09",
+          "position": [
+            0.26,
+            1.02,
+            -0.01
+          ],
+          "maxSize": [
+            0.23,
+            0.34,
+            0.36
+          ],
+          "rotationY": 0,
+          "mount": "shelf"
+        },
+        {
+          "id": "slot-10",
+          "position": [
+            -0.26,
+            1.42,
+            -0.01
+          ],
+          "maxSize": [
+            0.23,
+            0.34,
+            0.36
+          ],
+          "rotationY": 0,
+          "mount": "shelf"
+        },
+        {
+          "id": "slot-11",
+          "position": [
+            0,
+            1.42,
+            -0.01
+          ],
+          "maxSize": [
+            0.23,
+            0.34,
+            0.36
+          ],
+          "rotationY": 0,
+          "mount": "shelf"
+        },
+        {
+          "id": "slot-12",
+          "position": [
+            0.26,
+            1.42,
+            -0.01
+          ],
+          "maxSize": [
+            0.23,
+            0.34,
+            0.36
+          ],
+          "rotationY": 0,
+          "mount": "shelf"
+        }
+      ],
+      "recommendedProducts": [
+        "cereal",
+        "tea",
+        "shampoo"
+      ],
+      "suggestedFrontClearance": 0.9,
+      "id": "wall-shelf-narrow",
+      "capacity": 12,
+      "modelReady": true,
+      "gameplay": "library-only",
+      "modelUrl": "/assets/sim3d/equipment/wall-shelf-narrow.glb",
+      "thumbnailUrl": "/assets/sim3d/equipment/wall-shelf-narrow.png",
+      "servicePoints": [
+        {
+          "id": "front",
+          "role": "customer",
+          "position": [
+            0,
+            0,
+            -0.91
+          ],
+          "facing": [
+            0,
+            0,
+            1
+          ]
+        }
+      ]
+    },
+    {
+      "nameZh": "宽款壁式货架 · 24位",
+      "nameEn": "Wide wall shelf",
+      "category": "display",
+      "size": [
+        1.68,
+        2.1,
+        0.64
+      ],
+      "description": "四层加宽货架、加固背板和价签轨，适合粮食、冲饮与日用品。",
+      "style": "单面 · 加宽木金属架",
+      "capacityLabel": "商品陈列位",
+      "placementSlots": [
+        {
+          "id": "slot-01",
+          "position": [
+            -0.6,
+            0.22,
+            0
+          ],
+          "maxSize": [
+            0.22,
+            0.36,
+            0.46
+          ],
+          "rotationY": 0,
+          "mount": "shelf"
+        },
+        {
+          "id": "slot-02",
+          "position": [
+            -0.36000000000000004,
+            0.22,
+            0
+          ],
+          "maxSize": [
+            0.22,
+            0.36,
+            0.46
+          ],
+          "rotationY": 0,
+          "mount": "shelf"
+        },
+        {
+          "id": "slot-03",
+          "position": [
+            -0.12,
+            0.22,
+            0
+          ],
+          "maxSize": [
+            0.22,
+            0.36,
+            0.46
+          ],
+          "rotationY": 0,
+          "mount": "shelf"
+        },
+        {
+          "id": "slot-04",
+          "position": [
+            0.12,
+            0.22,
+            0
+          ],
+          "maxSize": [
+            0.22,
+            0.36,
+            0.46
+          ],
+          "rotationY": 0,
+          "mount": "shelf"
+        },
+        {
+          "id": "slot-05",
+          "position": [
+            0.36000000000000004,
+            0.22,
+            0
+          ],
+          "maxSize": [
+            0.22,
+            0.36,
+            0.46
+          ],
+          "rotationY": 0,
+          "mount": "shelf"
+        },
+        {
+          "id": "slot-06",
+          "position": [
+            0.6,
+            0.22,
+            0
+          ],
+          "maxSize": [
+            0.22,
+            0.36,
+            0.46
+          ],
+          "rotationY": 0,
+          "mount": "shelf"
+        },
+        {
+          "id": "slot-07",
+          "position": [
+            -0.6,
+            0.67,
+            0
+          ],
+          "maxSize": [
+            0.22,
+            0.36,
+            0.46
+          ],
+          "rotationY": 0,
+          "mount": "shelf"
+        },
+        {
+          "id": "slot-08",
+          "position": [
+            -0.36000000000000004,
+            0.67,
+            0
+          ],
+          "maxSize": [
+            0.22,
+            0.36,
+            0.46
+          ],
+          "rotationY": 0,
+          "mount": "shelf"
+        },
+        {
+          "id": "slot-09",
+          "position": [
+            -0.12,
+            0.67,
+            0
+          ],
+          "maxSize": [
+            0.22,
+            0.36,
+            0.46
+          ],
+          "rotationY": 0,
+          "mount": "shelf"
+        },
+        {
+          "id": "slot-10",
+          "position": [
+            0.12,
+            0.67,
+            0
+          ],
+          "maxSize": [
+            0.22,
+            0.36,
+            0.46
+          ],
+          "rotationY": 0,
+          "mount": "shelf"
+        },
+        {
+          "id": "slot-11",
+          "position": [
+            0.36000000000000004,
+            0.67,
+            0
+          ],
+          "maxSize": [
+            0.22,
+            0.36,
+            0.46
+          ],
+          "rotationY": 0,
+          "mount": "shelf"
+        },
+        {
+          "id": "slot-12",
+          "position": [
+            0.6,
+            0.67,
+            0
+          ],
+          "maxSize": [
+            0.22,
+            0.36,
+            0.46
+          ],
+          "rotationY": 0,
+          "mount": "shelf"
+        },
+        {
+          "id": "slot-13",
+          "position": [
+            -0.6,
+            1.12,
+            0
+          ],
+          "maxSize": [
+            0.22,
+            0.36,
+            0.46
+          ],
+          "rotationY": 0,
+          "mount": "shelf"
+        },
+        {
+          "id": "slot-14",
+          "position": [
+            -0.36000000000000004,
+            1.12,
+            0
+          ],
+          "maxSize": [
+            0.22,
+            0.36,
+            0.46
+          ],
+          "rotationY": 0,
+          "mount": "shelf"
+        },
+        {
+          "id": "slot-15",
+          "position": [
+            -0.12,
+            1.12,
+            0
+          ],
+          "maxSize": [
+            0.22,
+            0.36,
+            0.46
+          ],
+          "rotationY": 0,
+          "mount": "shelf"
+        },
+        {
+          "id": "slot-16",
+          "position": [
+            0.12,
+            1.12,
+            0
+          ],
+          "maxSize": [
+            0.22,
+            0.36,
+            0.46
+          ],
+          "rotationY": 0,
+          "mount": "shelf"
+        },
+        {
+          "id": "slot-17",
+          "position": [
+            0.36000000000000004,
+            1.12,
+            0
+          ],
+          "maxSize": [
+            0.22,
+            0.36,
+            0.46
+          ],
+          "rotationY": 0,
+          "mount": "shelf"
+        },
+        {
+          "id": "slot-18",
+          "position": [
+            0.6,
+            1.12,
+            0
+          ],
+          "maxSize": [
+            0.22,
+            0.36,
+            0.46
+          ],
+          "rotationY": 0,
+          "mount": "shelf"
+        },
+        {
+          "id": "slot-19",
+          "position": [
+            -0.6,
+            1.57,
+            0
+          ],
+          "maxSize": [
+            0.22,
+            0.36,
+            0.46
+          ],
+          "rotationY": 0,
+          "mount": "shelf"
+        },
+        {
+          "id": "slot-20",
+          "position": [
+            -0.36000000000000004,
+            1.57,
+            0
+          ],
+          "maxSize": [
+            0.22,
+            0.36,
+            0.46
+          ],
+          "rotationY": 0,
+          "mount": "shelf"
+        },
+        {
+          "id": "slot-21",
+          "position": [
+            -0.12,
+            1.57,
+            0
+          ],
+          "maxSize": [
+            0.22,
+            0.36,
+            0.46
+          ],
+          "rotationY": 0,
+          "mount": "shelf"
+        },
+        {
+          "id": "slot-22",
+          "position": [
+            0.12,
+            1.57,
+            0
+          ],
+          "maxSize": [
+            0.22,
+            0.36,
+            0.46
+          ],
+          "rotationY": 0,
+          "mount": "shelf"
+        },
+        {
+          "id": "slot-23",
+          "position": [
+            0.36000000000000004,
+            1.57,
+            0
+          ],
+          "maxSize": [
+            0.22,
+            0.36,
+            0.46
+          ],
+          "rotationY": 0,
+          "mount": "shelf"
+        },
+        {
+          "id": "slot-24",
+          "position": [
+            0.6,
+            1.57,
+            0
+          ],
+          "maxSize": [
+            0.22,
+            0.36,
+            0.46
+          ],
+          "rotationY": 0,
+          "mount": "shelf"
+        }
+      ],
+      "recommendedProducts": [
+        "rice",
+        "flour",
+        "coffee"
+      ],
+      "suggestedFrontClearance": 1.05,
+      "id": "wall-shelf-wide",
+      "capacity": 24,
+      "modelReady": true,
+      "gameplay": "library-only",
+      "modelUrl": "/assets/sim3d/equipment/wall-shelf-wide.glb",
+      "thumbnailUrl": "/assets/sim3d/equipment/wall-shelf-wide.png",
+      "servicePoints": [
+        {
+          "id": "front",
+          "role": "customer",
+          "position": [
+            0,
+            0,
+            -0.97
+          ],
+          "facing": [
+            0,
+            0,
+            1
+          ]
+        }
+      ]
+    },
+    {
+      "nameZh": "低款双面货架 · 32位",
+      "nameEn": "Low double-sided gondola",
+      "category": "display",
+      "size": [
+        1.42,
+        1.5,
+        0.92
+      ],
+      "description": "低矮中央货架、正反四层陈列与双面价签轨，保持店内视线通透。",
+      "style": "双面 · 低矮中央架",
+      "capacityLabel": "商品陈列位",
+      "placementSlots": [
+        {
+          "id": "slot-01",
+          "position": [
+            -0.44999999999999996,
+            0.18,
+            -0.255
+          ],
+          "maxSize": [
+            0.27,
+            0.25,
+            0.31
+          ],
+          "rotationY": 0,
+          "mount": "shelf"
+        },
+        {
+          "id": "slot-02",
+          "position": [
+            -0.15,
+            0.18,
+            -0.255
+          ],
+          "maxSize": [
+            0.27,
+            0.25,
+            0.31
+          ],
+          "rotationY": 0,
+          "mount": "shelf"
+        },
+        {
+          "id": "slot-03",
+          "position": [
+            0.15,
+            0.18,
+            -0.255
+          ],
+          "maxSize": [
+            0.27,
+            0.25,
+            0.31
+          ],
+          "rotationY": 0,
+          "mount": "shelf"
+        },
+        {
+          "id": "slot-04",
+          "position": [
+            0.44999999999999996,
+            0.18,
+            -0.255
+          ],
+          "maxSize": [
+            0.27,
+            0.25,
+            0.31
+          ],
+          "rotationY": 0,
+          "mount": "shelf"
+        },
+        {
+          "id": "slot-05",
+          "position": [
+            -0.44999999999999996,
+            0.51,
+            -0.255
+          ],
+          "maxSize": [
+            0.27,
+            0.25,
+            0.31
+          ],
+          "rotationY": 0,
+          "mount": "shelf"
+        },
+        {
+          "id": "slot-06",
+          "position": [
+            -0.15,
+            0.51,
+            -0.255
+          ],
+          "maxSize": [
+            0.27,
+            0.25,
+            0.31
+          ],
+          "rotationY": 0,
+          "mount": "shelf"
+        },
+        {
+          "id": "slot-07",
+          "position": [
+            0.15,
+            0.51,
+            -0.255
+          ],
+          "maxSize": [
+            0.27,
+            0.25,
+            0.31
+          ],
+          "rotationY": 0,
+          "mount": "shelf"
+        },
+        {
+          "id": "slot-08",
+          "position": [
+            0.44999999999999996,
+            0.51,
+            -0.255
+          ],
+          "maxSize": [
+            0.27,
+            0.25,
+            0.31
+          ],
+          "rotationY": 0,
+          "mount": "shelf"
+        },
+        {
+          "id": "slot-09",
+          "position": [
+            -0.44999999999999996,
+            0.84,
+            -0.255
+          ],
+          "maxSize": [
+            0.27,
+            0.25,
+            0.31
+          ],
+          "rotationY": 0,
+          "mount": "shelf"
+        },
+        {
+          "id": "slot-10",
+          "position": [
+            -0.15,
+            0.84,
+            -0.255
+          ],
+          "maxSize": [
+            0.27,
+            0.25,
+            0.31
+          ],
+          "rotationY": 0,
+          "mount": "shelf"
+        },
+        {
+          "id": "slot-11",
+          "position": [
+            0.15,
+            0.84,
+            -0.255
+          ],
+          "maxSize": [
+            0.27,
+            0.25,
+            0.31
+          ],
+          "rotationY": 0,
+          "mount": "shelf"
+        },
+        {
+          "id": "slot-12",
+          "position": [
+            0.44999999999999996,
+            0.84,
+            -0.255
+          ],
+          "maxSize": [
+            0.27,
+            0.25,
+            0.31
+          ],
+          "rotationY": 0,
+          "mount": "shelf"
+        },
+        {
+          "id": "slot-13",
+          "position": [
+            -0.44999999999999996,
+            1.17,
+            -0.255
+          ],
+          "maxSize": [
+            0.27,
+            0.25,
+            0.31
+          ],
+          "rotationY": 0,
+          "mount": "shelf"
+        },
+        {
+          "id": "slot-14",
+          "position": [
+            -0.15,
+            1.17,
+            -0.255
+          ],
+          "maxSize": [
+            0.27,
+            0.25,
+            0.31
+          ],
+          "rotationY": 0,
+          "mount": "shelf"
+        },
+        {
+          "id": "slot-15",
+          "position": [
+            0.15,
+            1.17,
+            -0.255
+          ],
+          "maxSize": [
+            0.27,
+            0.25,
+            0.31
+          ],
+          "rotationY": 0,
+          "mount": "shelf"
+        },
+        {
+          "id": "slot-16",
+          "position": [
+            0.44999999999999996,
+            1.17,
+            -0.255
+          ],
+          "maxSize": [
+            0.27,
+            0.25,
+            0.31
+          ],
+          "rotationY": 0,
+          "mount": "shelf"
+        },
+        {
+          "id": "slot-17",
+          "position": [
+            -0.44999999999999996,
+            0.18,
+            0.255
+          ],
+          "maxSize": [
+            0.27,
+            0.25,
+            0.31
+          ],
+          "rotationY": 3.141592653589793,
+          "mount": "shelf"
+        },
+        {
+          "id": "slot-18",
+          "position": [
+            -0.15,
+            0.18,
+            0.255
+          ],
+          "maxSize": [
+            0.27,
+            0.25,
+            0.31
+          ],
+          "rotationY": 3.141592653589793,
+          "mount": "shelf"
+        },
+        {
+          "id": "slot-19",
+          "position": [
+            0.15,
+            0.18,
+            0.255
+          ],
+          "maxSize": [
+            0.27,
+            0.25,
+            0.31
+          ],
+          "rotationY": 3.141592653589793,
+          "mount": "shelf"
+        },
+        {
+          "id": "slot-20",
+          "position": [
+            0.44999999999999996,
+            0.18,
+            0.255
+          ],
+          "maxSize": [
+            0.27,
+            0.25,
+            0.31
+          ],
+          "rotationY": 3.141592653589793,
+          "mount": "shelf"
+        },
+        {
+          "id": "slot-21",
+          "position": [
+            -0.44999999999999996,
+            0.51,
+            0.255
+          ],
+          "maxSize": [
+            0.27,
+            0.25,
+            0.31
+          ],
+          "rotationY": 3.141592653589793,
+          "mount": "shelf"
+        },
+        {
+          "id": "slot-22",
+          "position": [
+            -0.15,
+            0.51,
+            0.255
+          ],
+          "maxSize": [
+            0.27,
+            0.25,
+            0.31
+          ],
+          "rotationY": 3.141592653589793,
+          "mount": "shelf"
+        },
+        {
+          "id": "slot-23",
+          "position": [
+            0.15,
+            0.51,
+            0.255
+          ],
+          "maxSize": [
+            0.27,
+            0.25,
+            0.31
+          ],
+          "rotationY": 3.141592653589793,
+          "mount": "shelf"
+        },
+        {
+          "id": "slot-24",
+          "position": [
+            0.44999999999999996,
+            0.51,
+            0.255
+          ],
+          "maxSize": [
+            0.27,
+            0.25,
+            0.31
+          ],
+          "rotationY": 3.141592653589793,
+          "mount": "shelf"
+        },
+        {
+          "id": "slot-25",
+          "position": [
+            -0.44999999999999996,
+            0.84,
+            0.255
+          ],
+          "maxSize": [
+            0.27,
+            0.25,
+            0.31
+          ],
+          "rotationY": 3.141592653589793,
+          "mount": "shelf"
+        },
+        {
+          "id": "slot-26",
+          "position": [
+            -0.15,
+            0.84,
+            0.255
+          ],
+          "maxSize": [
+            0.27,
+            0.25,
+            0.31
+          ],
+          "rotationY": 3.141592653589793,
+          "mount": "shelf"
+        },
+        {
+          "id": "slot-27",
+          "position": [
+            0.15,
+            0.84,
+            0.255
+          ],
+          "maxSize": [
+            0.27,
+            0.25,
+            0.31
+          ],
+          "rotationY": 3.141592653589793,
+          "mount": "shelf"
+        },
+        {
+          "id": "slot-28",
+          "position": [
+            0.44999999999999996,
+            0.84,
+            0.255
+          ],
+          "maxSize": [
+            0.27,
+            0.25,
+            0.31
+          ],
+          "rotationY": 3.141592653589793,
+          "mount": "shelf"
+        },
+        {
+          "id": "slot-29",
+          "position": [
+            -0.44999999999999996,
+            1.17,
+            0.255
+          ],
+          "maxSize": [
+            0.27,
+            0.25,
+            0.31
+          ],
+          "rotationY": 3.141592653589793,
+          "mount": "shelf"
+        },
+        {
+          "id": "slot-30",
+          "position": [
+            -0.15,
+            1.17,
+            0.255
+          ],
+          "maxSize": [
+            0.27,
+            0.25,
+            0.31
+          ],
+          "rotationY": 3.141592653589793,
+          "mount": "shelf"
+        },
+        {
+          "id": "slot-31",
+          "position": [
+            0.15,
+            1.17,
+            0.255
+          ],
+          "maxSize": [
+            0.27,
+            0.25,
+            0.31
+          ],
+          "rotationY": 3.141592653589793,
+          "mount": "shelf"
+        },
+        {
+          "id": "slot-32",
+          "position": [
+            0.44999999999999996,
+            1.17,
+            0.255
+          ],
+          "maxSize": [
+            0.27,
+            0.25,
+            0.31
+          ],
+          "rotationY": 3.141592653589793,
+          "mount": "shelf"
+        }
+      ],
+      "recommendedProducts": [
+        "biscuits",
+        "chocolate",
+        "soap"
+      ],
+      "suggestedFrontClearance": 1.05,
+      "id": "gondola-low",
+      "capacity": 32,
+      "modelReady": true,
+      "gameplay": "library-only",
+      "modelUrl": "/assets/sim3d/equipment/gondola-low.glb",
+      "thumbnailUrl": "/assets/sim3d/equipment/gondola-low.png",
+      "servicePoints": [
+        {
+          "id": "front",
+          "role": "customer",
+          "position": [
+            0,
+            0,
+            -1.11
+          ],
+          "facing": [
+            0,
+            0,
+            1
+          ]
+        },
+        {
+          "id": "back",
+          "role": "customer",
+          "position": [
+            0,
+            0,
+            1.11
+          ],
+          "facing": [
+            0,
+            0,
+            -1
+          ]
+        }
+      ]
+    },
+    {
+      "nameZh": "高款双面货架 · 48位",
+      "nameEn": "Tall double-sided gondola",
+      "category": "display",
+      "size": [
+        2.04,
+        1.96,
+        1
+      ],
+      "description": "正反四层长货架、中间加固隔板和可替换分类牌，适合更大的店面。",
+      "style": "双面 · 加长高款架",
+      "capacityLabel": "商品陈列位",
+      "placementSlots": [
+        {
+          "id": "slot-01",
+          "position": [
+            -0.725,
+            0.2,
+            -0.275
+          ],
+          "maxSize": [
+            0.26,
+            0.35,
+            0.34
+          ],
+          "rotationY": 0,
+          "mount": "shelf"
+        },
+        {
+          "id": "slot-02",
+          "position": [
+            -0.435,
+            0.2,
+            -0.275
+          ],
+          "maxSize": [
+            0.26,
+            0.35,
+            0.34
+          ],
+          "rotationY": 0,
+          "mount": "shelf"
+        },
+        {
+          "id": "slot-03",
+          "position": [
+            -0.145,
+            0.2,
+            -0.275
+          ],
+          "maxSize": [
+            0.26,
+            0.35,
+            0.34
+          ],
+          "rotationY": 0,
+          "mount": "shelf"
+        },
+        {
+          "id": "slot-04",
+          "position": [
+            0.145,
+            0.2,
+            -0.275
+          ],
+          "maxSize": [
+            0.26,
+            0.35,
+            0.34
+          ],
+          "rotationY": 0,
+          "mount": "shelf"
+        },
+        {
+          "id": "slot-05",
+          "position": [
+            0.435,
+            0.2,
+            -0.275
+          ],
+          "maxSize": [
+            0.26,
+            0.35,
+            0.34
+          ],
+          "rotationY": 0,
+          "mount": "shelf"
+        },
+        {
+          "id": "slot-06",
+          "position": [
+            0.725,
+            0.2,
+            -0.275
+          ],
+          "maxSize": [
+            0.26,
+            0.35,
+            0.34
+          ],
+          "rotationY": 0,
+          "mount": "shelf"
+        },
+        {
+          "id": "slot-07",
+          "position": [
+            -0.725,
+            0.62,
+            -0.275
+          ],
+          "maxSize": [
+            0.26,
+            0.35,
+            0.34
+          ],
+          "rotationY": 0,
+          "mount": "shelf"
+        },
+        {
+          "id": "slot-08",
+          "position": [
+            -0.435,
+            0.62,
+            -0.275
+          ],
+          "maxSize": [
+            0.26,
+            0.35,
+            0.34
+          ],
+          "rotationY": 0,
+          "mount": "shelf"
+        },
+        {
+          "id": "slot-09",
+          "position": [
+            -0.145,
+            0.62,
+            -0.275
+          ],
+          "maxSize": [
+            0.26,
+            0.35,
+            0.34
+          ],
+          "rotationY": 0,
+          "mount": "shelf"
+        },
+        {
+          "id": "slot-10",
+          "position": [
+            0.145,
+            0.62,
+            -0.275
+          ],
+          "maxSize": [
+            0.26,
+            0.35,
+            0.34
+          ],
+          "rotationY": 0,
+          "mount": "shelf"
+        },
+        {
+          "id": "slot-11",
+          "position": [
+            0.435,
+            0.62,
+            -0.275
+          ],
+          "maxSize": [
+            0.26,
+            0.35,
+            0.34
+          ],
+          "rotationY": 0,
+          "mount": "shelf"
+        },
+        {
+          "id": "slot-12",
+          "position": [
+            0.725,
+            0.62,
+            -0.275
+          ],
+          "maxSize": [
+            0.26,
+            0.35,
+            0.34
+          ],
+          "rotationY": 0,
+          "mount": "shelf"
+        },
+        {
+          "id": "slot-13",
+          "position": [
+            -0.725,
+            1.04,
+            -0.275
+          ],
+          "maxSize": [
+            0.26,
+            0.35,
+            0.34
+          ],
+          "rotationY": 0,
+          "mount": "shelf"
+        },
+        {
+          "id": "slot-14",
+          "position": [
+            -0.435,
+            1.04,
+            -0.275
+          ],
+          "maxSize": [
+            0.26,
+            0.35,
+            0.34
+          ],
+          "rotationY": 0,
+          "mount": "shelf"
+        },
+        {
+          "id": "slot-15",
+          "position": [
+            -0.145,
+            1.04,
+            -0.275
+          ],
+          "maxSize": [
+            0.26,
+            0.35,
+            0.34
+          ],
+          "rotationY": 0,
+          "mount": "shelf"
+        },
+        {
+          "id": "slot-16",
+          "position": [
+            0.145,
+            1.04,
+            -0.275
+          ],
+          "maxSize": [
+            0.26,
+            0.35,
+            0.34
+          ],
+          "rotationY": 0,
+          "mount": "shelf"
+        },
+        {
+          "id": "slot-17",
+          "position": [
+            0.435,
+            1.04,
+            -0.275
+          ],
+          "maxSize": [
+            0.26,
+            0.35,
+            0.34
+          ],
+          "rotationY": 0,
+          "mount": "shelf"
+        },
+        {
+          "id": "slot-18",
+          "position": [
+            0.725,
+            1.04,
+            -0.275
+          ],
+          "maxSize": [
+            0.26,
+            0.35,
+            0.34
+          ],
+          "rotationY": 0,
+          "mount": "shelf"
+        },
+        {
+          "id": "slot-19",
+          "position": [
+            -0.725,
+            1.46,
+            -0.275
+          ],
+          "maxSize": [
+            0.26,
+            0.35,
+            0.34
+          ],
+          "rotationY": 0,
+          "mount": "shelf"
+        },
+        {
+          "id": "slot-20",
+          "position": [
+            -0.435,
+            1.46,
+            -0.275
+          ],
+          "maxSize": [
+            0.26,
+            0.35,
+            0.34
+          ],
+          "rotationY": 0,
+          "mount": "shelf"
+        },
+        {
+          "id": "slot-21",
+          "position": [
+            -0.145,
+            1.46,
+            -0.275
+          ],
+          "maxSize": [
+            0.26,
+            0.35,
+            0.34
+          ],
+          "rotationY": 0,
+          "mount": "shelf"
+        },
+        {
+          "id": "slot-22",
+          "position": [
+            0.145,
+            1.46,
+            -0.275
+          ],
+          "maxSize": [
+            0.26,
+            0.35,
+            0.34
+          ],
+          "rotationY": 0,
+          "mount": "shelf"
+        },
+        {
+          "id": "slot-23",
+          "position": [
+            0.435,
+            1.46,
+            -0.275
+          ],
+          "maxSize": [
+            0.26,
+            0.35,
+            0.34
+          ],
+          "rotationY": 0,
+          "mount": "shelf"
+        },
+        {
+          "id": "slot-24",
+          "position": [
+            0.725,
+            1.46,
+            -0.275
+          ],
+          "maxSize": [
+            0.26,
+            0.35,
+            0.34
+          ],
+          "rotationY": 0,
+          "mount": "shelf"
+        },
+        {
+          "id": "slot-25",
+          "position": [
+            -0.725,
+            0.2,
+            0.275
+          ],
+          "maxSize": [
+            0.26,
+            0.35,
+            0.34
+          ],
+          "rotationY": 3.141592653589793,
+          "mount": "shelf"
+        },
+        {
+          "id": "slot-26",
+          "position": [
+            -0.435,
+            0.2,
+            0.275
+          ],
+          "maxSize": [
+            0.26,
+            0.35,
+            0.34
+          ],
+          "rotationY": 3.141592653589793,
+          "mount": "shelf"
+        },
+        {
+          "id": "slot-27",
+          "position": [
+            -0.145,
+            0.2,
+            0.275
+          ],
+          "maxSize": [
+            0.26,
+            0.35,
+            0.34
+          ],
+          "rotationY": 3.141592653589793,
+          "mount": "shelf"
+        },
+        {
+          "id": "slot-28",
+          "position": [
+            0.145,
+            0.2,
+            0.275
+          ],
+          "maxSize": [
+            0.26,
+            0.35,
+            0.34
+          ],
+          "rotationY": 3.141592653589793,
+          "mount": "shelf"
+        },
+        {
+          "id": "slot-29",
+          "position": [
+            0.435,
+            0.2,
+            0.275
+          ],
+          "maxSize": [
+            0.26,
+            0.35,
+            0.34
+          ],
+          "rotationY": 3.141592653589793,
+          "mount": "shelf"
+        },
+        {
+          "id": "slot-30",
+          "position": [
+            0.725,
+            0.2,
+            0.275
+          ],
+          "maxSize": [
+            0.26,
+            0.35,
+            0.34
+          ],
+          "rotationY": 3.141592653589793,
+          "mount": "shelf"
+        },
+        {
+          "id": "slot-31",
+          "position": [
+            -0.725,
+            0.62,
+            0.275
+          ],
+          "maxSize": [
+            0.26,
+            0.35,
+            0.34
+          ],
+          "rotationY": 3.141592653589793,
+          "mount": "shelf"
+        },
+        {
+          "id": "slot-32",
+          "position": [
+            -0.435,
+            0.62,
+            0.275
+          ],
+          "maxSize": [
+            0.26,
+            0.35,
+            0.34
+          ],
+          "rotationY": 3.141592653589793,
+          "mount": "shelf"
+        },
+        {
+          "id": "slot-33",
+          "position": [
+            -0.145,
+            0.62,
+            0.275
+          ],
+          "maxSize": [
+            0.26,
+            0.35,
+            0.34
+          ],
+          "rotationY": 3.141592653589793,
+          "mount": "shelf"
+        },
+        {
+          "id": "slot-34",
+          "position": [
+            0.145,
+            0.62,
+            0.275
+          ],
+          "maxSize": [
+            0.26,
+            0.35,
+            0.34
+          ],
+          "rotationY": 3.141592653589793,
+          "mount": "shelf"
+        },
+        {
+          "id": "slot-35",
+          "position": [
+            0.435,
+            0.62,
+            0.275
+          ],
+          "maxSize": [
+            0.26,
+            0.35,
+            0.34
+          ],
+          "rotationY": 3.141592653589793,
+          "mount": "shelf"
+        },
+        {
+          "id": "slot-36",
+          "position": [
+            0.725,
+            0.62,
+            0.275
+          ],
+          "maxSize": [
+            0.26,
+            0.35,
+            0.34
+          ],
+          "rotationY": 3.141592653589793,
+          "mount": "shelf"
+        },
+        {
+          "id": "slot-37",
+          "position": [
+            -0.725,
+            1.04,
+            0.275
+          ],
+          "maxSize": [
+            0.26,
+            0.35,
+            0.34
+          ],
+          "rotationY": 3.141592653589793,
+          "mount": "shelf"
+        },
+        {
+          "id": "slot-38",
+          "position": [
+            -0.435,
+            1.04,
+            0.275
+          ],
+          "maxSize": [
+            0.26,
+            0.35,
+            0.34
+          ],
+          "rotationY": 3.141592653589793,
+          "mount": "shelf"
+        },
+        {
+          "id": "slot-39",
+          "position": [
+            -0.145,
+            1.04,
+            0.275
+          ],
+          "maxSize": [
+            0.26,
+            0.35,
+            0.34
+          ],
+          "rotationY": 3.141592653589793,
+          "mount": "shelf"
+        },
+        {
+          "id": "slot-40",
+          "position": [
+            0.145,
+            1.04,
+            0.275
+          ],
+          "maxSize": [
+            0.26,
+            0.35,
+            0.34
+          ],
+          "rotationY": 3.141592653589793,
+          "mount": "shelf"
+        },
+        {
+          "id": "slot-41",
+          "position": [
+            0.435,
+            1.04,
+            0.275
+          ],
+          "maxSize": [
+            0.26,
+            0.35,
+            0.34
+          ],
+          "rotationY": 3.141592653589793,
+          "mount": "shelf"
+        },
+        {
+          "id": "slot-42",
+          "position": [
+            0.725,
+            1.04,
+            0.275
+          ],
+          "maxSize": [
+            0.26,
+            0.35,
+            0.34
+          ],
+          "rotationY": 3.141592653589793,
+          "mount": "shelf"
+        },
+        {
+          "id": "slot-43",
+          "position": [
+            -0.725,
+            1.46,
+            0.275
+          ],
+          "maxSize": [
+            0.26,
+            0.35,
+            0.34
+          ],
+          "rotationY": 3.141592653589793,
+          "mount": "shelf"
+        },
+        {
+          "id": "slot-44",
+          "position": [
+            -0.435,
+            1.46,
+            0.275
+          ],
+          "maxSize": [
+            0.26,
+            0.35,
+            0.34
+          ],
+          "rotationY": 3.141592653589793,
+          "mount": "shelf"
+        },
+        {
+          "id": "slot-45",
+          "position": [
+            -0.145,
+            1.46,
+            0.275
+          ],
+          "maxSize": [
+            0.26,
+            0.35,
+            0.34
+          ],
+          "rotationY": 3.141592653589793,
+          "mount": "shelf"
+        },
+        {
+          "id": "slot-46",
+          "position": [
+            0.145,
+            1.46,
+            0.275
+          ],
+          "maxSize": [
+            0.26,
+            0.35,
+            0.34
+          ],
+          "rotationY": 3.141592653589793,
+          "mount": "shelf"
+        },
+        {
+          "id": "slot-47",
+          "position": [
+            0.435,
+            1.46,
+            0.275
+          ],
+          "maxSize": [
+            0.26,
+            0.35,
+            0.34
+          ],
+          "rotationY": 3.141592653589793,
+          "mount": "shelf"
+        },
+        {
+          "id": "slot-48",
+          "position": [
+            0.725,
+            1.46,
+            0.275
+          ],
+          "maxSize": [
+            0.26,
+            0.35,
+            0.34
+          ],
+          "rotationY": 3.141592653589793,
+          "mount": "shelf"
+        }
+      ],
+      "recommendedProducts": [
+        "cereal",
+        "crisps",
+        "tissues"
+      ],
+      "suggestedFrontClearance": 1.15,
+      "id": "gondola-tall",
+      "capacity": 48,
+      "modelReady": true,
+      "gameplay": "library-only",
+      "modelUrl": "/assets/sim3d/equipment/gondola-tall.glb",
+      "thumbnailUrl": "/assets/sim3d/equipment/gondola-tall.png",
+      "servicePoints": [
+        {
+          "id": "front",
+          "role": "customer",
+          "position": [
+            0,
+            0,
+            -1.15
+          ],
+          "facing": [
+            0,
+            0,
+            1
+          ]
+        },
+        {
+          "id": "back",
+          "role": "customer",
+          "position": [
+            0,
+            0,
+            1.15
+          ],
+          "facing": [
+            0,
+            0,
+            -1
+          ]
+        }
+      ]
+    },
+    {
+      "nameZh": "阶梯果蔬架 · 12位",
+      "nameEn": "Tiered produce display",
+      "category": "display",
+      "size": [
+        1.44,
+        1.48,
+        0.9
+      ],
+      "description": "三阶四列木质果蔬格、前挡边和独立价签，陈列高度依次升高。",
+      "style": "单面 · 原木阶梯格",
+      "capacityLabel": "商品陈列位",
+      "placementSlots": [
+        {
+          "id": "slot-01",
+          "position": [
+            -0.43499999999999994,
+            0.25,
+            -0.23
+          ],
+          "maxSize": [
+            0.245,
+            0.28,
+            0.29
+          ],
+          "rotationY": 0,
+          "mount": "basket"
+        },
+        {
+          "id": "slot-02",
+          "position": [
+            -0.145,
+            0.25,
+            -0.23
+          ],
+          "maxSize": [
+            0.245,
+            0.28,
+            0.29
+          ],
+          "rotationY": 0,
+          "mount": "basket"
+        },
+        {
+          "id": "slot-03",
+          "position": [
+            0.145,
+            0.25,
+            -0.23
+          ],
+          "maxSize": [
+            0.245,
+            0.28,
+            0.29
+          ],
+          "rotationY": 0,
+          "mount": "basket"
+        },
+        {
+          "id": "slot-04",
+          "position": [
+            0.43499999999999994,
+            0.25,
+            -0.23
+          ],
+          "maxSize": [
+            0.245,
+            0.28,
+            0.29
+          ],
+          "rotationY": 0,
+          "mount": "basket"
+        },
+        {
+          "id": "slot-05",
+          "position": [
+            -0.43499999999999994,
+            0.65,
+            0
+          ],
+          "maxSize": [
+            0.245,
+            0.28,
+            0.29
+          ],
+          "rotationY": 0,
+          "mount": "basket"
+        },
+        {
+          "id": "slot-06",
+          "position": [
+            -0.145,
+            0.65,
+            0
+          ],
+          "maxSize": [
+            0.245,
+            0.28,
+            0.29
+          ],
+          "rotationY": 0,
+          "mount": "basket"
+        },
+        {
+          "id": "slot-07",
+          "position": [
+            0.145,
+            0.65,
+            0
+          ],
+          "maxSize": [
+            0.245,
+            0.28,
+            0.29
+          ],
+          "rotationY": 0,
+          "mount": "basket"
+        },
+        {
+          "id": "slot-08",
+          "position": [
+            0.43499999999999994,
+            0.65,
+            0
+          ],
+          "maxSize": [
+            0.245,
+            0.28,
+            0.29
+          ],
+          "rotationY": 0,
+          "mount": "basket"
+        },
+        {
+          "id": "slot-09",
+          "position": [
+            -0.43499999999999994,
+            1.05,
+            0.23
+          ],
+          "maxSize": [
+            0.245,
+            0.28,
+            0.29
+          ],
+          "rotationY": 0,
+          "mount": "basket"
+        },
+        {
+          "id": "slot-10",
+          "position": [
+            -0.145,
+            1.05,
+            0.23
+          ],
+          "maxSize": [
+            0.245,
+            0.28,
+            0.29
+          ],
+          "rotationY": 0,
+          "mount": "basket"
+        },
+        {
+          "id": "slot-11",
+          "position": [
+            0.145,
+            1.05,
+            0.23
+          ],
+          "maxSize": [
+            0.245,
+            0.28,
+            0.29
+          ],
+          "rotationY": 0,
+          "mount": "basket"
+        },
+        {
+          "id": "slot-12",
+          "position": [
+            0.43499999999999994,
+            1.05,
+            0.23
+          ],
+          "maxSize": [
+            0.245,
+            0.28,
+            0.29
+          ],
+          "rotationY": 0,
+          "mount": "basket"
+        }
+      ],
+      "recommendedProducts": [
+        "apple",
+        "orange",
+        "lettuce"
+      ],
+      "suggestedFrontClearance": 1,
+      "id": "produce-tiered",
+      "capacity": 12,
+      "modelReady": true,
+      "gameplay": "library-only",
+      "modelUrl": "/assets/sim3d/equipment/produce-tiered.glb",
+      "thumbnailUrl": "/assets/sim3d/equipment/produce-tiered.png",
+      "servicePoints": [
+        {
+          "id": "front",
+          "role": "customer",
+          "position": [
+            0,
+            0,
+            -1.1
+          ],
+          "facing": [
+            0,
+            0,
+            1
+          ]
+        }
+      ]
+    },
+    {
+      "nameZh": "玻璃面包陈列柜 · 12位",
+      "nameEn": "Glass bakery cabinet",
+      "category": "display",
+      "size": [
+        1.72,
+        1.66,
+        0.72
+      ],
+      "description": "三层宽托盘、玻璃侧板和前开门，横向陈列位可放整条面包。",
+      "style": "单面 · 木纹玻璃柜",
+      "capacityLabel": "商品陈列位",
+      "placementSlots": [
+        {
+          "id": "slot-01",
+          "position": [
+            -0.5700000000000001,
+            0.3,
+            0
+          ],
+          "maxSize": [
+            0.355,
+            0.32,
+            0.48
+          ],
+          "rotationY": 0,
+          "mount": "shelf"
+        },
+        {
+          "id": "slot-02",
+          "position": [
+            -0.19,
+            0.3,
+            0
+          ],
+          "maxSize": [
+            0.355,
+            0.32,
+            0.48
+          ],
+          "rotationY": 0,
+          "mount": "shelf"
+        },
+        {
+          "id": "slot-03",
+          "position": [
+            0.19,
+            0.3,
+            0
+          ],
+          "maxSize": [
+            0.355,
+            0.32,
+            0.48
+          ],
+          "rotationY": 0,
+          "mount": "shelf"
+        },
+        {
+          "id": "slot-04",
+          "position": [
+            0.5700000000000001,
+            0.3,
+            0
+          ],
+          "maxSize": [
+            0.355,
+            0.32,
+            0.48
+          ],
+          "rotationY": 0,
+          "mount": "shelf"
+        },
+        {
+          "id": "slot-05",
+          "position": [
+            -0.5700000000000001,
+            0.72,
+            0
+          ],
+          "maxSize": [
+            0.355,
+            0.32,
+            0.48
+          ],
+          "rotationY": 0,
+          "mount": "shelf"
+        },
+        {
+          "id": "slot-06",
+          "position": [
+            -0.19,
+            0.72,
+            0
+          ],
+          "maxSize": [
+            0.355,
+            0.32,
+            0.48
+          ],
+          "rotationY": 0,
+          "mount": "shelf"
+        },
+        {
+          "id": "slot-07",
+          "position": [
+            0.19,
+            0.72,
+            0
+          ],
+          "maxSize": [
+            0.355,
+            0.32,
+            0.48
+          ],
+          "rotationY": 0,
+          "mount": "shelf"
+        },
+        {
+          "id": "slot-08",
+          "position": [
+            0.5700000000000001,
+            0.72,
+            0
+          ],
+          "maxSize": [
+            0.355,
+            0.32,
+            0.48
+          ],
+          "rotationY": 0,
+          "mount": "shelf"
+        },
+        {
+          "id": "slot-09",
+          "position": [
+            -0.5700000000000001,
+            1.14,
+            0
+          ],
+          "maxSize": [
+            0.355,
+            0.32,
+            0.48
+          ],
+          "rotationY": 0,
+          "mount": "shelf"
+        },
+        {
+          "id": "slot-10",
+          "position": [
+            -0.19,
+            1.14,
+            0
+          ],
+          "maxSize": [
+            0.355,
+            0.32,
+            0.48
+          ],
+          "rotationY": 0,
+          "mount": "shelf"
+        },
+        {
+          "id": "slot-11",
+          "position": [
+            0.19,
+            1.14,
+            0
+          ],
+          "maxSize": [
+            0.355,
+            0.32,
+            0.48
+          ],
+          "rotationY": 0,
+          "mount": "shelf"
+        },
+        {
+          "id": "slot-12",
+          "position": [
+            0.5700000000000001,
+            1.14,
+            0
+          ],
+          "maxSize": [
+            0.355,
+            0.32,
+            0.48
+          ],
+          "rotationY": 0,
+          "mount": "shelf"
+        }
+      ],
+      "recommendedProducts": [
+        "bread",
+        "biscuits"
+      ],
+      "suggestedFrontClearance": 1.05,
+      "id": "bakery-glass",
+      "capacity": 12,
+      "modelReady": true,
+      "gameplay": "library-only",
+      "modelUrl": "/assets/sim3d/equipment/bakery-glass.glb",
+      "thumbnailUrl": "/assets/sim3d/equipment/bakery-glass.png",
+      "servicePoints": [
+        {
+          "id": "front",
+          "role": "customer",
+          "position": [
+            0,
+            0,
+            -1.01
+          ],
+          "facing": [
+            0,
+            0,
+            1
+          ]
+        }
+      ]
+    },
+    {
+      "nameZh": "零食挂架 · 12位",
+      "nameEn": "Pegboard snack display",
+      "category": "display",
+      "size": [
+        1.32,
+        1.94,
+        0.56
+      ],
+      "description": "三排四列挂钩、孔板背板与稳定底座，适合有挂孔的袋装小物。",
+      "style": "单面 · 孔板挂钩架",
+      "capacityLabel": "商品陈列位",
+      "placementSlots": [
+        {
+          "id": "slot-01",
+          "position": [
+            -0.405,
+            0.38,
+            -0.16
+          ],
+          "maxSize": [
+            0.23,
+            0.34,
+            0.1
+          ],
+          "rotationY": 0,
+          "mount": "hook"
+        },
+        {
+          "id": "slot-02",
+          "position": [
+            -0.135,
+            0.38,
+            -0.16
+          ],
+          "maxSize": [
+            0.23,
+            0.34,
+            0.1
+          ],
+          "rotationY": 0,
+          "mount": "hook"
+        },
+        {
+          "id": "slot-03",
+          "position": [
+            0.135,
+            0.38,
+            -0.16
+          ],
+          "maxSize": [
+            0.23,
+            0.34,
+            0.1
+          ],
+          "rotationY": 0,
+          "mount": "hook"
+        },
+        {
+          "id": "slot-04",
+          "position": [
+            0.405,
+            0.38,
+            -0.16
+          ],
+          "maxSize": [
+            0.23,
+            0.34,
+            0.1
+          ],
+          "rotationY": 0,
+          "mount": "hook"
+        },
+        {
+          "id": "slot-05",
+          "position": [
+            -0.405,
+            0.83,
+            -0.16
+          ],
+          "maxSize": [
+            0.23,
+            0.34,
+            0.1
+          ],
+          "rotationY": 0,
+          "mount": "hook"
+        },
+        {
+          "id": "slot-06",
+          "position": [
+            -0.135,
+            0.83,
+            -0.16
+          ],
+          "maxSize": [
+            0.23,
+            0.34,
+            0.1
+          ],
+          "rotationY": 0,
+          "mount": "hook"
+        },
+        {
+          "id": "slot-07",
+          "position": [
+            0.135,
+            0.83,
+            -0.16
+          ],
+          "maxSize": [
+            0.23,
+            0.34,
+            0.1
+          ],
+          "rotationY": 0,
+          "mount": "hook"
+        },
+        {
+          "id": "slot-08",
+          "position": [
+            0.405,
+            0.83,
+            -0.16
+          ],
+          "maxSize": [
+            0.23,
+            0.34,
+            0.1
+          ],
+          "rotationY": 0,
+          "mount": "hook"
+        },
+        {
+          "id": "slot-09",
+          "position": [
+            -0.405,
+            1.28,
+            -0.16
+          ],
+          "maxSize": [
+            0.23,
+            0.34,
+            0.1
+          ],
+          "rotationY": 0,
+          "mount": "hook"
+        },
+        {
+          "id": "slot-10",
+          "position": [
+            -0.135,
+            1.28,
+            -0.16
+          ],
+          "maxSize": [
+            0.23,
+            0.34,
+            0.1
+          ],
+          "rotationY": 0,
+          "mount": "hook"
+        },
+        {
+          "id": "slot-11",
+          "position": [
+            0.135,
+            1.28,
+            -0.16
+          ],
+          "maxSize": [
+            0.23,
+            0.34,
+            0.1
+          ],
+          "rotationY": 0,
+          "mount": "hook"
+        },
+        {
+          "id": "slot-12",
+          "position": [
+            0.405,
+            1.28,
+            -0.16
+          ],
+          "maxSize": [
+            0.23,
+            0.34,
+            0.1
+          ],
+          "rotationY": 0,
+          "mount": "hook"
+        }
+      ],
+      "recommendedProducts": [
+        "crisps"
+      ],
+      "suggestedFrontClearance": 0.9,
+      "id": "pegboard-snacks",
+      "capacity": 12,
+      "modelReady": true,
+      "gameplay": "library-only",
+      "modelUrl": "/assets/sim3d/equipment/pegboard-snacks.glb",
+      "thumbnailUrl": "/assets/sim3d/equipment/pegboard-snacks.png",
+      "servicePoints": [
+        {
+          "id": "front",
+          "role": "customer",
+          "position": [
+            0,
+            0,
+            -0.93
+          ],
+          "facing": [
+            0,
+            0,
+            1
+          ]
+        }
+      ]
+    }
+  ]
+}

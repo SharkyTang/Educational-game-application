@@ -110,6 +110,7 @@ export class AssetLibraryApp {
           <a class="pl-wordmark" href="/" aria-label="Corner Shop，返回游戏"><span class="pl-brand-mark">cs.</span><span>Corner Shop<small>THE PRODUCT COLLECTION</small></span></a>
           <a class="pl-back" id="pl-back-game" href="/">← <span>返回小店 · B 进货</span></a>
         </header>
+        <nav class="pl-collections" aria-label="素材库切换"><a href="/?assets=1" aria-current="page">商品素材 <span>30</span></a><a id="pl-equipment-library" href="/?assets=equipment">设备素材 <span>12</span> ↗</a></nav>
         <section class="pl-intro">
           <div><p class="pl-eyebrow">ASSET LIBRARY · VOL. 01</p><h1 id="pl-title">商品素材库<span>为你的小店，准备就绪。</span></h1><p class="pl-intro-note">30 种商品已接入经营。返回小店按 B，自选商品和数量进货；这里仍可查看与导出模型。</p></div>
           <div class="pl-overview" aria-label="制作与接入进度">

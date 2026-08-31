@@ -46,6 +46,11 @@ body.product-library-page { margin: 0; background: #f7f4eb; }
 .product-library-app .pl-wordmark small { display: block; margin-top: 6px; color: var(--pl-muted); font: 500 8px/1.4 -apple-system, BlinkMacSystemFont, sans-serif; letter-spacing: 0.2em; }
 .product-library-app .pl-back { display: inline-flex; align-items: center; gap: 9px; min-height: 40px; color: var(--pl-ink); text-decoration: none; font-size: 13px; }
 .product-library-app .pl-back:hover { text-decoration: underline; text-underline-offset: 4px; }
+.product-library-app .pl-collections { display: flex; flex-wrap: wrap; gap: 8px; padding-top: 17px; }
+.product-library-app .pl-collections a { display: inline-flex; align-items: center; gap: 9px; min-height: 38px; padding: 7px 14px; border: 1px solid var(--pl-line); border-radius: 5px; color: var(--pl-ink); background: #fbf9f2; font-size: 12px; text-decoration: none; }
+.product-library-app .pl-collections a[aria-current="page"] { border-color: var(--pl-green); color: #fff9e9; background: var(--pl-green); }
+.product-library-app .pl-collections a:hover:not([aria-current="page"]) { background: #e7ecda; }
+.product-library-app .pl-collections span { font-variant-numeric: tabular-nums; font-size: 10px; opacity: 0.8; }
 .product-library-app .pl-intro { display: flex; align-items: center; justify-content: space-between; gap: 30px; padding: 31px 0 29px; }
 .product-library-app .pl-eyebrow { color: #727f6a; font-size: 9px; font-weight: 650; letter-spacing: 0.14em; }
 .product-library-app h1 { margin: 8px 0 9px; font-size: clamp(27px, 2.2vw, 36px); font-weight: 650; letter-spacing: -0.055em; line-height: 1.3; }

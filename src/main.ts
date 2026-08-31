@@ -9,7 +9,12 @@ if (!root) {
 const query = new URLSearchParams(location.search);
 
 // The asset library deliberately mounts without either game's save/session owner.
-if (query.get("assets") === "1") {
+if (query.get("assets") === "equipment") {
+  const { EquipmentLibraryApp } = await import("./sim3d/equipment-library/EquipmentLibraryApp");
+  const app = new EquipmentLibraryApp(root);
+  void app.init();
+  if (import.meta.hot) import.meta.hot.dispose(() => app.dispose());
+} else if (query.get("assets") === "1") {
   const { AssetLibraryApp } = await import("./sim3d/product-library/AssetLibraryApp");
   const app = new AssetLibraryApp(root);
   void app.init();
