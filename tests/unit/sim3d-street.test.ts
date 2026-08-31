@@ -80,6 +80,8 @@ describe("business milestones for future high street venues", () => {
     expect(getStreetProgress(state)).toMatchObject({ level: 2, experience: 30, levelExperience: 0, nextLevelExperience: 60 });
     expect(getVenueProgress(state, "cafe").eligible).toBe(false);
     expect(getVenueProgress(state, "cafe").requirements[1]).toMatchObject({ current: 0, target: 1, completed: false });
+    expect(reduceSim(state, { type: "SETTLE_DAY" }).state).toBe(state);
+    state = act(state, { type: "CLOSE_STORE" });
     state = act(state, { type: "SETTLE_DAY" });
     expect(getVenueProgress(state, "cafe")).toMatchObject({ eligible: true, statusText: "条件已达成·筹备中" });
     const progress = getStreetProgress(state);
@@ -87,10 +89,38 @@ describe("business milestones for future high street venues", () => {
     expect(getStreetProgress(state)).toEqual(progress);
   });
 
+  it("keeps zero-sales days in history without fulfilling the café milestone, then accepts a paid day-end", () => {
+    let state = act(createFirstDayState(), { type: "CLOSE_STORE" });
+    state = act(state, { type: "SETTLE_DAY" });
+    expect(state.cashPence).toBe(1200);
+    expect(state.settlements[0]).toMatchObject({ dayNumber: 1, paidCustomers: 0, revenuePence: 0 });
+    expect(getStreetProgress(state)).toMatchObject({ settledDays: 1, paidOrders: 0, experience: 0, level: 1 });
+    expect(getVenueProgress(state, "cafe").requirements.find((requirement) => requirement.id === "settlement"))
+      .toMatchObject({ current: 0, target: 1, completed: false });
+
+    state = act(state, { type: "START_NEXT_DAY" });
+    state = serveDay(state);
+    expect(getStreetProgress(state)).toMatchObject({ settledDays: 1, paidOrders: 3, experience: 30, level: 2 });
+    expect(getVenueProgress(state, "cafe").requirements.find((requirement) => requirement.id === "level")?.completed).toBe(true);
+    expect(getVenueProgress(state, "cafe").requirements.find((requirement) => requirement.id === "settlement"))
+      .toMatchObject({ current: 0, target: 1, completed: false });
+    expect(getVenueProgress(state, "cafe").eligible).toBe(false);
+
+    const balance = state.cashPence;
+    state = act(state, { type: "CLOSE_STORE" });
+    state = act(state, { type: "SETTLE_DAY" });
+    expect(state.cashPence).toBe(balance);
+    expect(getStreetProgress(state)).toMatchObject({ settledDays: 2, paidOrders: 3, experience: 30, level: 2 });
+    expect(getVenueProgress(state, "cafe").requirements.find((requirement) => requirement.id === "settlement"))
+      .toMatchObject({ current: 1, target: 1, completed: true });
+    expect(getVenueProgress(state, "cafe")).toMatchObject({ eligible: true, statusText: "条件已达成·筹备中" });
+  });
+
   it("derives paid-order and expansion milestones from conserved multi-day business history", () => {
     let state = createFirstDayState();
     for (let day = 1; day <= 10; day += 1) {
       state = serveDay(state);
+      state = act(state, { type: "CLOSE_STORE" });
       state = act(state, { type: "SETTLE_DAY" });
       if (day === 3) expect(getVenueProgress(state, "restaurant").requirements[1]).toMatchObject({ current: 9, target: 12, completed: false });
       if (day === 4) expect(getVenueProgress(state, "restaurant")).toMatchObject({ eligible: true, statusText: "条件已达成·筹备中" });

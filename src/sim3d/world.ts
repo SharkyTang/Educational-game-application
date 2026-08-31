@@ -16,7 +16,7 @@ import { createStreet, setDeliveryTruckStatus, setStreetVenueStatus, type Street
 import { createRecyclingStation, RECYCLING_POINT } from "./recyclingStation";
 import { STREET_VENUES, getVenueProgress, type VenueId } from "./progression";
 import {
-  countAt, canSettleDay, canStartCustomer, getCheckoutTotal, getCustomerOrder, getShoppingProduct, getDaySummary, getDeliverySummary, getRecyclingOffer, getRecyclingSummary, isWalkablePosition, PRODUCTS, PRODUCT_IDS, SAFE_DROP_POINTS, type CrateId, type CustomerPhase,
+  countAt, canSettleDay, canStartCustomer, getCheckoutTotal, getCustomerOrder, getShoppingProduct, getDeliverySummary, getRecyclingOffer, getRecyclingSummary, isWalkablePosition, PRODUCTS, PRODUCT_IDS, SAFE_DROP_POINTS, type CrateId, type CustomerPhase,
   type PlayerPose, type Position, type ProductId, type SimState,
 } from "./domain";
 
@@ -777,7 +777,9 @@ export class ShopWorld {
       inspectable = false;
     } else if (data.kind === "open-sign") {
       label = "Open / Closed · 营业牌";
-      action = this.state.day.phase === "settled" ? "查看日结 / 开始下一天" : canSettleDay(this.state) ? "结束营业并查看账目" : getDaySummary(this.state).paidCustomers >= this.state.day.targetCustomers ? "查看日结前的收尾事项" : this.state.customer.phase === "outside" ? "开门营业" : this.state.customer.phase === "complete" ? "接待下一位顾客" : "正在营业";
+      action = this.state.day.phase === "settled" ? "查看日结 / 开始下一天"
+        : this.state.day.phase === "closing" ? canSettleDay(this.state) ? "完成日结并查看账目" : "查看打烊后的收尾事项"
+          : this.state.day.phase === "preparing" ? "开门营业 · 09:00 开始计时" : "查看营业时间 / 提前打烊";
       inspectable = false;
     } else if (data.kind === "delivery") {
       const delivery = getDeliverySummary(this.state);
@@ -833,7 +835,7 @@ export class ShopWorld {
       point = RECYCLING_POINT;
       title = recycling.rewardPence > 0 ? `空箱回收点 · 按 E +£${(recycling.rewardPence / 100).toFixed(2)}` : "空箱回收点 · 按 E 清走";
     } else if (state.day.phase === "settled" || canSettleDay(state)) {
-      this.callbacks.onGuide?.(state.day.phase === "settled" ? "今日已日结 · 点“营业 / 日结”开始下一天" : "三单已完成 · 点“营业 / 日结”查看今天的收支");
+      this.callbacks.onGuide?.(state.day.phase === "settled" ? "今日已日结 · 点“营业 / 日结”开始下一天" : "打烊收尾已完成 · 点“营业 / 日结”查看今天的收支");
       return;
     } else if (state.customer.phase === "checkout" || state.customer.phase === "to-checkout") {
       point = { x: -2.2, z: -1.0 }; title = "收银台内侧";

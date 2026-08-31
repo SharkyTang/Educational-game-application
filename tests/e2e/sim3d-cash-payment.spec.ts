@@ -6,6 +6,7 @@ import {
 } from "../../src/sim3d/domain";
 import { cashTenderSpeechFor } from "../../src/sim3d/customerSelection";
 import { readBrowserSnapshot as savedSnapshot } from "./helpers/sim3d-payment";
+import { beginNextFixtureCustomer } from "./helpers/sim3d-business-time";
 
 // Each check owns a disposable Playwright context. No user browser or user save is touched.
 // Keep the real 3D checks within this file sequential, even in the parallel wider suite.
@@ -49,7 +50,7 @@ function checkoutFixture(visitor: 1 | 2 = 2, products: readonly ProductId[] = ["
     }
     state = step(state, { type: "PAY", success: true });
     state = step(state, { type: "CUSTOMER_ADVANCE" });
-    state = walkToCheckout(step(state, { type: "NEXT_CUSTOMER" }));
+    state = walkToCheckout(beginNextFixtureCustomer(state));
     expect(state.payment?.method).toBe("cash");
   }
   return step(state, { type: "SAVE_POSE", pose: checkoutPose });
@@ -347,7 +348,7 @@ test("card checkout: the original first visitor still pays once and the next vis
   await page.keyboard.press("e");
   await page.keyboard.press("e");
   expect((await savedSnapshot(page)).transactions).toHaveLength(1);
-  await expect(page.locator("#s3-customer-name")).toContainText("第 2 位顾客", { timeout: 20_000 });
+  await expect(page.locator("#s3-customer-name")).toContainText("第 2 位顾客", { timeout: 30_000 });
   await expect(page.locator("#s3-receipt-title")).toHaveText("顾客想结账", { timeout: 35_000 });
   await expect(page.locator("#s3-customer-line")).toContainText(/cash/i);
   const next = await savedSnapshot(page);

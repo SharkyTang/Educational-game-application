@@ -56,7 +56,7 @@ export function getVenueProgress(state: SimState, id: VenueId): VenueProgress {
     id: requirementId, label, current, target, completed: current >= target,
   });
   const requirements = [requirement("level", `经营等级达到 Lv ${venue.requiredLevel}`, progress.level, venue.requiredLevel)];
-  if (id === "cafe") requirements.push(requirement("settlement", "完成首次营业日结", progress.settledDays, 1));
+  if (id === "cafe") requirements.push(requirement("settlement", "完成首次有收款的营业日结", state.settlements.filter((day) => day.paidCustomers > 0).length, 1));
   if (id === "restaurant") requirements.push(requirement("paid-orders", "累计完成 12 单收款", progress.paidOrders, 12));
   if (id === "supermarket") {
     requirements.push(requirement("upgrade", "完成小店货架扩容", progress.upgraded ? 1 : 0, 1));

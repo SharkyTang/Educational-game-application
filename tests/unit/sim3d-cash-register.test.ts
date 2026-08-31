@@ -50,6 +50,14 @@ describe("cash register guidance and accessible controls", () => {
     expect(markup).toContain("暂不限制库存");
   });
 
+  it("explains that a timed business day does not force unfinished change to end at closing", () => {
+    const markup = cashRegisterMarkup();
+    expect(markup).toContain("打烊后仍可完成本单");
+    expect(markup).not.toContain("这里不计时");
+    expect(markup).toContain('id="s3-cash-business-clock"');
+    expect(markup).toContain('role="timer" aria-live="off"');
+  });
+
   it("renders all four amounts and gates receive, change, and confirmation separately", () => {
     const nodes = new Map([...cashRegisterMarkup().matchAll(/id="([^"]+)"/g)].map((match) => [match[1]!, {
       textContent: "", innerHTML: "", disabled: false, hidden: false,

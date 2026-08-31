@@ -68,8 +68,14 @@ function v5Snapshot(state = reduceSim(createFirstDayState(), { type: "PURCHASE_S
   const { payment: _payment, recyclingBatches: _recyclingBatches, recyclingRecords: _recyclingRecords, settlements, ...previous } = structuredClone(state);
   return {
     ...previous, schemaVersion: 5, customer: { phase: previous.customer.phase, number: previous.customer.number },
+    day: {
+      number: previous.day.number, phase: previous.day.phase === "closing" ? "open" : previous.day.phase,
+      targetCustomers: 3, transactionStart: previous.day.transactionStart, purchaseStart: previous.day.purchaseStart,
+      openingCashPence: previous.day.openingCashPence, openingStockUnits: previous.day.openingStockUnits,
+      openingInventoryValuePence: previous.day.openingInventoryValuePence,
+    },
     transactions: preCashTransactions(previous.transactions),
-    settlements: settlements.map(({ recycledCrates: _recycledCrates, recyclingIncomePence: _recyclingIncomePence, ...record }) => record),
+    settlements: settlements.map(({ recycledCrates: _recycledCrates, recyclingIncomePence: _recyclingIncomePence, ...record }) => ({ ...record, targetCustomers: 3 })),
     purchases: previous.purchases.map(({ id, dayNumber, pairs, itemIds, amountPence, receivedDay }) => ({
       id, dayNumber, pairs: pairs!, itemIds, amountPence, receivedDay,
     })),
@@ -243,14 +249,14 @@ describe("safe crate placement around the player", () => {
   });
 });
 
-describe("v8 snapshot persistence and read-only v3 migration", () => {
+describe("v9 snapshot persistence and read-only v3 migration", () => {
   it("starts the new namespace with £12 and empty crates without rewriting unrelated 2D data", () => {
     const storage = new MemoryStorage();
     storage.data.set("english-high-street:save:v2", "legacy-2d-content");
     const before = [...storage.data];
     expect(loadSimState(storage)).toEqual({ state: createFirstDayState(), source: "new" });
     expect([...storage.data]).toEqual(before);
-    expect(SIM_STORAGE_KEY).toBe("english-high-street:sim3d:v8");
+    expect(SIM_STORAGE_KEY).toBe("english-high-street:sim3d:v9");
   });
 
   it("migrates the valid v3 world once and leaves both original v3 keys byte-for-byte intact", () => {
@@ -264,7 +270,7 @@ describe("v8 snapshot persistence and read-only v3 migration", () => {
     expect(migrated.source).toBe("legacy");
     expect(migrated.warning).toContain("不会额外发放");
     expect(migrated.state.cashPence).toBe(400);
-    expect(migrated.state.schemaVersion).toBe(8);
+    expect(migrated.state.schemaVersion).toBe(9);
     expect(migrated.state.transactions).toEqual(oldSnapshot().transactions.map((transaction) => ({ ...transaction, paymentMethod: "card", tenderedPence: transaction.amountPence, changePence: 0 })));
     expect([...storage.data]).toEqual(before);
     saveSimState(migrated.state, storage);
@@ -453,6 +459,7 @@ describe("audited v4 migration and coexistence with an older page", () => {
 
   it.each([
     ["cash", (old: SimStateV4) => { old.cashPence += 1200 }],
+    ["uncapped day in an old schema", (old: SimStateV4) => { Object.assign(old.day, { targetCustomers: null }) }],
     ["missing purchase", (old: SimStateV4) => { old.purchases = [] }],
     ["incorrect purchase charge", (old: SimStateV4) => { old.purchases[0]!.amountPence = 100 }],
     ["unaudited extra goods", (old: SimStateV4) => { old.items.push({ id: "free-milk", productId: "milk", location: { kind: "crate", crateId: "milk-crate" } }) }],
@@ -530,7 +537,7 @@ describe("strict v5 selected-stock migration to the current schema", () => {
     const untouched = [...storage.data];
     const result = loadSimState(storage);
     expect(result.source).toBe("v5");
-    expect(result.state.schemaVersion).toBe(8);
+    expect(result.state.schemaVersion).toBe(9);
     expect(validateSimState(result.state)).toBe(true);
     expect(result.state.cashPence).toBe(old.cashPence);
     expect(result.state.items).toEqual(old.items);
@@ -624,6 +631,7 @@ describe("strict v5 selected-stock migration to the current schema", () => {
 
   it.each([
     ["extra cash", (old: SimStateV5) => { old.cashPence += 1200 }],
+    ["uncapped day in an old schema", (old: SimStateV5) => { Object.assign(old.day, { targetCustomers: null }) }],
     ["future receipt", (old: SimStateV5) => { old.purchases[0]!.receivedDay = 2 }],
     ["new SKU in an old ledger", (old: SimStateV5) => { old.items[0]!.productId = "soap" }],
     ["unreceived goods in a crate", (old: SimStateV5) => { old.items[0]!.location = { kind: "crate", crateId: "milk-crate" } }],

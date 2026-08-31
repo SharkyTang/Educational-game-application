@@ -223,6 +223,7 @@ describe("daily accounts and recycling audits", () => {
     state = drop(stock(state, "milk", 3));
     state = drop(stock(state, "bread", 3));
     for (let customer = 0; customer < 3; customer += 1) state = sale(state);
+    state = act(state, { type: "CLOSE_STORE" });
     state = act(state, { type: "SETTLE_DAY" });
     state = act(state, { type: "START_NEXT_DAY" });
     state = buy(state, [{ productId: "milk", quantity: 1 }]);
@@ -238,6 +239,7 @@ describe("daily accounts and recycling audits", () => {
     state = drop(stock(state, "milk", 3));
     state = drop(stock(state, "bread", 3));
     for (let customer = 0; customer < 3; customer += 1) state = sale(state);
+    state = act(state, { type: "CLOSE_STORE" });
     state = act(state, { type: "SETTLE_DAY" });
     expect(state.cashPence).toBe(1710);
     state = recycle(state, "milk");

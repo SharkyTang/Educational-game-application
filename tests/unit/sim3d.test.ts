@@ -293,6 +293,8 @@ describe("3D customer, scanning and transactional payment", () => {
     let state = stockAll();
     for (let customer = 1; customer <= 4; customer += 1) {
       if (customer === 4) {
+        expect(reduceSim(state, { type: "NEXT_CUSTOMER" }).changed).toBe(true);
+        state = act(state, { type: "CLOSE_STORE" });
         expect(reduceSim(state, { type: "NEXT_CUSTOMER" }).changed).toBe(false);
         state = act(state, { type: "SETTLE_DAY" });
         state = act(state, { type: "START_NEXT_DAY" });

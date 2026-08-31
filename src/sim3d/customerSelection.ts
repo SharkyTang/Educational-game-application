@@ -29,7 +29,6 @@ export const CUSTOMER_WALK_SPEED = 1.41; // Was .94 m/s; +50%, independent of fr
 export const CUSTOMER_WALK_ANIMATION_RATE = 1.575; // Keep stride cadence with translation.
 export const CUSTOMER_STOP_SECONDS = .35; // Was 1.1 s at every stage.
 export const CUSTOMER_EXIT_STOP_SECONDS = .1;
-export const NEXT_CUSTOMER_SECONDS = .65; // Was 2 s after leaving.
 
 const LEGACY_CUSTOMER_SEED = 31;
 // Appearance and dialogue depend on visit identity, never on the shopping basket.

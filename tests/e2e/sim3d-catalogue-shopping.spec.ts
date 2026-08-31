@@ -5,6 +5,7 @@ import {
   type ProductId, type PurchaseLine, type SimCommand, type SimState,
 } from "../../src/sim3d/domain";
 import { completeFixturePayment, payScannedCheckout } from "./helpers/sim3d-payment";
+import { beginNextFixtureCustomer } from "./helpers/sim3d-business-time";
 
 test.describe.configure({ mode: "default" });
 test.use({ viewport: { width: 1365, height: 860 } });
@@ -82,12 +83,13 @@ function allProductsFixture(): SimState {
   for (let day = 1; state.cashPence < totalCost && day <= 30; day++) {
     state = stockLines(state, [{ productId: "milk", quantity: 3 }, { productId: "bread", quantity: 3 }], `catalogue-capital-${day}`);
     for (let visitor = 0; visitor < 3; visitor++) {
-      state = step(state, { type: visitor === 0 ? "OPEN_STORE" : "NEXT_CUSTOMER" });
+      state = visitor === 0 ? step(state, { type: "OPEN_STORE" }) : beginNextFixtureCustomer(state);
       while (["to-milk", "to-bread", "to-checkout"].includes(state.customer.phase)) state = step(state, { type: "CUSTOMER_ADVANCE" });
       for (const item of state.items.filter((entry) => entry.location.kind === "checkout")) state = step(state, { type: "SCAN", itemId: item.id });
       state = completeFixturePayment(state);
       state = step(state, { type: "CUSTOMER_ADVANCE" });
     }
+    state = step(state, { type: "CLOSE_STORE" });
     state = step(state, { type: "SETTLE_DAY" });
     state = step(state, { type: "START_NEXT_DAY" });
   }

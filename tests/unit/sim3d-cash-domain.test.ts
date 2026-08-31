@@ -83,10 +83,10 @@ function finishCash(state: SimState, selection?: number[]): SimState {
   return act(state, { type: "CONFIRM_CASH" });
 }
 
-describe("v8 cash payment domain lifecycle and atomic settlement", () => {
+describe("cash payment domain lifecycle and atomic settlement", () => {
   it("freezes the method on entry while keeping the original shopping list, models and inventory choice independent", () => {
     let state = stocked();
-    expect(state.schemaVersion).toBe(8);
+    expect(state.schemaVersion).toBe(9);
     expect(state.payment).toBeNull();
     state = act(state, { type: "OPEN_STORE" });
     expect(state.payment).toEqual({ method: "card" });
@@ -249,6 +249,8 @@ describe("v8 cash payment domain lifecycle and atomic settlement", () => {
     expect(state.payment).toBeNull();
     expect(getDaySummary(state).paidCustomers).toBe(3);
     const balance = state.cashPence;
+    expect(reduceSim(state, { type: "SETTLE_DAY" }).state).toBe(state);
+    state = act(state, { type: "CLOSE_STORE" });
     state = act(state, { type: "SETTLE_DAY" });
     expect(state.payment).toBeNull();
     expect(state.cashPence).toBe(balance);
@@ -260,7 +262,7 @@ describe("v8 cash payment domain lifecycle and atomic settlement", () => {
   });
 });
 
-describe("v8 payment state and ledger tamper rejection", () => {
+describe("payment state and ledger tamper rejection", () => {
   it.each([
     ["missing method", (state: SimState) => { state.payment = null }],
     ["insufficient tender", (state: SimState) => { state.payment = { method: "cash", tenderedPence: 434, received: false, selectedChange: [] } }],

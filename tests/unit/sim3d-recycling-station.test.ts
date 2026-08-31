@@ -122,6 +122,8 @@ describe("cardboard recycling in the physical shop", () => {
       state = payScannedCheckout(state);
       state = act(state, { type: "CUSTOMER_ADVANCE" });
     }
+    expect(canSettleDay(state)).toBe(false);
+    state = act(state, { type: "CLOSE_STORE" });
     expect(canSettleDay(state)).toBe(true);
     expectRecyclingGuide();
     state = act(state, { type: "SETTLE_DAY" });

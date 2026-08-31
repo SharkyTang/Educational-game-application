@@ -50,6 +50,7 @@ function afterDays(days: number): SimState {
     state = act(state, { type: "RECEIVE_DELIVERY" });
     state = stock(stock(state, "milk", 3), "bread", 3);
     for (let customer = 0; customer < 3; customer += 1) state = pay(checkout(state));
+    state = act(state, { type: "CLOSE_STORE" });
     state = act(state, { type: "SETTLE_DAY" });
     state = act(state, { type: "START_NEXT_DAY" });
   }

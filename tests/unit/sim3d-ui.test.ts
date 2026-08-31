@@ -35,6 +35,35 @@ describe("3D accessible interaction decisions", () => {
     expect(inspectableProduct(createInitialSimState(), null)).toBeNull();
   });
 
+  it("uses the opening sign for manual opening only, never to skip a scheduled arrival or reopen after closing", () => {
+    const sign = target({ kind: "open-sign", id: "open-sign", inspectable: false });
+    expect(commandForInteraction(createFirstDayState(), sign)).toEqual({ command: { type: "OPEN_STORE" } });
+    let state = checkoutState();
+    expect(commandForInteraction(state, sign)).toEqual({ management: "day" });
+    for (const item of state.items.filter((entry) => entry.location.kind === "checkout")) state = reduceSim(state, { type: "SCAN", itemId: item.id }).state;
+    state = reduceSim(payScannedCheckout(state), { type: "CUSTOMER_ADVANCE" }).state;
+    expect(state.day.nextCustomerAtMs).toBeGreaterThan(state.day.elapsedOpenMs);
+    expect(commandForInteraction(state, sign)).toEqual({ management: "day" });
+    state = reduceSim(state, { type: "CLOSE_STORE" }).state;
+    expect(commandForInteraction(state, sign)).toEqual({ management: "day" });
+    state = reduceSim(state, { type: "SETTLE_DAY" }).state;
+    expect(commandForInteraction(state, sign)).toEqual({ management: "day" });
+  });
+
+  it("keeps the real counter available to finish an unpaid order after closing", () => {
+    let state = reduceSim(checkoutState(), { type: "CLOSE_STORE" }).state;
+    const counter = target({ id: "counter", kind: "counter", inspectable: false });
+    for (let item = 0; item < 2; item += 1) {
+      const decision = commandForInteraction(state, counter);
+      expect(decision.command?.type).toBe("SCAN");
+      state = reduceSim(state, decision.command!).state;
+    }
+    expect(commandForInteraction(state, counter)).toEqual({ command: { type: "PAY", success: true } });
+    state = reduceSim(state, commandForInteraction(state, counter).command!).state;
+    expect(state.day.phase).toBe("closing");
+    expect(state.transactions).toHaveLength(1);
+  });
+
   it("maps a nearby crate to a real pickup and nearby shelf to its first empty slot", () => {
     let state = createInitialSimState();
     const pickup = commandForInteraction(state, target()).command!;

@@ -22,7 +22,7 @@ export function cashRegisterMarkup(): string {
       <div><p class="s3-eyebrow">CASH DESK · POUNDS &amp; PENCE</p><h2 id="s3-cash-title">收下现金，找好零钱</h2></div>
       <button id="s3-cash-close" class="s3-secondary-button" type="button">暂时离开 <kbd>Esc</kbd></button>
     </header>
-    <p id="s3-cash-intro" class="s3-muted">先核对顾客交来的钱，再点选零钱。这里不计时，选错可以撤回。</p>
+    <p id="s3-cash-intro" class="s3-muted">先核对顾客交来的钱，再点选零钱。选错可以撤回，打烊后仍可完成本单。</p>
     <ol class="s3-cash-steps" aria-label="现金收款步骤"><li id="s3-cash-step-receive" aria-current="step"><span>01</span> 收下现金</li><li id="s3-cash-step-change"><span>02</span> 选好找零</li><li id="s3-cash-step-confirm"><span>03</span> 确认完成</li></ol>
     <div class="s3-cash-layout">
       <section class="s3-cash-bill" aria-label="本单金额与顾客交款">
@@ -47,6 +47,7 @@ export function cashRegisterMarkup(): string {
         <button id="s3-cash-confirm" class="s3-primary-button" type="button" disabled>确认找零</button>
       </section>
     </div>
+    <p id="s3-cash-business-clock" class="s3-cash-footer" role="timer" aria-live="off"></p>
     <p id="s3-cash-save-note" class="s3-cash-footer">钱箱仅模拟收钱与找零；暂时离开会保留本单。取消订单请返回小店，在暂停菜单中操作。</p>
   </dialog>`;
 }

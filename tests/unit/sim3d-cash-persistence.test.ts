@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
-  createFirstDayState, getCheckoutTotal, getDaySummary, reduceSim, validateSimState,
-  type SimCommand, type SimState,
+  createFirstDayState, getCheckoutTotal, getDaySummary, reduceSim, validateSimState, validateV7SimState, validateV8SimState,
+  type SimCommand, type SimState, type SimStateV7, type SimStateV8,
 } from "../../src/sim3d/domain";
 import {
   SIM_BACKUP_KEY, SIM_STORAGE_KEY, SIM_WRITER_LOCK, SimSaveConflictError, SimSaveSession,
@@ -10,6 +10,8 @@ import {
 
 const V7_PRIMARY = "english-high-street:sim3d:v7";
 const V7_BACKUP = `${V7_PRIMARY}:backup`;
+const V8_PRIMARY = "english-high-street:sim3d:v8";
+const V8_BACKUP = `${V8_PRIMARY}:backup`;
 
 class MemoryStorage implements StorageLike {
   readonly data = new Map<string, string>();
@@ -60,24 +62,94 @@ function readyCash(): SimState {
   return act(partialCash(), { type: "ADD_CHANGE", denominationPence: 50 });
 }
 
-function v7Snapshot(state: SimState = partialCash()) {
-  const { payment: _payment, transactions, ...previous } = structuredClone(state);
+function v8Snapshot(state: SimState = partialCash()): SimStateV8 {
+  const previous = structuredClone(state);
+  return {
+    ...previous, schemaVersion: 8,
+    day: {
+      number: previous.day.number, phase: previous.day.phase === "closing" ? "open" : previous.day.phase,
+      targetCustomers: 3, transactionStart: previous.day.transactionStart, purchaseStart: previous.day.purchaseStart,
+      openingCashPence: previous.day.openingCashPence, openingStockUnits: previous.day.openingStockUnits,
+      openingInventoryValuePence: previous.day.openingInventoryValuePence,
+    },
+    settlements: previous.settlements.map((record) => ({ ...record, targetCustomers: 3 })),
+  };
+}
+
+function v7Snapshot(state: SimState = partialCash()): SimStateV7 {
+  const { payment: _payment, transactions, ...previous } = v8Snapshot(state);
   return {
     ...previous, schemaVersion: 7,
     transactions: transactions.map(({ id, customerNumber, itemIds, amountPence }) => ({ id, customerNumber, itemIds, amountPence })),
   };
 }
 
-describe("v8 read-only migration from v7 and older save sources", () => {
-  it("uses a new v8 namespace, preserving the cross-version writer lock", () => {
-    expect(SIM_STORAGE_KEY).toBe("english-high-street:sim3d:v8");
-    expect(SIM_BACKUP_KEY).toBe("english-high-street:sim3d:v8:backup");
+describe("v9 read-only migration of cash and pre-cash save sources", () => {
+  it("uses a new v9 namespace, preserving the cross-version writer lock", () => {
+    expect(SIM_STORAGE_KEY).toBe("english-high-street:sim3d:v9");
+    expect(SIM_BACKUP_KEY).toBe("english-high-street:sim3d:v9:backup");
     expect(SIM_WRITER_LOCK).toBe("english-high-street:sim3d:v4:writer");
+  });
+
+  it.each([
+    ["before receipt", pendingCash], ["partway through change", partialCash], ["ready for confirmation", readyCash],
+  ] as const)("preserves genuine v8 tentative cash %s and starts the timed day without replaying money", (_label, fixture) => {
+    const current = fixture();
+    const old = v8Snapshot(current);
+    expect(old.day.targetCustomers).toBe(3);
+    expect(old.day).not.toHaveProperty("elapsedOpenMs");
+    expect(old.day).not.toHaveProperty("nextCustomerAtMs");
+    expect(old.day).not.toHaveProperty("closeReason");
+    expect(validateV8SimState(old)).toBe(true);
+    const storage = new MemoryStorage();
+    const original = JSON.stringify(old, null, 2);
+    storage.data.set(V8_PRIMARY, original);
+    storage.data.set(V8_BACKUP, JSON.stringify(v8Snapshot(pendingCash())));
+    const before = [...storage.data];
+    const loaded = loadSimState(storage);
+    expect(loaded.source).toBe("v8");
+    expect(loaded.state).toEqual(current);
+    expect(parseImportedSimState(original)).toEqual(current);
+    expect(loaded.state.payment).toEqual(old.payment);
+    expect(loaded.state.transactions).toEqual(old.transactions);
+    expect(loaded.state.cashPence).toBe(old.cashPence);
+    expect([...storage.data]).toEqual(before);
+    saveSimState(loaded.state, storage);
+    for (const [key, value] of before) expect(storage.getItem(key)).toBe(value);
+  });
+
+  it("recovers genuine v8 cash from its backup before a v7 source without overwriting either", () => {
+    const storage = new MemoryStorage();
+    const cash = partialCash();
+    storage.data.set(SIM_STORAGE_KEY, "{corrupt-v9");
+    storage.data.set(SIM_BACKUP_KEY, "null");
+    storage.data.set(V8_PRIMARY, "{corrupt-v8");
+    storage.data.set(V8_BACKUP, JSON.stringify(v8Snapshot(cash)));
+    storage.data.set(V7_PRIMARY, JSON.stringify(v7Snapshot(pendingCash())));
+    const before = [...storage.data];
+    const loaded = loadSimState(storage);
+    expect(loaded.source).toBe("v8-backup");
+    expect(loaded.state).toEqual(cash);
+    expect(loaded.warning).toBeTruthy();
+    expect([...storage.data]).toEqual(before);
+  });
+
+  it.each([
+    ["v7", v7Snapshot, validateV7SimState], ["v8", v8Snapshot, validateV8SimState],
+  ] as const)("rejects a new uncapped day disguised as a %s legacy snapshot", (_label, fixture, validate) => {
+    const old = fixture();
+    expect(validate(old)).toBe(true);
+    Object.assign(old.day, { targetCustomers: null });
+    expect(validate(old)).toBe(false);
+    expect(() => parseImportedSimState(JSON.stringify(old))).toThrow("校验未通过");
   });
 
   it("retains v7 money, stock, scans and recycling while labelling old sales and the current visit as card", () => {
     const current = partialCash();
     const old = v7Snapshot(current);
+    expect(old.day.targetCustomers).toBe(3);
+    expect(old.day).not.toHaveProperty("elapsedOpenMs");
+    expect(validateV7SimState(old)).toBe(true);
     const raw = JSON.stringify(old, null, 2);
     const storage = new MemoryStorage();
     storage.data.set(V7_PRIMARY, raw);
@@ -88,7 +160,8 @@ describe("v8 read-only migration from v7 and older save sources", () => {
     const loaded = loadSimState(storage);
     expect(loaded.source).toBe("v7");
     expect(loaded.state).toEqual({
-      ...old, schemaVersion: 8, payment: { method: "card" },
+      ...old, schemaVersion: 9, payment: { method: "card" },
+      day: { ...old.day, targetCustomers: null, elapsedOpenMs: 0, nextCustomerAtMs: null, closeReason: null },
       transactions: old.transactions.map((transaction) => ({ ...transaction, paymentMethod: "card", tenderedPence: transaction.amountPence, changePence: 0 })),
     });
     expect(loaded.state.cashPence).toBe(current.cashPence);
@@ -118,10 +191,10 @@ describe("v8 read-only migration from v7 and older save sources", () => {
     }
   });
 
-  it("prefers a valid v8 backup, then a v7 backup, without deleting corrupt primary snapshots", () => {
+  it("prefers a valid current backup, then a v7 backup, without deleting corrupt primary snapshots", () => {
     const storage = new MemoryStorage();
     const current = partialCash();
-    storage.data.set(SIM_STORAGE_KEY, "{corrupt-v8");
+    storage.data.set(SIM_STORAGE_KEY, "{corrupt-v9");
     storage.data.set(SIM_BACKUP_KEY, JSON.stringify(current));
     storage.data.set(V7_PRIMARY, "{corrupt-v7");
     storage.data.set(V7_BACKUP, JSON.stringify(v7Snapshot()));
@@ -133,7 +206,7 @@ describe("v8 read-only migration from v7 and older save sources", () => {
     expect(restored.source).toBe("v7-backup");
     expect((restored.state).payment).toEqual({ method: "card" });
     expect(restored.warning).toBeTruthy();
-    expect(storage.getItem(SIM_STORAGE_KEY)).toBe("{corrupt-v8");
+    expect(storage.getItem(SIM_STORAGE_KEY)).toBe("{corrupt-v9");
     expect(storage.getItem(V7_PRIMARY)).toBe("{corrupt-v7");
   });
 
@@ -149,7 +222,7 @@ describe("v8 read-only migration from v7 and older save sources", () => {
     expect(storage.getItem(SIM_STORAGE_KEY)).toBeNull();
   });
 
-  it("detects an old page changing the v7 migration source before this page can write v8", async () => {
+  it("detects an old page changing the v7 migration source before this page can write v9", async () => {
     const storage = new MemoryStorage();
     const old = v7Snapshot();
     storage.data.set(V7_PRIMARY, JSON.stringify(old));
@@ -225,7 +298,7 @@ describe("cash selection recovery, write failure and exactly-once saves", () => 
     await session.release();
   });
 
-  it("keeps the original v7 source intact if the initial migrated v8 write fails", async () => {
+  it("keeps the original v7 source intact if the initial migrated v9 write fails", async () => {
     const storage = new MemoryStorage();
     const raw = JSON.stringify(v7Snapshot());
     storage.data.set(V7_PRIMARY, raw);

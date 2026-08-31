@@ -58,17 +58,24 @@ function settledDay(): SimState {
     state = payScannedCheckout(state);
     state = act(state, { type: "CUSTOMER_ADVANCE" });
   }
+  state = act(state, { type: "CLOSE_STORE" });
   return act(state, { type: "SETTLE_DAY" });
 }
 
-/** A genuine v6 file has neither recycling ledger nor the two new day-summary fields. */
+/** Genuine v6 has fixed three-customer days, no timed-day fields and no recycling ledger. */
 function v6Snapshot(state = heldEmptyCrate()): SimStateV6 {
   expect(state.recyclingRecords).toEqual([]);
   const { payment: _payment, recyclingBatches: _recyclingBatches, recyclingRecords: _recyclingRecords, settlements, ...previous } = structuredClone(state);
   return {
     ...previous, schemaVersion: 6,
+    day: {
+      number: previous.day.number, phase: previous.day.phase === "closing" ? "open" : previous.day.phase,
+      targetCustomers: 3, transactionStart: previous.day.transactionStart, purchaseStart: previous.day.purchaseStart,
+      openingCashPence: previous.day.openingCashPence, openingStockUnits: previous.day.openingStockUnits,
+      openingInventoryValuePence: previous.day.openingInventoryValuePence,
+    },
     transactions: preCashTransactions(previous.transactions),
-    settlements: settlements.map(({ recycledCrates: _recycledCrates, recyclingIncomePence: _recyclingIncomePence, ...record }) => record),
+    settlements: settlements.map(({ recycledCrates: _recycledCrates, recyclingIncomePence: _recyclingIncomePence, ...record }) => ({ ...record, targetCustomers: 3 })),
   };
 }
 
@@ -98,7 +105,8 @@ describe("read-only v6 migration into the recycling ledger", () => {
     expect(loaded.source).toBe("v6");
     expect(loaded.warning).toContain("不会额外发钱");
     expect(loaded.state).toEqual({
-      ...old, schemaVersion: 8, payment: null, recyclingRecords: [],
+      ...old, schemaVersion: 9, payment: null, recyclingRecords: [],
+      day: { ...old.day, targetCustomers: null, elapsedOpenMs: 0, nextCustomerAtMs: null, closeReason: null },
       recyclingBatches: [
         { id: "crate-batch-1", productId: "milk", purchaseIds: ["paid-opening"] },
         { id: "crate-batch-2", productId: "bread", purchaseIds: ["paid-opening"] },
@@ -131,7 +139,7 @@ describe("read-only v6 migration into the recycling ledger", () => {
     expect(restored.items).toEqual(old.items);
     expect(restored.transactions).toEqual(old.transactions.map((transaction) => ({ ...transaction, paymentMethod: "card", tenderedPence: transaction.amountPence, changePence: 0 })));
     expect(restored.held).toEqual(old.held);
-    expect(restored.day).toEqual(old.day);
+    expect(restored.day).toEqual({ ...old.day, targetCustomers: null, elapsedOpenMs: 0, nextCustomerAtMs: null, closeReason: "legacy" });
     expect(restored.settlements).toEqual(old.settlements.map((record) => ({ ...record, recycledCrates: 0, recyclingIncomePence: 0 })));
     expect(reduceSim(restored, { type: "SETTLE_DAY" }).state).toBe(restored);
     const recycled = act(restored, { type: "RECYCLE_CRATE" });
@@ -173,6 +181,7 @@ describe("read-only v6 migration into the recycling ledger", () => {
 
   it.each([
     ["unearned cash", (old: SimStateV6) => { old.cashPence += 5 }],
+    ["uncapped day in an old schema", (old: SimStateV6) => { Object.assign(old.day, { targetCustomers: null }) }],
     ["removed reusable box", (old: SimStateV6) => { old.crates.pop() }],
     ["future receipt", (old: SimStateV6) => { old.purchases[0]!.receivedDay = 2 }],
     ["missing purchased goods", (old: SimStateV6) => { old.items.pop() }],

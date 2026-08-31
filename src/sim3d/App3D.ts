@@ -3,14 +3,16 @@ import {
   createFirstDayState, getCheckoutTotal, getObjective, reduceSim,
   getDaySummary, getPurchaseOffer, getDeliverySummary, getCustomerOrder, getShoppingProduct,
   getRecyclingOffer, getRecyclingSummary, RECYCLING_REWARD_PENCE,
-  canSettleDay, canStartCustomer, CRATE_CAPACITY, DAY_CUSTOMER_TARGET,
+  canSettleDay, canStartCustomer, CRATE_CAPACITY,
   type PlayerPose, type ProductId, type PurchaseLine, type SimCommand, type SimState,
 } from "./domain";
 import { loadSimState, parseImportedSimState, SimSaveConflictError, SimSaveSession, SIM_STORAGE_KEY } from "./persistence";
 import { ShopWorld, type InteractionTarget, type Quality } from "./world";
 import { SPEECH_CLIPS } from "./speechClips";
 import { ShopAudio, type ShopEffect } from "./shopAudio";
-import { createCustomerSeed, customerProfileFor, customerSpeechFor, cashTenderSpeechFor, NEXT_CUSTOMER_SECONDS, type CustomerSpeechClip } from "./customerSelection";
+import { createCustomerSeed, customerProfileFor, customerSpeechFor, cashTenderSpeechFor, type CustomerSpeechClip } from "./customerSelection";
+import { getBusinessClock } from "./businessTime";
+import { BusinessClockDriver, isBusinessTimeRunning } from "./businessClockDriver";
 import { cashRegisterMarkup } from "./cashRegister";
 import { CashRegisterController } from "./cashRegisterController";
 import { STREET_VENUES, getStreetProgress, getVenueProgress } from "./progression";
@@ -18,6 +20,7 @@ import { PRODUCT_ASSETS, PRODUCT_CATEGORIES, type ProductCategoryId } from "./pr
 import type { PointerMode } from "./pointerAccess";
 import "./styles.css";
 import "./cashRegister.css";
+import "./businessTime.css";
 
 type ScreenMode = "loading" | "start" | "playing" | "paused" | "inspecting" | "cashier" | "readonly" | "error";
 type ManagementSection = "supply" | "day" | "upgrade" | "street";
@@ -110,8 +113,7 @@ export function commandForInteraction(state: SimState, target: InteractionTarget
       return state.payment?.method === "cash" ? { cashRegister: true } : { command: { type: "PAY", success: true } };
     }
     case "open-sign":
-      if (state.day.phase === "settled" || getDaySummary(state).paidCustomers >= DAY_CUSTOMER_TARGET) return { management: "day" };
-      return { command: { type: state.customer.phase === "outside" ? "OPEN_STORE" : "NEXT_CUSTOMER" } };
+      return state.day.phase === "preparing" ? { command: { type: "OPEN_STORE" } } : { management: "day" };
     case "drop-zone":
       return state.held.kind === "item" ? { command: { type: "RETURN_ITEM" } }
         : target.position ? { command: { type: "DROP_HELD", position: target.position } } : {};
@@ -157,8 +159,10 @@ export class App3D {
   private pointerMode: PointerMode = "free";
   private customerClip: CustomerSpeechClip = customerSpeechFor(this.state, "greeting");
   private lastCustomerCue = "";
-  private lastFrameAt = 0;
-  private nextCustomerElapsed = 0;
+  private readonly businessClock = new BusinessClockDriver();
+  private learningPlayback = false;
+  private closingWarningDay = 0;
+  private closeConfirmation = false;
   private dayReadyNotified = 0;
   private readonly purchaseQuantities = new Map<ProductId, string>();
   private purchaseSearch = "";
@@ -220,7 +224,7 @@ export class App3D {
         if (this.mode !== "cashier" || this.disposed) return;
         this.stopSpeech();
         this.mode = "playing";
-        this.lastFrameAt = performance.now();
+        this.businessClock.resume(performance.now());
         this.world?.setActive(true);
         this.releasePointer();
         this.renderCaptureHint();
@@ -228,7 +232,7 @@ export class App3D {
         this.el("s3-canvas").focus();
         this.syncCustomerCue();
       },
-      speak: (clip, rate) => this.speak(clip, rate),
+      speak: (clip, rate) => this.speak(clip, rate, undefined, true),
     }, this.events.signal);
     this.bindEvents();
     this.renderState();
@@ -241,6 +245,7 @@ export class App3D {
     const isCurrent = (): boolean => !this.disposed && generation === this.initGeneration;
     this.ready = false;
     this.mode = "loading";
+    this.businessClock.reset();
     this.cashRegister.close();
     this.shopAudio.setActive(false);
     this.stopSpeech();
@@ -280,7 +285,7 @@ export class App3D {
         onDrop: () => { if (isCurrent()) this.dropHeld() },
         onPause: () => { if (isCurrent()) this.pause() },
         onCustomerArrive: () => {
-          if (isCurrent() && this.mode === "playing") this.dispatch({ type: "CUSTOMER_ADVANCE" });
+          if (isCurrent() && this.mode === "playing" && !this.learningPlayback && this.audioForeground && !document.hidden) this.dispatch({ type: "CUSTOMER_ADVANCE" });
         },
         onStatus: (text) => {
           if (!isCurrent()) return;
@@ -337,6 +342,10 @@ export class App3D {
         <div id="s3-hud" class="s3-hud" hidden>
           <div class="s3-top-left">
             <p class="s3-wordmark">CORNER SHOP <span>英语商业街</span></p>
+            <div id="s3-business-clock" class="s3-business-clock" aria-label="小店营业时间">
+              <time id="s3-business-time" role="timer" aria-live="off">08:30</time>
+              <strong id="s3-clock-state">准备中</strong><span id="s3-clock-note">09:00—19:00 营业</span>
+            </div>
             <details id="s3-task" class="s3-task" open>
               <summary><span id="s3-phase">准备开店</span><span class="s3-fold-hint">目标</span></summary>
               <p id="s3-objective"></p>
@@ -396,7 +405,7 @@ export class App3D {
             <p class="s3-eyebrow">ENGLISH HIGH STREET · YOUR FIRST SHOP</p>
             <h1 id="s3-start-title">Corner<br>Shop<span>一条商业街，从你的小店开始。</span></h1>
             <p class="s3-start-description">从 30 种商品里挑选你的小店要卖什么。<br>选好数量、门口签收，再亲手摆上货架，迎接街坊的第一笔生意。</p>
-            <div class="s3-start-stock"><span><span id="s3-start-capital">£12</span><small id="s3-start-capital-label">首日本金 · 进货会扣钱</small></span><span>3 guests <small>下单 → 签收 → 营业 → 成长</small></span></div>
+            <div class="s3-start-stock"><span><span id="s3-start-capital">£12</span><small id="s3-start-capital-label">首日本金 · 进货会扣钱</small></span><span>09:00–19:00 <small>持续来客 · 打烊后安心收尾</small></span></div>
             <p id="s3-start-note" class="s3-muted">按 B 打开进货清单，商品与数量都由你选择。至少上架一种商品就能迎客；按 M 看看商业街。</p>
             <button id="s3-start-button" class="s3-primary-button" type="button" disabled>开始第一天</button>
             <a id="s3-asset-library-link" class="s3-asset-library-link" href="?assets=1">商品素材库 <span>30 种模型 · 预览与导出 ↗</span></a>
@@ -468,11 +477,16 @@ export class App3D {
           <section id="s3-panel-day" class="s3-management-panel" aria-labelledby="s3-day-title" hidden>
             <p id="s3-day-eyebrow" class="s3-eyebrow">TODAY AT THE CORNER SHOP</p><h3 id="s3-day-title">今天的小店</h3>
             <p id="s3-day-progress" class="s3-muted"></p>
+            <p id="s3-day-clock" class="s3-day-clock"></p>
             <dl class="s3-account-lines"><div><dt>今日营业收入</dt><dd id="s3-day-revenue"></dd></div><div><dt>已售商品成本</dt><dd id="s3-day-cogs"></dd></div><div class="s3-account-result"><dt>商品毛利</dt><dd id="s3-day-profit"></dd></div><div><dt>空箱回收收入</dt><dd id="s3-day-recycling"></dd></div><div><dt>今日进货支出</dt><dd id="s3-day-procurement"></dd></div><div><dt>今日扩容支出</dt><dd id="s3-day-investment"></dd></div><div><dt>当前剩余资金</dt><dd id="s3-day-cash"></dd></div><div><dt>未售商品 / 成本价值</dt><dd id="s3-day-inventory"></dd></div></dl>
             <p id="s3-day-recycling-count" class="s3-muted"></p>
             <p class="s3-muted">商品毛利 = 营业收入 − 已售商品成本。回收收入单独记账，投入时即入账，日结不再发一次。进货中尚未卖出的部分仍是存货；扩容是投资，不把钱包余额当利润。</p>
             <p id="s3-day-reason" class="s3-inline-reason" role="status"></p>
-            <div class="s3-management-buttons"><button id="s3-settle-day" class="s3-primary-button" type="button">结束营业并结算</button><button id="s3-next-day" class="s3-primary-button" type="button" hidden>开始下一天</button><button id="s3-day-to-upgrade" class="s3-secondary-button" type="button">看看 £8 普通扩容</button></div>
+            <div class="s3-management-buttons"><button id="s3-close-shop" class="s3-secondary-button" type="button">提前打烊</button><button id="s3-settle-day" class="s3-primary-button" type="button" hidden>完成日结</button><button id="s3-next-day" class="s3-primary-button" type="button" hidden>开始下一天</button><button id="s3-day-to-upgrade" class="s3-secondary-button" type="button">看看 £8 普通扩容</button></div>
+            <div id="s3-close-confirm" class="s3-close-confirm" role="group" aria-label="确认提前打烊" hidden>
+              <p>今天不再接新顾客或新采购。店里的顾客仍可完成购物，已付款配送仍可签收；收尾后才能日结。确认提前打烊吗？</p>
+              <div class="s3-management-buttons"><button id="s3-close-confirm-button" class="s3-primary-button" type="button">确认打烊，开始收尾</button><button id="s3-close-cancel" class="s3-secondary-button" type="button">继续营业</button></div>
+            </div>
           </section>
           <section id="s3-panel-upgrade" class="s3-management-panel" aria-labelledby="s3-upgrade-title" hidden>
             <p class="s3-eyebrow">MORE ROOM TO GROW</p><h3 id="s3-upgrade-title">让货架多一层空间</h3>
@@ -591,11 +605,26 @@ export class App3D {
       this.renderSupply();
     });
     click("s3-purchase", () => this.purchaseStock());
+    click("s3-close-shop", () => {
+      if (this.mode !== "paused" || !this.saveSession?.canWrite || !["preparing", "open"].includes(this.state.day.phase)) return;
+      this.closeConfirmation = true;
+      this.renderManagement();
+      this.el("s3-close-cancel").focus();
+    });
+    click("s3-close-cancel", () => this.cancelCloseConfirmation());
+    click("s3-close-confirm-button", () => {
+      if (!this.closeConfirmation || this.mode !== "paused") return;
+      if (this.dispatch({ type: "CLOSE_STORE" })) {
+        this.closeConfirmation = false;
+        this.renderManagement();
+        this.el(canSettleDay(this.state) ? "s3-settle-day" : "s3-resume").focus();
+      }
+    });
     click("s3-settle-day", () => this.dispatch({ type: "SETTLE_DAY" }));
     click("s3-next-day", () => {
       if (this.dispatch({ type: "START_NEXT_DAY" })) {
         this.lastCustomerCue = "";
-        this.nextCustomerElapsed = 0;
+        this.businessClock.reset();
         this.showManagementSection("supply");
       }
     });
@@ -620,15 +649,23 @@ export class App3D {
     }
     window.addEventListener("keydown", (event) => this.onKeyDown(event), { capture: true, signal });
     window.addEventListener("blur", () => {
+      this.advanceBusinessTime();
+      this.businessClock.reset();
       this.audioForeground = false;
       this.syncShopAudio();
       this.stopSpeech();
+      if (this.mode === "cashier") this.cashRegister.close();
       if (this.mode === "playing") this.pause();
     }, { signal });
     window.addEventListener("focus", () => { this.audioForeground = true; this.syncShopAudio() }, { signal });
     document.addEventListener("visibilitychange", () => {
       this.syncShopAudio();
-      if (document.hidden) { this.stopSpeech(); if (this.mode === "playing") this.pause() }
+      if (document.hidden) {
+        this.businessClock.reset();
+        this.stopSpeech();
+        if (this.mode === "cashier") this.cashRegister.close();
+        if (this.mode === "playing") this.pause();
+      }
     }, { signal });
     document.addEventListener("pointerlockchange", () => this.renderCaptureHint(), { signal });
     window.addEventListener("storage", (event) => {
@@ -637,6 +674,7 @@ export class App3D {
     window.addEventListener("pagehide", () => {
       this.shopAudio.setActive(false);
       this.savePoseAndPersist();
+      this.businessClock.reset();
       this.stopSpeech();
       this.initGeneration += 1;
       this.mode = "readonly";
@@ -671,7 +709,7 @@ export class App3D {
     this.shopAudio.unlock();
     this.syncShopAudio();
     this.world.requestPointerLock();
-    this.lastFrameAt = performance.now();
+    this.businessClock.resume(performance.now());
     this.lastPoseSave = performance.now();
     this.capturePose();
     this.persist();
@@ -712,7 +750,8 @@ export class App3D {
     if (!this.saveSession?.canWrite) return;
     if (this.cashRegister.open()) {
       this.text("s3-cash-audio-status", "按 R 重听交款金额，Shift + R 慢速重听；字幕始终保留。");
-      if (this.settings.autoSpeech) this.cashRegister.replay();
+      const clip = cashTenderSpeechFor(this.state);
+      if (this.settings.autoSpeech && clip) this.speak(clip);
     }
   }
 
@@ -739,6 +778,7 @@ export class App3D {
     this.savePoseAndPersist();
     if (this.mode !== "playing" || !this.saveSession?.canWrite) return;
     this.mode = "inspecting";
+    this.businessClock.reset();
     this.stopSpeech();
     this.syncShopAudio();
     this.inspecting = productId;
@@ -768,6 +808,7 @@ export class App3D {
     this.el("s3-inspection").hidden = true;
     this.el("s3-hud").hidden = false;
     this.mode = "playing";
+    this.businessClock.resume(performance.now());
     this.world?.setActive(true);
     this.shopAudio.unlock();
     this.syncShopAudio();
@@ -782,6 +823,7 @@ export class App3D {
     this.savePoseAndPersist();
     if (!this.saveSession?.canWrite) return;
     this.mode = "paused";
+    this.businessClock.reset();
     this.syncShopAudio();
     this.world?.setActive(false);
     this.releasePointer();
@@ -803,11 +845,18 @@ export class App3D {
 
   private showManagementSection(section: ManagementSection): void {
     this.managementSection = section;
+    this.closeConfirmation = false;
     for (const candidate of MANAGEMENT_SECTIONS) {
       this.el(`s3-panel-${candidate}`).hidden = candidate !== section;
       this.el(`s3-tab-${candidate}`).setAttribute("aria-pressed", String(candidate === section));
     }
     this.renderManagement();
+  }
+
+  private cancelCloseConfirmation(): void {
+    this.closeConfirmation = false;
+    this.renderManagement();
+    this.el("s3-close-shop").focus();
   }
 
   private purchaseStock(): void {
@@ -841,6 +890,7 @@ export class App3D {
 
   private resume(lockPointer: boolean): void {
     if (this.mode !== "paused") return;
+    if (this.closeConfirmation) { this.cancelCloseConfirmation(); return }
     if (!this.el("s3-import-confirm").hidden) { this.cancelImport(); this.el("s3-resume").focus(); return }
     if (!this.el("s3-restart-confirm").hidden) {
       this.el("s3-restart-confirm").hidden = true;
@@ -851,7 +901,7 @@ export class App3D {
     catch (error) { this.enterReadOnly(error instanceof Error ? error.message : "存档写入权限不可用。"); return }
     this.el<HTMLDialogElement>("s3-pause").close();
     this.mode = "playing";
-    this.lastFrameAt = performance.now();
+    this.businessClock.resume(performance.now());
     this.world?.setActive(true);
     this.shopAudio.unlock();
     this.syncShopAudio();
@@ -868,6 +918,9 @@ export class App3D {
       event.preventDefault(); event.stopImmediatePropagation(); this.resume(false); return;
     }
     if (this.mode === "playing") {
+      if (event.code === "Escape") {
+        event.preventDefault(); event.stopImmediatePropagation(); this.pause(); return;
+      }
       if (event.code === "Tab") {
         event.preventDefault(); event.stopImmediatePropagation();
         this.world?.setCursorFree(this.pointerMode === "locked");
@@ -894,10 +947,14 @@ export class App3D {
     if (!this.saveSession?.canWrite) { this.enterReadOnly("此页面只读，不能修改小店进度。"); return false }
     try {
       this.saveSession.assertCurrent();
+      this.advanceBusinessTime();
+      if (!this.saveSession.canWrite) return false;
       this.capturePose();
       const result = reduceSim(this.state, command);
       this.state = result.state;
       if (result.changed) {
+        if (command.type === "OPEN_STORE") this.businessClock.resume(performance.now());
+        if (command.type === "CLOSE_STORE" || command.type === "START_NEXT_DAY") this.businessClock.reset();
         this.persist();
         if (!this.saveSession.canWrite) return false;
         this.world?.setState(this.state);
@@ -909,7 +966,7 @@ export class App3D {
       if (result.changed && ((command.type === "PAY" && command.success) || command.type === "CONFIRM_CASH")) {
         const summary = getDaySummary(this.state);
         const payment = this.state.transactions.find((transaction) => transaction.customerNumber === this.state.customer.number);
-        this.notify(`${command.type === "CONFIRM_CASH" ? "现金" : "刷卡"}收款成功 +${money(payment?.amountPence ?? 0)} · 今日 ${summary.paidCustomers} / ${summary.targetCustomers} 单。${!this.state.upgraded && this.state.cashPence >= UPGRADE_COST_PENCE ? "按 U 可查看 £8 扩容；注意留足下次进货资金。" : `当前资金 ${money(this.state.cashPence)}。`}`);
+        this.notify(`${command.type === "CONFIRM_CASH" ? "现金" : "刷卡"}收款成功 +${money(payment?.amountPence ?? 0)} · 今日 ${summary.paidCustomers} 单。${!this.state.upgraded && this.state.cashPence >= UPGRADE_COST_PENCE ? "按 U 可查看 £8 扩容；注意留足下次进货资金。" : `当前资金 ${money(this.state.cashPence)}。`}`);
       }
       return result.changed;
     } catch (error) {
@@ -942,6 +999,7 @@ export class App3D {
 
   private savePoseAndPersist(): void {
     if (!this.ready || this.disposed || !this.saveSession?.canWrite) return;
+    this.advanceBusinessTime();
     this.capturePose();
     this.persist();
   }
@@ -960,24 +1018,47 @@ export class App3D {
     this.renderSaveStatus();
   }
 
+  /** Only time is updated on routine frames; full world/ledger work stays at save and action boundaries. */
+  private advanceBusinessTime(now = performance.now()): void {
+    const elapsedMs = this.businessClock.sample(now, isBusinessTimeRunning({
+      phase: this.state.day.phase, mode: this.mode, writable: !!this.saveSession?.canWrite,
+      foreground: this.audioForeground, hidden: document.hidden, learningPlayback: this.learningPlayback,
+    }));
+    if (elapsedMs > 0) {
+      const oldPhase = this.state.day.phase;
+      this.state = reduceSim(this.state, { type: "ADVANCE_BUSINESS_TIME", elapsedMs }).state;
+      if (oldPhase !== this.state.day.phase) {
+        this.businessClock.reset();
+        this.persist();
+        if (!this.saveSession?.canWrite) return;
+        this.world?.setState(this.state);
+        this.renderState();
+        this.notify("19:00，停止接待新顾客。请安心完成店内订单、签收已付款配送，再日结；当前交易不会被打断。");
+      }
+    }
+    const clock = getBusinessClock(this.state.day);
+    if (clock.closingSoon && this.closingWarningDay !== this.state.day.number && !this.learningPlayback
+      && (this.mode === "playing" || this.mode === "cashier") && this.audioForeground && !document.hidden) {
+      this.closingWarningDay = this.state.day.number;
+      this.notify("18:30，距离停止接客还有半个游戏小时。店里的顾客可以在打烊后继续结账。");
+    }
+    this.renderBusinessClock();
+  }
+
   private onFrame(fps: number, pose: PlayerPose): void {
     const now = performance.now();
-    const elapsed = this.lastFrameAt ? Math.min(1.5, (now - this.lastFrameAt) / 1000) : 0;
-    this.lastFrameAt = now;
-    if (this.mode === "playing" && this.state.day.phase === "open" && this.state.customer.phase === "complete") {
-      this.nextCustomerElapsed += elapsed;
-      if (this.nextCustomerElapsed >= NEXT_CUSTOMER_SECONDS) {
-        if (canSettleDay(this.state) && this.dayReadyNotified !== this.state.day.number) {
-          this.dayReadyNotified = this.state.day.number;
-          this.openManagement("day");
-          this.notify("三位顾客都已结账离店。看看今天的账目，再点击日结；收入不会再重复计入。");
-        } else if (getDaySummary(this.state).paidCustomers < DAY_CUSTOMER_TARGET && canStartCustomer(this.state)) {
-          this.nextCustomerElapsed = 0;
-          this.dispatch({ type: "NEXT_CUSTOMER" });
-        }
-      }
-    } else this.nextCustomerElapsed = 0;
-    if (this.mode === "playing" && now - this.lastPoseSave >= 5000) {
+    this.advanceBusinessTime(now);
+    const active = this.mode === "playing" && !this.learningPlayback && this.audioForeground && !document.hidden && !!this.saveSession?.canWrite;
+    if (active && canSettleDay(this.state) && this.dayReadyNotified !== this.state.day.number) {
+      this.dayReadyNotified = this.state.day.number;
+      this.openManagement("day");
+      this.notify("收尾已完成。看看今天的账目，再点击日结；收入不会重复计入。");
+    } else if (active && this.state.day.phase === "open" && this.state.customer.phase === "complete"
+      && this.state.day.nextCustomerAtMs !== null && this.state.day.elapsedOpenMs >= this.state.day.nextCustomerAtMs
+      && canStartCustomer(this.state)) {
+      this.dispatch({ type: "NEXT_CUSTOMER" });
+    }
+    if ((this.mode === "playing" || this.mode === "cashier") && this.audioForeground && !document.hidden && now - this.lastPoseSave >= 5000) {
       this.lastPoseSave = now;
       this.capturePose(pose);
       this.persist();
@@ -986,6 +1067,28 @@ export class App3D {
       this.lastFpsUpdate = now;
       this.text("s3-fps", Number.isFinite(fps) ? `${Math.round(fps)} fps · ${this.settings.quality === "low" ? "流畅" : "标准"}` : "");
     }
+  }
+
+  private renderBusinessClock(): void {
+    const day = this.state.day;
+    const clock = getBusinessClock(day);
+    const legacy = day.closeReason === "legacy";
+    const paused = day.phase === "open" && !isBusinessTimeRunning({
+      phase: day.phase, mode: this.mode, writable: !!this.saveSession?.canWrite,
+      foreground: this.audioForeground, hidden: document.hidden, learningPlayback: this.learningPlayback,
+    });
+    const stateLabel = day.phase === "preparing" ? "准备中" : day.phase === "closing" ? "收尾中" : day.phase === "settled" ? "已日结"
+      : paused ? this.learningPlayback ? "学习暂停" : this.mode === "paused" ? "管理暂停" : "计时暂停" : "营业中";
+    const note = day.phase === "preparing" ? "开门后开始计时" : day.phase === "closing" ? "不接新客 · 安心完成本单"
+      : legacy ? "旧版日结未记录时间" : day.phase === "settled" ? "现金与库存带入次日"
+        : this.learningPlayback ? "重听结束后继续" : clock.closingSoon ? "19:00 停止接客" : "09:00—19:00 营业";
+    this.text("s3-business-time", legacy ? "—:—" : clock.timeLabel);
+    this.text("s3-clock-state", stateLabel);
+    this.text("s3-clock-note", note);
+    this.el("s3-business-clock").classList.toggle("s3-closing-soon", clock.closingSoon || day.phase === "closing");
+    this.el("s3-business-clock").classList.toggle("s3-clock-paused", paused);
+    this.text("s3-day-clock", legacy ? "旧版三单营业日 · 未记录营业时间" : `${clock.timeLabel} · ${stateLabel}。${day.phase === "preparing" ? "准备不限时，开门从09:00开始。" : day.phase === "closing" ? `${day.closeReason === "time" ? "已到19:00" : "已提前打烊"}，完成店内订单和签收后日结。` : day.phase === "settled" ? "今天的营业已经结束。" : "19:00停止接客，管理与学习时暂停。"}`);
+    this.text("s3-cash-business-clock", `${clock.timeLabel} · ${stateLabel}${day.phase === "closing" ? " · 已停止接新客，本单可以继续完成" : paused ? " · 重听或离开页面时暂停" : " · 正常找零期间营业钟继续"}`);
   }
 
   private renderState(): void {
@@ -1004,9 +1107,10 @@ export class App3D {
     this.text("s3-start-capital", money(this.state.cashPence));
     this.text("s3-start-capital-label", this.loadedSession ? "已保存资金 · 原进度保留" : "首日本金 · 进货会扣钱");
     this.text("s3-objective", getObjective(this.state));
-    this.text("s3-phase", `第 ${this.state.day.number} 天 · ${this.state.day.phase === "settled" ? "已日结" : this.state.day.phase === "preparing" ? "进货与开店" : `营业 ${day.paidCustomers} / ${day.targetCustomers} 单`}`);
+    this.text("s3-phase", `第 ${this.state.day.number} 天 · ${this.state.day.phase === "settled" ? "已日结" : this.state.day.phase === "preparing" ? "进货与开店" : this.state.day.phase === "closing" ? "打烊收尾" : "营业中"}`);
     this.text("s3-cash", money(this.state.cashPence));
-    this.text("s3-sold", `今日 ${day.paidCustomers} / ${day.targetCustomers} 单 · 库存 ${day.remainingStockUnits} 件`);
+    this.text("s3-sold", `今日 ${day.paidCustomers} 单 · 库存 ${day.remainingStockUnits} 件`);
+    this.renderBusinessClock();
     const stockedProducts = PRODUCT_IDS.filter((productId) => countAt(this.state, productId, "shelf") > 0);
     const shelvedUnits = this.state.items.filter((item) => item.location.kind === "shelf").length;
     this.text("s3-shelf-stock", `货架 ${stockedProducts.length} 种 · ${shelvedUnits} 件`);
@@ -1044,7 +1148,8 @@ export class App3D {
     }
     this.renderSupply();
     this.text("s3-day-title", `第 ${day.dayNumber} 天${this.state.day.phase === "settled" ? " · 日结完成" : " · 营业账本"}`);
-    this.text("s3-day-progress", `已收款 ${day.paidCustomers} / ${day.targetCustomers} 单 · 开始时资金 ${money(day.openingCashPence)}`);
+    this.text("s3-day-progress", `已收款 ${day.paidCustomers} 单 · 开始时资金 ${money(day.openingCashPence)}`);
+    this.renderBusinessClock();
     for (const [suffix, value] of [["revenue", day.revenuePence], ["cogs", day.costOfGoodsPence], ["profit", day.grossProfitPence], ["recycling", day.recyclingIncomePence], ["procurement", day.procurementPence], ["investment", day.upgradeSpendPence], ["cash", day.closingCashPence]] as const) {
       this.text(`s3-day-${suffix}`, money(value));
     }
@@ -1052,9 +1157,16 @@ export class App3D {
     this.text("s3-day-recycling-count", `今日回收 ${recycling.recycledToday} 箱 · 店门旁回收点按 E 投入，无容量上限。新进货空箱每箱 ${money(RECYCLING_REWARD_PENCE)}，同批来源不重复奖励。`);
     this.text("s3-day-inventory", `${day.remainingStockUnits} 件 / ${money(day.remainingInventoryValuePence)}`);
     const settled = this.state.day.phase === "settled";
+    const closing = this.state.day.phase === "closing";
     const canSettle = canSettleDay(this.state);
-    this.text("s3-day-reason", settled ? "今天的账已记好。可以先扩容，也可以留钱备货；下一天会保留全部资金、库存与扩容。送货车每天都会来，补货仍需下单。" : delivery.pendingUnits > 0 ? `还有 ${delivery.pendingUnits} 件已付款商品待签收。先返回门口货车旁签收，才能结束今天的营业。` : canSettle ? "今天的 3 单都已完成，顾客已经离店。可以日结了。" : this.state.day.phase === "preparing" ? "按 B 自选商品并下单，到门口签收，至少上架一种商品后去翻转营业牌。" : day.paidCustomers >= day.targetCustomers ? "最后一位顾客正在离店，返回小店稍等片刻即可日结。" : `还需完成 ${day.targetCustomers - day.paidCustomers} 单收款。顾客会从已上架商品中挑选；缺货时先补货。`);
-    this.el("s3-settle-day").hidden = settled;
+    this.text("s3-day-reason", settled ? "今天的账已记好。下一天会保留资金、库存与扩容，不补发本金。零单日可以结束，但不计入有效经营日成就。" : delivery.pendingUnits > 0 ? `还有 ${delivery.pendingUnits} 件已付款商品待签收。请返回门口货车旁签收；打烊后仍可签收，完成收尾后才能日结。` : canSettle ? `收尾已完成，今天共收款 ${day.paidCustomers} 单。可以日结了，资金不会重复入账。` : closing ? this.state.customer.phase === "leaving" ? "最后一位顾客正在离店。请返回小店让顾客走完，再完成日结。" : "已停止接新客。请返回小店完成当前订单，或在存档与试玩管理中安全取消，再日结。" : this.state.day.phase === "preparing" ? "按 B 自选商品并签收，上架后到营业牌开门。准备时间不限；今天不营业也可以确认结束准备。" : "19:00 停止接客，营业期间没有三单上限。可以继续补货经营，也可以确认提前打烊。打开管理面板时营业钟暂停。");
+    if (closing || settled) this.closeConfirmation = false;
+    this.el("s3-close-shop").hidden = closing || settled;
+    this.el<HTMLButtonElement>("s3-close-shop").disabled = !writable;
+    this.text("s3-close-shop", this.state.day.phase === "preparing" ? "今天不营业，结束准备" : "提前打烊");
+    this.el("s3-close-confirm").hidden = !this.closeConfirmation;
+    this.el<HTMLButtonElement>("s3-close-confirm-button").disabled = !writable || !this.closeConfirmation;
+    this.el("s3-settle-day").hidden = !closing;
     this.el<HTMLButtonElement>("s3-settle-day").disabled = !writable || !canSettle;
     this.el("s3-next-day").hidden = !settled;
     this.el<HTMLButtonElement>("s3-next-day").disabled = !writable;
@@ -1262,10 +1374,12 @@ export class App3D {
     this.el("s3-capture").hidden = !playing || this.pointerMode === "locked" || this.dragLookFallback;
     this.el("s3-drag-hint").hidden = !playing;
     this.text("s3-drag-hint", this.pointerMode === "locked" ? "Tab 释放鼠标 · Shift 按住加速 · R 重听 · B 进货 · M 商业街" : "鼠标可点击 · 按住画面拖动观察 · Shift 按住加速 · M 商业街");
+    this.renderBusinessClock();
   }
 
   private enterReadOnly(message: string): void {
     this.saveSession?.release();
+    this.businessClock.reset();
     this.shopAudio.setActive(false);
     this.stopSpeech();
     this.writerWarning = message;
@@ -1396,7 +1510,7 @@ export class App3D {
     const clip = this.customerClip;
     this.text("s3-customer-line", `“${clip.text}”`);
     this.text("s3-customer-zh", clip.zh);
-    this.speak(clip);
+    this.speak(clip, 1, undefined, true);
   }
 
   private repeatCustomer(): void {
@@ -1410,11 +1524,23 @@ export class App3D {
       if (this.mode !== "playing" || this.state.customer.phase !== "checkout" || this.state.customer.number !== number) return;
       this.text("s3-customer-line", `顾客：“${reply.text}”`);
       this.text("s3-customer-zh", `${reply.zh} · 这次慢一点说`);
-      this.speak(reply, 0.84);
-    });
+      this.speak(reply, 0.84, undefined, true);
+    }, true);
   }
 
-  private speak(input: string | CustomerSpeechClip, rate = 1, onDone?: () => void): void {
+  private setLearningPlayback(active: boolean): void {
+    if (active === this.learningPlayback) return;
+    if (active) this.advanceBusinessTime();
+    this.learningPlayback = active;
+    if (active) this.businessClock.reset();
+    else this.businessClock.resume(performance.now());
+    if (this.mode === "playing" && !this.disposed) {
+      this.world?.setActive(!active && !!this.saveSession?.canWrite && this.audioForeground && !document.hidden);
+    }
+    this.renderBusinessClock();
+  }
+
+  private speak(input: string | CustomerSpeechClip, rate = 1, onDone?: () => void, learning = false): void {
     const text = typeof input === "string" ? input : input.text;
     const report = (message: string): void => {
       if (this.mode === "inspecting") this.text("s3-speech-status", message);
@@ -1423,6 +1549,7 @@ export class App3D {
     };
     this.stopSpeech();
     if (this.settings.volume === 0) { report("发音音量当前为 0，可以在暂停设置中调高。"); return }
+    this.setLearningPlayback(learning);
     const generation = this.speechGeneration;
     const liveReport = (message: string): void => {
       if (!this.disposed && generation === this.speechGeneration) report(message);
@@ -1435,7 +1562,7 @@ export class App3D {
       ? Object.values(SPEECH_CLIPS).find((candidate) => normalize(candidate.text) === normalize(text))
       : input;
     if (!word && !clip) {
-      this.speakWithBrowser(text, rate, generation, liveReport, onDone);
+      this.speakWithBrowser(text, rate, generation, liveReport, onDone, learning);
       return;
     }
     const audio = this.el<HTMLAudioElement>("s3-word-audio");
@@ -1445,6 +1572,7 @@ export class App3D {
       if (this.disposed || generation !== this.speechGeneration || failed) return;
       failed = true;
       this.shopAudio.setSpeechActive(false);
+      this.setLearningPlayback(false);
       if (this.speechTimer) clearTimeout(this.speechTimer);
       liveReport(word ? "这段单词发音未能播放，请重试；商品文字和操作不受影响。" : "语音未能播放。点击“重听”或按 R 再试，并检查浏览器与设备声音；字幕和收款仍可用。");
     };
@@ -1452,14 +1580,22 @@ export class App3D {
       if (failed || this.disposed || generation !== this.speechGeneration) return;
       started = true;
       this.shopAudio.setSpeechActive(true);
+      this.setLearningPlayback(learning);
       if (this.speechTimer) clearTimeout(this.speechTimer);
       liveReport(word ? `正在播放英式发音：${text}` : `正在播放${rate < 1 ? "慢速" : "英式"}语音：${text}`);
     };
     audio.onended = () => {
       if (this.disposed || generation !== this.speechGeneration || !started || failed) return;
       this.shopAudio.setSpeechActive(false);
+      this.setLearningPlayback(false);
       liveReport(word ? `已播放英式发音：${text}。可以再听一次。` : "语音播放结束，可以点击重听或按 R 再听一次。");
       onDone?.();
+    };
+    audio.onpause = () => {
+      // A queued pause from the previous source can arrive after a replay starts.
+      if (this.disposed || generation !== this.speechGeneration || !started || failed || !audio.paused) return;
+      this.shopAudio.setSpeechActive(false);
+      this.setLearningPlayback(false);
     };
     audio.onerror = fail;
     audio.onloadedmetadata = () => {
@@ -1473,13 +1609,19 @@ export class App3D {
     audio.src = word ? `/assets/sim3d/audio/${text}.ogg` : clip!.src;
     audio.playbackRate = rate;
     liveReport(word ? `正在准备单词录音：${text}` : "正在准备本地英式合成语音…");
-    this.speechTimer = setTimeout(() => { if (!started && !failed) liveReport("语音还未开始，请点击重听并检查设备声音。") }, 4000);
+    this.speechTimer = setTimeout(() => {
+      if (!this.disposed && generation === this.speechGeneration && !started && !failed) {
+        this.setLearningPlayback(false);
+        liveReport("语音还未开始，营业计时已恢复。请点击重听并检查设备声音。");
+      }
+    }, 4000);
     try { void audio.play().catch(fail) }
     catch { fail() }
   }
 
-  private speakWithBrowser(text: string, rate: number, generation: number, report: (message: string) => void, onDone?: () => void): void {
+  private speakWithBrowser(text: string, rate: number, generation: number, report: (message: string) => void, onDone?: () => void, learning = false): void {
     if (!("speechSynthesis" in window) || typeof SpeechSynthesisUtterance === "undefined") {
+      this.setLearningPlayback(false);
       report("本商品尚无本地录音，当前浏览器也不支持合成发音。可继续查看英文、中文与搭配，操作不受影响。");
       return;
     }
@@ -1491,6 +1633,7 @@ export class App3D {
       if (!current() || failed) return;
       failed = true;
       this.shopAudio.setSpeechActive(false);
+      this.setLearningPlayback(false);
       if (this.speechTimer) clearTimeout(this.speechTimer);
       report("浏览器合成发音未能播放；本商品尚无本地录音。请重试或继续阅读字幕。");
     };
@@ -1507,6 +1650,7 @@ export class App3D {
         if (!current() || failed) return;
         started = true;
         this.shopAudio.setSpeechActive(true);
+        this.setLearningPlayback(learning);
         if (this.speechTimer) clearTimeout(this.speechTimer);
         report(`正在播放浏览器合成发音：${text}（非本地录音）`);
       };
@@ -1514,13 +1658,17 @@ export class App3D {
         if (!current() || !started || failed) return;
         this.synthesisUtterance = null;
         this.shopAudio.setSpeechActive(false);
+        this.setLearningPlayback(false);
         report("浏览器合成发音结束，可以再听一次。声音由当前设备提供。");
         onDone?.();
       };
       utterance.onerror = fail;
       report("本商品尚无本地录音，正在尝试浏览器合成发音…");
       this.speechTimer = setTimeout(() => {
-        if (current() && !started && !failed) report("浏览器合成发音尚未开始，请重试；设备可能没有可用的英语声音，字幕仍可阅读。");
+        if (current() && !started && !failed) {
+          this.setLearningPlayback(false);
+          report("浏览器合成发音尚未开始，营业计时已恢复。请重试；设备可能没有可用的英语声音，字幕仍可阅读。");
+        }
       }, 4000);
       synthesis.speak(utterance);
     } catch { fail() }
@@ -1528,6 +1676,7 @@ export class App3D {
 
   private stopSpeech(): void {
     this.speechGeneration += 1;
+    this.setLearningPlayback(false);
     this.shopAudio.setSpeechActive(false);
     if (this.speechTimer) clearTimeout(this.speechTimer);
     this.speechTimer = undefined;
@@ -1544,6 +1693,7 @@ export class App3D {
       const wasPlaying = !audio.paused;
       audio.onplaying = null;
       audio.onended = null;
+      audio.onpause = null;
       audio.onerror = null;
       audio.onloadedmetadata = null;
       audio.pause();
@@ -1621,7 +1771,9 @@ export class App3D {
     this.receiptCustomer = 0;
     this.lastCustomerCue = "";
     this.dayReadyNotified = 0;
-    this.nextCustomerElapsed = 0;
+    this.businessClock.reset();
+    this.closingWarningDay = 0;
+    this.closeConfirmation = false;
     this.lastSaveText = "导入存档已安全保存";
     this.cancelImport();
     this.stopSpeech();
@@ -1651,7 +1803,9 @@ export class App3D {
     this.receiptCustomer = 0;
     this.lastCustomerCue = "";
     this.dayReadyNotified = 0;
-    this.nextCustomerElapsed = 0;
+    this.businessClock.reset();
+    this.closingWarningDay = 0;
+    this.closeConfirmation = false;
     this.saveError = "";
     this.loadWarning = "";
     this.lastSaveText = "新一轮试玩已保存";

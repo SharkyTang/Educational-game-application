@@ -2,6 +2,7 @@ import { expect, test, type Page } from "@playwright/test";
 import { createFirstDayState, reduceSim, validateSimState, type SimCommand, type SimState } from "../../src/sim3d/domain";
 import { customerProfileFor, customerSpeechFor } from "../../src/sim3d/customerSelection";
 import { completeFixturePayment, payScannedCheckout, readBrowserSnapshot } from "./helpers/sim3d-payment";
+import { beginNextFixtureCustomer } from "./helpers/sim3d-business-time";
 
 // Keep these real 3D browser checks sequential even when the wider suite is parallel.
 // Every test gets Playwright's disposable context; no existing user browser is used.
@@ -37,13 +38,13 @@ function approachingCheckoutFixture(): SimState {
 function completedDayFixture(): SimState {
   let state = stockedFixture();
   for (let guest = 0; guest < 3; guest += 1) {
-    state = command(state, { type: guest === 0 ? "OPEN_STORE" : "NEXT_CUSTOMER" });
+    state = guest === 0 ? command(state, { type: "OPEN_STORE" }) : beginNextFixtureCustomer(state);
     for (let stop = 0; stop < 3; stop += 1) state = command(state, { type: "CUSTOMER_ADVANCE" });
     for (const item of state.items.filter((entry) => entry.location.kind === "checkout")) state = command(state, { type: "SCAN", itemId: item.id });
     state = completeFixturePayment(state);
     state = command(state, { type: "CUSTOMER_ADVANCE" });
   }
-  return state;
+  return command(state, { type: "CLOSE_STORE" });
 }
 
 function monitorRuntime(page: Page): string[] {
@@ -244,8 +245,8 @@ test("3D first day: a real arriving customer speaks locally, supports replay and
   expect(errors).toEqual([]);
 });
 
-test("3D customer variety: three real visitors rotate models and voices, keep their line after refresh, and finish the day", async ({ page }) => {
-  test.setTimeout(180_000);
+test("3D customer variety: three real visitors rotate models and voices, keep their line after refresh, and can close for the day", async ({ page }) => {
+  test.setTimeout(210_000);
   const errors = monitorRuntime(page);
   let fixture: SimState = { ...stockedFixture(), customerSeed: 31 };
   fixture = command(fixture, { type: "SAVE_POSE", pose: { x: -2.62, z: -1.06, yaw: Math.PI, pitch: .56 } });
@@ -264,7 +265,7 @@ test("3D customer variety: three real visitors rotate models and voices, keep th
     const thanks = customerSpeechFor(visit, "thanks");
     names.add(profile.name);
     voices.add(profile.voice);
-    await expect(page.locator("#s3-customer-name")).toHaveText(`${profile.name} · 第 ${number} 位顾客`, { timeout: 12_000 });
+    await expect(page.locator("#s3-customer-name")).toHaveText(`${profile.name} · 第 ${number} 位顾客`, { timeout: 25_000 });
     await expect(page.locator("#s3-customer-line")).toHaveText(`“${greeting.text}”`);
     await expect(page.locator("#s3-word-audio")).toHaveAttribute("src", greeting.src);
 
@@ -329,9 +330,21 @@ test("3D customer variety: three real visitors rotate models and voices, keep th
   expect(voices).toEqual(new Set(["female", "male"]));
   expect(checkoutLines.size).toBe(3);
   expect(paymentMethods).toEqual(new Set(["card", "cash"]));
-  await expect(page.locator("#s3-pause")).toBeVisible({ timeout: 12_000 });
-  await expect(page.locator("#s3-day-progress")).toContainText("已收款 3 / 3 单");
+  // Three sales no longer end a day: explicitly close through the public confirmation.
+  await expect(page.locator("#s3-pause")).toBeHidden();
+  await page.keyboard.press("b");
+  await page.locator("#s3-tab-day").click();
+  await expect(page.locator("#s3-settle-day")).toBeDisabled();
+  await page.locator("#s3-close-shop").click();
+  await expect(page.locator("#s3-close-confirm")).toBeVisible();
+  await page.locator("#s3-close-confirm-button").click();
+  if (!(await page.locator("#s3-settle-day").isEnabled())) {
+    await page.locator("#s3-resume").click();
+    await expect(page.locator("#s3-panel-day")).toBeVisible({ timeout: 20_000 });
+  }
+  await expect(page.locator("#s3-day-progress")).toContainText("已收款 3 单");
   await expect(page.locator("#s3-day-cash")).toHaveText("£17.10");
+  await expect(page.locator("#s3-settle-day")).toBeEnabled();
   expect(errors).toEqual([]);
 });
 
@@ -344,7 +357,7 @@ test("3D first day: a reducer-completed day settles, expands for £8 and persist
   await importFixture(page, completedDayFixture());
   await expect(page.locator("#s3-pause")).toBeVisible({ timeout: 12_000 });
   await expect(page.locator("#s3-panel-day")).toBeVisible();
-  await expect(page.locator("#s3-day-progress")).toContainText("已收款 3 / 3 单");
+  await expect(page.locator("#s3-day-progress")).toContainText("已收款 3 单");
   await expect(page.locator("#s3-day-revenue")).toHaveText("£12.00");
   await expect(page.locator("#s3-day-procurement")).toHaveText("£6.90");
   await expect(page.locator("#s3-day-cogs")).toHaveText("£6.90");
@@ -375,7 +388,7 @@ test("3D first day: a reducer-completed day settles, expands for £8 and persist
   await expect(page.locator("#s3-start-note")).toContainText("第 2 天");
   await expect(page.locator("#s3-start-capital")).toHaveText("£9.10");
   await page.locator("#s3-start-button").click();
-  await expect(page.locator("#s3-sold")).toHaveText("今日 0 / 3 单 · 库存 0 件");
+  await expect(page.locator("#s3-sold")).toHaveText("今日 0 单 · 库存 0 件");
   await expect(page.locator("#s3-shelf-stock")).toHaveText("货架 0 种 · 0 件");
   await page.keyboard.press("u");
   await expect(page.locator("#s3-upgrade")).toBeDisabled();

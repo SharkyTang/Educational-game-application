@@ -1,10 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   CUSTOMER_CORPUS, CUSTOMER_PROFILES, CUSTOMER_STOP_SECONDS, CUSTOMER_WALK_SPEED,
-  NEXT_CUSTOMER_SECONDS, cashTenderSpeechFor, createCustomerSeed, customerProfileFor, customerSpeechFor,
+  cashTenderSpeechFor, createCustomerSeed, customerProfileFor, customerSpeechFor,
   pickCustomerEntry, type CustomerScene,
 } from "../../src/sim3d/customerSelection";
-import { createFirstDayState, reduceSim, validateSimState } from "../../src/sim3d/domain";
+import { createFirstDayState, reduceSim, validateSimState, validateV4SimState, validateV5SimState } from "../../src/sim3d/domain";
 import { parseImportedSimState } from "../../src/sim3d/persistence";
 
 const SCENES: CustomerScene[] = ["greeting", "checkout", "thanks"];
@@ -132,8 +132,20 @@ describe("saved customer variety and scene-specific shuffle bags", () => {
 
   it.each([4, 5])("accepts original v%i saves without inventing cash, stock, or a new random choice on load", (schemaVersion) => {
     const current = createFirstDayState();
-    const old = { ...current, schemaVersion };
+    const { payment: _payment, recyclingBatches: _batches, recyclingRecords: _records, day, ...previous } = structuredClone(current);
+    const old = {
+      ...previous, schemaVersion,
+      customer: { phase: current.customer.phase, number: current.customer.number },
+      day: {
+        number: day.number, phase: "preparing", targetCustomers: 3,
+        transactionStart: day.transactionStart, purchaseStart: day.purchaseStart,
+        openingCashPence: day.openingCashPence, openingStockUnits: day.openingStockUnits,
+        openingInventoryValuePence: day.openingInventoryValuePence,
+      },
+    };
     expect(old.customerSeed).toBeUndefined();
+    expect(old.day).not.toHaveProperty("elapsedOpenMs");
+    expect(schemaVersion === 4 ? validateV4SimState(old) : validateV5SimState(old)).toBe(true);
     const restored = parseImportedSimState(JSON.stringify(old));
     expect(restored).toEqual(current);
     expect(customerProfileFor(restored)).toEqual(customerProfileFor(current));
@@ -172,9 +184,8 @@ describe("saved customer variety and scene-specific shuffle bags", () => {
     } finally { vi.unstubAllGlobals() }
   });
 
-  it("raises walking speed by 50% and reduces non-interactive waiting", () => {
+  it("retains faster walking and short route stops independently of business-day arrival intervals", () => {
     expect(CUSTOMER_WALK_SPEED).toBeCloseTo(.94 * 1.5);
     expect(CUSTOMER_STOP_SECONDS).toBeLessThan(.5);
-    expect(NEXT_CUSTOMER_SECONDS).toBeLessThan(1);
   });
 });

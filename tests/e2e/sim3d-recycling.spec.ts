@@ -59,8 +59,9 @@ test("empty boxes: real recycling target, one reward, reload, separate ledger an
   full = step(full, { type: "PICK_CRATE", crateId: "milk-crate" });
   full = step(full, { type: "SAVE_POSE", pose: stationPose });
   // Exercise the public v6 JSON migration with a real old shape, not a hidden state bridge.
-  const { payment: _payment, recyclingRecords: _records, recyclingBatches: _batches, settlements: _settlements, ...oldFields } = full;
-  const v6: SimStateV6 = { ...oldFields, schemaVersion: 6, settlements: [] };
+  const { payment: _payment, recyclingRecords: _records, recyclingBatches: _batches, settlements: _settlements, day: timedDay, ...oldFields } = full;
+  const { elapsedOpenMs: _elapsed, nextCustomerAtMs: _arrival, closeReason: _reason, ...oldDay } = timedDay;
+  const v6: SimStateV6 = { ...oldFields, schemaVersion: 6, day: { ...oldDay, phase: "preparing", targetCustomers: 3 }, settlements: [] };
   expect(validateV6SimState(v6)).toBe(true);
   await page.goto("/");
   await expect(page.locator("#s3-start-button")).toBeEnabled({ timeout: 45_000 });

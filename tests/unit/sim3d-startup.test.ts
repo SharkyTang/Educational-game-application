@@ -3,7 +3,8 @@ import { capacityFor, countAt, createFirstDayState, createInitialSimState, DELIV
 import { SIM_BACKUP_KEY, SIM_STORAGE_KEY, type SimLockManager, type StorageLike } from "../../src/sim3d/persistence";
 import type { InteractionTarget, WorldCallbacks } from "../../src/sim3d/world";
 import { SPEECH_CLIPS } from "../../src/sim3d/speechClips";
-import { customerProfileFor, customerSpeechFor, cashTenderSpeechFor, NEXT_CUSTOMER_SECONDS, type CustomerVoice } from "../../src/sim3d/customerSelection";
+import { customerProfileFor, customerSpeechFor, cashTenderSpeechFor, type CustomerVoice } from "../../src/sim3d/customerSelection";
+import { BUSINESS_DURATION_MS } from "../../src/sim3d/businessTime";
 import { CASH_DENOMINATIONS_PENCE, cashChangeDuePence } from "../../src/sim3d/cashPayment";
 import { payScannedCheckout } from "../helpers/sim3dPayment";
 
@@ -84,6 +85,7 @@ class ElementDouble extends EventTarget {
   paused = true;
   onplaying: (() => void) | null = null;
   onended: (() => void) | null = null;
+  onpause: (() => void) | null = null;
   onerror: (() => void) | null = null;
   onloadedmetadata: (() => void) | null = null;
   readonly play = vi.fn(async () => { this.paused = false });
@@ -212,6 +214,24 @@ function savedState(): SimState {
   const value: unknown = JSON.parse(storage.getItem(SIM_STORAGE_KEY)!);
   expect(validateSimState(value)).toBe(true);
   return value as SimState;
+}
+
+/** Drive the real frame hook with active frames, not a device-suspension-sized jump. */
+function frameTime() {
+  let now = 1000;
+  vi.spyOn(performance, "now").mockImplementation(() => now);
+  return {
+    skip: (elapsedMs: number): void => { now += elapsedMs },
+    advance: (view: { world: { callbacks: WorldCallbacks } }, elapsedMs: number): void => {
+      const pose = savedState().playerPose;
+      for (let remaining = elapsedMs; remaining > 0;) {
+        const step = Math.min(100, remaining);
+        now += step;
+        remaining -= step;
+        view.world.callbacks.onFrame?.(60, pose);
+      }
+    },
+  };
 }
 
 function stubCustomerEntropy(seed: number) {
@@ -810,8 +830,7 @@ describe("automatic customer voice and manual replay wiring", () => {
 
 describe("customer identity, dialogue continuity and saved seeds", () => {
   it("keeps three visibly named customers and both voice sets consistent through greeting, scanning, payment and departure", async () => {
-    let now = 1000;
-    vi.spyOn(performance, "now").mockImplementation(() => now);
+    const clock = frameTime();
     const view = await readyGame({ ...stockedFirstDay(), customerSeed: 31 });
     const profileIds = new Set<string>();
     const voices = new Set<CustomerVoice>();
@@ -886,8 +905,8 @@ describe("customer identity, dialogue continuity and saved seeds", () => {
       expect(savedState().customer.phase).toBe("complete");
       expect(view.audio.play).toHaveBeenCalledTimes(expectedVoicePlays); // Departure is not a second thank-you.
       view.audio.play.mockClear();
-      now += 650;
-      view.world.callbacks.onFrame?.(60, shopping.playerPose);
+      const afterDeparture = savedState();
+      clock.advance(view, afterDeparture.day.nextCustomerAtMs! - afterDeparture.day.elapsedOpenMs);
     }
 
     expect(profileIds.size).toBe(3);
@@ -896,8 +915,10 @@ describe("customer identity, dialogue continuity and saved seeds", () => {
     expect(checkoutIds.size).toBe(3);
     expect(thanksIds.size).toBe(3);
     expect(savedState().customer).toEqual({ number: 3, phase: "complete", shoppingList: ["milk", "bread"] });
-    expect(view.element("s3-panel-day").hidden).toBe(false);
-    expect(view.element("s3-pause").open).toBe(true);
+    expect(view.element("s3-pause").open).toBe(false);
+    expect(savedState().day.phase).toBe("open");
+    view.element("s3-open-day").click();
+    expect(view.element("s3-settle-day").hidden).toBe(true);
     expect(view.audio.play).not.toHaveBeenCalled();
   });
 
@@ -1197,6 +1218,9 @@ describe("first-day management event wiring and persistence", () => {
     state = completeOrder(state, false);
     const view = await readyGame(state);
     view.element("s3-open-day").click();
+    expect(view.element("s3-settle-day").hidden).toBe(true);
+    view.element("s3-close-shop").click();
+    view.element("s3-close-confirm-button").click();
     expect(view.element("s3-settle-day").disabled).toBe(true);
     expect(view.element("s3-day-reason").textContent).toContain("正在离店");
     expect(view.element("s3-day-revenue").textContent).toBe("£12.00");
@@ -1237,37 +1261,25 @@ describe("first-day management event wiring and persistence", () => {
     expect(view.element("s3-phase").textContent).toContain("第 2 天");
   });
 
-  it.each([1, 3])("automatically follows %i paid orders with the next guest or the day report, never a fourth guest", async (paidCustomers) => {
-    let now = 1000;
-    vi.spyOn(performance, "now").mockImplementation(() => now);
-    let state = stockedFirstDay();
+  it.each([1, 3])("automatically admits another guest after %i paid orders without a daily cap", async (paidCustomers) => {
+    const clock = frameTime();
+    let state = stockedFirstDay(4);
     for (let count = 0; count < paidCustomers; count += 1) state = completeOrder(state);
     const view = await readyGame(state);
-    expect(NEXT_CUSTOMER_SECONDS).toBe(0.65);
-    now += 649;
-    view.world.callbacks.onFrame?.(60, state.playerPose);
+    const delay = state.day.nextCustomerAtMs! - state.day.elapsedOpenMs;
+    expect(delay).toBeGreaterThanOrEqual(8000);
+    expect(delay).toBeLessThanOrEqual(12000);
+    clock.advance(view, delay - 1);
     expect(savedState().customer.phase).toBe("complete");
     expect(view.element("s3-pause").open).toBe(false);
     expect(view.audio.play).not.toHaveBeenCalled();
-    now += 1;
-    view.world.callbacks.onFrame?.(60, state.playerPose);
-    if (paidCustomers === 1) {
-      expect(savedState().customer).toEqual({ number: 2, phase: "to-milk", shoppingList: ["milk", "bread"] });
-      expect(view.audio.src).toBe(customerSpeechFor(savedState(), "greeting").src);
-      expect(view.audio.play).toHaveBeenCalledOnce();
-      expect(view.element("s3-pause").open).toBe(false);
-    } else {
-      expect(savedState().customer).toEqual({ number: 3, phase: "complete", shoppingList: ["milk", "bread"] });
-      expect(view.element("s3-pause").open).toBe(true);
-      expect(view.element("s3-panel-day").hidden).toBe(false);
-      expect(view.element("s3-settle-day").disabled).toBe(false);
-      expect(view.audio.play).not.toHaveBeenCalled();
-      now += 10_000;
-      view.world.callbacks.onFrame?.(60, state.playerPose);
-      expect(savedState().customer).toEqual({ number: 3, phase: "complete", shoppingList: ["milk", "bread"] });
-      expect(savedState().transactions).toHaveLength(3);
-      expect(view.audio.play).not.toHaveBeenCalled();
-    }
+    clock.advance(view, 1);
+    expect(savedState().customer).toEqual({ number: paidCustomers + 1, phase: "to-milk", shoppingList: ["milk", "bread"] });
+    expect(view.audio.src).toBe(customerSpeechFor(savedState(), "greeting").src);
+    expect(view.audio.play).toHaveBeenCalledOnce();
+    expect(view.element("s3-pause").open).toBe(false);
+    expect(savedState().transactions).toHaveLength(paidCustomers);
+    expect(savedState().day.phase).toBe("open");
   });
 });
 
@@ -1339,6 +1351,7 @@ describe("doorstep delivery and high street management", () => {
     let state = stockedFirstDay();
     for (let count = 0; count < 3; count += 1) state = completeOrder(state);
     state = act(state, { type: "PURCHASE_STOCK", orderId: "tomorrow-order", pairs: 1 });
+    state = act(state, { type: "CLOSE_STORE" });
     const view = await readyGame(state);
     view.element("s3-open-day").click();
     expect(view.element("s3-settle-day").disabled).toBe(true);
@@ -1386,6 +1399,7 @@ describe("doorstep delivery and high street management", () => {
   it("announces achieved shop conditions as preparation while keeping interiors unavailable", async () => {
     let state = stockedFirstDay();
     for (let count = 0; count < 3; count += 1) state = completeOrder(state);
+    state = act(state, { type: "CLOSE_STORE" });
     state = act(state, { type: "SETTLE_DAY" });
     const view = await readyGame(state);
     key("KeyM");
@@ -1575,15 +1589,13 @@ describe("receipts for the products actually stocked", () => {
   });
 
   it("automatically invites the next customer when only one new SKU remains on the shelf", async () => {
-    let now = 1000;
-    vi.spyOn(performance, "now").mockImplementation(() => now);
+    const clock = frameTime();
     let state = selectedCheckout([{ productId: "soap", quantity: 3 }]);
     for (const item of state.items.filter((entry) => entry.location.kind === "checkout")) state = act(state, { type: "SCAN", itemId: item.id });
     state = act(state, { type: "PAY", success: true });
     state = act(state, { type: "CUSTOMER_ADVANCE" });
     const view = await readyGame(state);
-    now += (NEXT_CUSTOMER_SECONDS + 0.05) * 1000;
-    view.world.callbacks.onFrame?.(60, state.playerPose);
+    clock.advance(view, state.day.nextCustomerAtMs! - state.day.elapsedOpenMs);
     expect(savedState().customer).toEqual({ number: 2, phase: "to-milk", shoppingList: ["soap"] });
     expect(view.element("s3-customer-order").textContent).toContain("香皂");
     expect(view.element("s3-pause").open).toBe(false);
@@ -1744,7 +1756,7 @@ describe("cash checkout app wiring and recoverable interaction", () => {
     expect(savedState().payment).toMatchObject({ received: false });
   });
 
-  it("keeps music ducking and visibility handling while cash counting without moving the world", async () => {
+  it("pauses after leaving the cash window and requires explicit resume while preserving pending tender", async () => {
     const view = await readyGame(cashCheckoutState());
     view.world.callbacks.onTarget(counterTarget());
     view.element("s3-open-cash").click();
@@ -1752,14 +1764,281 @@ describe("cash checkout app wiring and recoverable interaction", () => {
     view.audio.onplaying?.();
     expect(view.shopAudio.setSpeechActive).toHaveBeenLastCalledWith(true);
     expect(view.element("s3-cash-audio-status").textContent).toContain("正在播放");
+    view.element("s3-cash-receive").click();
+    view.element("s3-cash-add-50").click();
+    const pending = savedState().payment;
     windowDouble.dispatchEvent(new Event("blur"));
     expect(view.shopAudio.setActive).toHaveBeenLastCalledWith(false);
-    expect(view.element("s3-cash-dialog").open).toBe(true);
+    expect(view.element("s3-cash-dialog").open).toBe(false);
+    expect(view.element("s3-pause").open).toBe(true);
     expect(view.world.setActive).toHaveBeenLastCalledWith(false);
     windowDouble.dispatchEvent(new Event("focus"));
-    expect(view.shopAudio.setActive).toHaveBeenLastCalledWith(true);
-    expect(view.element("s3-cash-dialog").open).toBe(true);
+    expect(view.shopAudio.setActive).toHaveBeenLastCalledWith(false);
     expect(view.world.setActive).toHaveBeenLastCalledWith(false);
+    expect(savedState().payment).toEqual(pending);
+    view.element("s3-resume").click();
+    view.world.callbacks.onTarget(counterTarget());
+    view.element("s3-open-cash").click();
+    expect(view.element("s3-cash-dialog").open).toBe(true);
+    expect(view.element("s3-cash-selected-total").textContent).toBe("£0.50");
+  });
+});
+
+describe("active-time business clock event wiring", () => {
+  it("leaves preparation untimed and starts 09:00 only after explicitly opening the shop", async () => {
+    const clock = frameTime();
+    const view = await readyGame(stockedFirstDay());
+    clock.advance(view, 20_000);
+    expect(view.element("s3-business-time").textContent).toBe("08:30");
+    expect(view.element("s3-clock-state").textContent).toBe("准备中");
+    expect(savedState().day.elapsedOpenMs).toBe(0);
+    expect(savedState().customer.phase).toBe("outside");
+    view.world.callbacks.onTarget({ id: "open-sign", kind: "open-sign", label: "营业牌", action: "开门", inspectable: false, distance: 1 });
+    view.world.callbacks.onInteract();
+    expect(view.element("s3-business-time").textContent).toBe("09:00");
+    expect(view.element("s3-clock-state").textContent).toBe("营业中");
+    clock.advance(view, 7000);
+    expect(view.element("s3-business-time").textContent).toBe("09:10");
+    expect(view.element("s3-sold").textContent).toBe("今日 0 单 · 库存 6 件");
+    view.element("s3-open-day").click();
+    expect(savedState().day.elapsedOpenMs).toBe(7000);
+  });
+
+  it.each(["supply", "day", "upgrade", "street"])("pauses in the %s management panel and resumes from the same moment", async (section) => {
+    const clock = frameTime();
+    const view = await readyGame(act(beforeCheckout(), { type: "CUSTOMER_ADVANCE" }));
+    clock.advance(view, 1400);
+    view.element(`s3-open-${section}`).click();
+    const paused = savedState();
+    expect(paused.day.elapsedOpenMs).toBe(1400);
+    expect(view.element("s3-clock-state").textContent).toBe("管理暂停");
+    clock.advance(view, 9000);
+    expect(savedState()).toEqual(paused);
+    expect(view.element("s3-business-time").textContent).toBe("09:02");
+    view.element("s3-resume").click();
+    clock.advance(view, 700);
+    view.element("s3-pause-button").click();
+    expect(savedState().day.elapsedOpenMs).toBe(2100);
+    expect(savedState().payment).toEqual(paused.payment);
+  });
+
+  it("pauses for close inspection but not for releasing the mouse", async () => {
+    const clock = frameTime();
+    const state = act(beforeCheckout(), { type: "CUSTOMER_ADVANCE" });
+    const view = await readyGame(state);
+    key("Tab");
+    clock.advance(view, 700);
+    expect(view.element("s3-business-time").textContent).toBe("09:01");
+    const item = state.items.find((entry) => entry.location.kind === "shelf")!;
+    view.world.callbacks.onTarget({ id: item.id, kind: "item", itemId: item.id, productId: item.productId, label: "商品", action: "近看", inspectable: true, distance: 1 });
+    view.world.callbacks.onInspect();
+    expect(view.element("s3-inspection").hidden).toBe(false);
+    const paused = savedState();
+    clock.advance(view, 9000);
+    expect(savedState().day.elapsedOpenMs).toBe(paused.day.elapsedOpenMs);
+    view.element("s3-close-inspect").click();
+    clock.advance(view, 700);
+    view.element("s3-pause-button").click();
+    expect(savedState().day.elapsedOpenMs).toBe(1400);
+  });
+
+  it("protects both the repeat request and the slow reply, then restores time without catch-up", async () => {
+    const clock = frameTime();
+    const state = act(beforeCheckout(), { type: "CUSTOMER_ADVANCE" });
+    const view = await readyGame(state);
+    clock.advance(view, 700);
+    view.element("s3-repeat-customer").click();
+    expect(view.element("s3-clock-state").textContent).toBe("学习暂停");
+    expect(view.world.setActive).toHaveBeenLastCalledWith(false);
+    view.audio.onplaying?.();
+    clock.advance(view, 3000);
+    view.audio.onended?.();
+    expect(view.audio.playbackRate).toBe(.84);
+    expect(view.element("s3-clock-state").textContent).toBe("学习暂停");
+    view.audio.onplaying?.();
+    clock.advance(view, 3000);
+    expect(view.element("s3-business-time").textContent).toBe("09:01");
+    view.audio.onended?.();
+    expect(view.element("s3-clock-state").textContent).toBe("营业中");
+    expect(view.world.setActive).toHaveBeenLastCalledWith(true);
+    clock.advance(view, 700);
+    view.element("s3-pause-button").click();
+    expect(savedState().day.elapsedOpenMs).toBe(1400);
+    expect(savedState().payment).toEqual(state.payment);
+  });
+
+  it.each(["error", "escape", "media-pause"])("releases learning protection safely on %s and ignores late speech completion", async (reason) => {
+    const clock = frameTime();
+    const view = await readyGame(act(beforeCheckout(), { type: "CUSTOMER_ADVANCE" }));
+    key("KeyR");
+    view.audio.onplaying?.();
+    const lateEnd = view.audio.onended;
+    clock.advance(view, 2000);
+    if (reason === "error") view.audio.onerror?.();
+    else if (reason === "media-pause") { view.audio.pause(); view.audio.onpause?.() }
+    else {
+      expect(key("Escape").defaultPrevented).toBe(true);
+      expect(view.element("s3-pause").open).toBe(true);
+      expect(view.world.setActive).toHaveBeenLastCalledWith(false);
+      clock.advance(view, 2000);
+      view.element("s3-resume").click();
+    }
+    lateEnd?.();
+    expect(view.element("s3-clock-state").textContent).toBe("营业中");
+    clock.advance(view, 700);
+    view.element("s3-pause-button").click();
+    expect(savedState().day.elapsedOpenMs).toBe(700);
+  });
+
+  it("releases protection if a recording never starts instead of freezing the business clock", async () => {
+    const clock = frameTime();
+    const view = await readyGame(act(beforeCheckout(), { type: "CUSTOMER_ADVANCE" }));
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      key("KeyR");
+      clock.advance(view, 4000);
+      expect(view.element("s3-clock-state").textContent).toBe("学习暂停");
+      vi.advanceTimersByTime(4000);
+      expect(view.element("s3-clock-state").textContent).toBe("营业中");
+      expect(view.element("s3-customer-audio-status").textContent).toContain("计时已恢复");
+      clock.advance(view, 700);
+      view.element("s3-pause-button").click();
+      expect(savedState().day.elapsedOpenMs).toBe(700);
+    } finally { vi.useRealTimers() }
+  });
+
+  it("ignores a queued pause from the previous audio source while a new learning replay is playing", async () => {
+    const clock = frameTime();
+    const view = await readyGame(act(beforeCheckout(), { type: "CUSTOMER_ADVANCE" }));
+    key("KeyR");
+    view.audio.onplaying?.();
+    expect(view.audio.paused).toBe(false);
+    view.audio.onpause?.();
+    clock.advance(view, 2100);
+    expect(view.element("s3-clock-state").textContent).toBe("学习暂停");
+    expect(view.element("s3-business-time").textContent).toBe("09:00");
+    view.audio.onended?.();
+    clock.advance(view, 700);
+    view.element("s3-pause-button").click();
+    expect(savedState().day.elapsedOpenMs).toBe(700);
+  });
+
+  it.each(["blur", "hidden"] as const)("keeps %s time out of an unfinished cash order until explicit resume", async (reason) => {
+    const clock = frameTime();
+    const view = await readyGame(cashCheckoutState());
+    view.world.callbacks.onTarget(counterTarget());
+    view.element("s3-open-cash").click();
+    view.element("s3-cash-receive").click();
+    view.element("s3-cash-add-50").click();
+    clock.advance(view, 700);
+    if (reason === "blur") windowDouble.dispatchEvent(new Event("blur"));
+    else { documentDouble.hidden = true; documentDouble.dispatchEvent(new Event("visibilitychange")) }
+    const paused = savedState();
+    expect(view.element("s3-pause").open).toBe(true);
+    expect(paused.payment).toMatchObject({ received: true, selectedChange: [50] });
+    clock.advance(view, 12_000);
+    if (reason === "blur") windowDouble.dispatchEvent(new Event("focus"));
+    else { documentDouble.hidden = false; documentDouble.dispatchEvent(new Event("visibilitychange")) }
+    clock.advance(view, 3000);
+    expect(savedState().day.elapsedOpenMs).toBe(paused.day.elapsedOpenMs);
+    view.element("s3-resume").click();
+    clock.advance(view, 700);
+    view.element("s3-pause-button").click();
+    expect(savedState().day.elapsedOpenMs).toBe(paused.day.elapsedOpenMs + 700);
+    expect(savedState().payment).toEqual(paused.payment);
+  });
+
+  it("does not infer business time from an offline reload or a suspended frame gap", async () => {
+    const clock = frameTime();
+    const initial = act(act(beforeCheckout(), { type: "CUSTOMER_ADVANCE" }), { type: "ADVANCE_BUSINESS_TIME", elapsedMs: 180_000 });
+    const view = await readyGame(initial);
+    clock.advance(view, 700);
+    view.element("s3-pause-button").click();
+    const paused = savedState();
+    await view.app.dispose();
+    clock.skip(86_400_000);
+    const restored = await readyGame(paused);
+    expect(savedState().day.elapsedOpenMs).toBe(paused.day.elapsedOpenMs);
+    clock.skip(60_000);
+    restored.world.callbacks.onFrame?.(60, paused.playerPose);
+    expect(savedState().day.elapsedOpenMs).toBe(paused.day.elapsedOpenMs);
+    clock.advance(restored, 700);
+    restored.element("s3-pause-button").click();
+    expect(savedState().day.elapsedOpenMs).toBe(paused.day.elapsedOpenMs + 700);
+  });
+
+  it("closes at 19:00 in normal cash-counting mode without interrupting received money or selected change", async () => {
+    const clock = frameTime();
+    const state = act(cashCheckoutState(), { type: "ADVANCE_BUSINESS_TIME", elapsedMs: BUSINESS_DURATION_MS - 700 });
+    const view = await readyGame(state);
+    view.world.callbacks.onTarget(counterTarget());
+    view.element("s3-open-cash").click();
+    view.element("s3-cash-receive").click();
+    view.element("s3-cash-add-50").click();
+    const pending = savedState();
+    expect(view.element("s3-clock-state").textContent).toBe("营业中");
+    clock.advance(view, 700);
+    const closing = savedState();
+    expect(closing.day).toMatchObject({ phase: "closing", elapsedOpenMs: BUSINESS_DURATION_MS, closeReason: "time", nextCustomerAtMs: null });
+    expect(view.element("s3-business-time").textContent).toBe("19:00");
+    expect(view.element("s3-clock-state").textContent).toBe("收尾中");
+    expect(view.element("s3-cash-dialog").open).toBe(true);
+    expect(view.element("s3-cash-business-clock").textContent).toContain("本单可以继续完成");
+    expect(closing.payment).toEqual(pending.payment);
+    expect(closing.transactions).toEqual(pending.transactions);
+    expect(closing.scannedIds).toEqual(pending.scannedIds);
+    view.element("s3-cash-add-50").click();
+    view.element("s3-cash-confirm").click();
+    expect(savedState().cashPence).toBe(state.cashPence + 400);
+    expect(view.element("s3-pause").open).toBe(false);
+    view.world.callbacks.onCustomerArrive();
+    clock.advance(view, 100);
+    expect(view.element("s3-pause").open).toBe(true);
+    expect(view.element("s3-settle-day").disabled).toBe(false);
+    expect(savedState().customer.number).toBe(2);
+  });
+
+  it("does not start a scheduled visitor at the exact closing boundary", async () => {
+    const clock = frameTime();
+    let state = act(act(beforeCheckout(), { type: "CUSTOMER_ADVANCE" }), { type: "ADVANCE_BUSINESS_TIME", elapsedMs: BUSINESS_DURATION_MS - 700 });
+    for (const item of state.items.filter((entry) => entry.location.kind === "checkout")) state = act(state, { type: "SCAN", itemId: item.id });
+    state = act(payScannedCheckout(state), { type: "CUSTOMER_ADVANCE" });
+    expect(state.day.nextCustomerAtMs).toBe(BUSINESS_DURATION_MS);
+    const view = await readyGame(state);
+    clock.advance(view, 700);
+    expect(savedState().day.phase).toBe("closing");
+    expect(savedState().customer.number).toBe(1);
+    expect(view.element("s3-panel-day").hidden).toBe(false);
+    expect(view.element("s3-pause").open).toBe(true);
+    expect(view.shopAudio.playEffect).not.toHaveBeenCalled();
+  });
+
+  it("requires confirmation for an early zero-order close, settles once and resets the next preparation day", async () => {
+    const clock = frameTime();
+    const view = await readyGame();
+    view.element("s3-open-day").click();
+    view.element("s3-close-shop").click();
+    expect(view.element("s3-close-confirm").hidden).toBe(false);
+    key("Escape");
+    expect(view.element("s3-close-confirm").hidden).toBe(true);
+    expect(view.element("s3-pause").open).toBe(true);
+    expect(savedState().day.phase).toBe("preparing");
+    view.element("s3-close-shop").click();
+    view.element("s3-close-confirm-button").click();
+    expect(savedState().day.phase).toBe("closing");
+    expect(view.element("s3-settle-day").hidden).toBe(false);
+    expect(view.element("s3-settle-day").disabled).toBe(false);
+    view.element("s3-settle-day").click();
+    view.element("s3-settle-day").click();
+    expect(savedState().settlements).toHaveLength(1);
+    expect(savedState().settlements[0]).toMatchObject({ paidCustomers: 0, revenuePence: 0, targetCustomers: null });
+    expect(savedState().cashPence).toBe(1200);
+    view.element("s3-next-day").click();
+    expect(savedState().day).toMatchObject({ number: 2, phase: "preparing", elapsedOpenMs: 0, nextCustomerAtMs: null, closeReason: null });
+    view.element("s3-resume").click();
+    clock.advance(view, 5000);
+    expect(view.element("s3-business-time").textContent).toBe("08:30");
+    expect(savedState().cashPence).toBe(1200);
   });
 });
 
@@ -2044,7 +2323,11 @@ describe("accepted shop actions emit feedback once", () => {
     view.world.callbacks.onTarget({ id: "open-sign", kind: "open-sign", label: "营业牌", action: "开店", inspectable: false, distance: 1 });
     view.world.callbacks.onInteract();
     view.world.callbacks.onInteract();
+    expect(view.element("s3-pause").open).toBe(true); // The open sign now opens business management.
+    view.element("s3-resume").click();
     view.element("s3-read-customer").click();
+    view.audio.onplaying?.();
+    view.audio.onended?.();
     expect(view.shopAudio.playEffect.mock.calls).toEqual([["doorbell"]]);
     for (let step = 0; step < 3; step += 1) view.world.callbacks.onCustomerArrive();
     const item = savedState().items.find((entry) => entry.location.kind === "checkout")!;
@@ -2078,16 +2361,14 @@ describe("accepted shop actions emit feedback once", () => {
   });
 
   it("rings only once for an automatically admitted next visitor", async () => {
-    let now = 1000;
-    vi.spyOn(performance, "now").mockImplementation(() => now);
-    const view = await readyGame(completeOrder(stockedFirstDay()));
+    const clock = frameTime();
+    const state = completeOrder(stockedFirstDay());
+    const view = await readyGame(state);
     expect(view.shopAudio.playEffect).not.toHaveBeenCalled();
-    now += NEXT_CUSTOMER_SECONDS * 1000;
-    view.world.callbacks.onFrame?.(60, savedState().playerPose);
+    clock.advance(view, state.day.nextCustomerAtMs! - state.day.elapsedOpenMs);
     expect(savedState().customer.number).toBe(2);
     expect(view.shopAudio.playEffect.mock.calls).toEqual([["doorbell"]]);
-    now += NEXT_CUSTOMER_SECONDS * 1000;
-    view.world.callbacks.onFrame?.(60, savedState().playerPose);
+    clock.advance(view, 12_000);
     view.element("s3-read-customer").click();
     expect(view.shopAudio.playEffect.mock.calls).toEqual([["doorbell"]]);
   });

@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { payScannedCheckout, preCashTransactions } from "../helpers/sim3dPayment";
 import {
-  CRATE_CAPACITY, DAY_CUSTOMER_TARGET, DELIVERY_DROP_POINTS, INITIAL_CAPITAL_PENCE, PRODUCTS, PURCHASE_PAIR_COST_PENCE,
+  CRATE_CAPACITY, DELIVERY_DROP_POINTS, INITIAL_CAPITAL_PENCE, PRODUCTS, PURCHASE_PAIR_COST_PENCE,
   canSettleDay, capacityFor, countAt, createFirstDayState, createInitialSimState, getDaySummary, getObjective,
   getDeliverySummary, getPurchaseOffer, migrateLegacySimState, reduceSim, validateLegacySimState, validateSimState,
   type LegacySimState, type ProductId, type PurchasePairs, type SimCommand, type SimState,
@@ -45,16 +45,17 @@ function sale(state: SimState, leave = true): SimState {
   return leave ? act(state, { type: "CUSTOMER_ADVANCE" }) : state;
 }
 
-function fullDay(state = createFirstDayState()): SimState {
+function threeSales(state = createFirstDayState()): SimState {
   state = stock(buy(state), 3);
-  for (let customer = 0; customer < DAY_CUSTOMER_TARGET; customer += 1) state = sale(state);
+  for (let customer = 0; customer < 3; customer += 1) state = sale(state);
   return state;
 }
 
 function afterDays(days: number): SimState {
   let state = createFirstDayState();
   for (let day = 0; day < days; day += 1) {
-    state = fullDay(state);
+    state = threeSales(state);
+    state = act(state, { type: "CLOSE_STORE" });
     state = act(state, { type: "SETTLE_DAY" });
     state = act(state, { type: "START_NEXT_DAY" });
   }
@@ -74,11 +75,12 @@ describe("first-day paired purchasing and conserved goods", () => {
   it("opens with £12 capital, two empty reusable crates and no free merchandise", () => {
     const state = createFirstDayState();
     expect(validateSimState(state)).toBe(true);
-    expect(state.schemaVersion).toBe(8);
+    expect(state.schemaVersion).toBe(9);
     expect(state.cashPence).toBe(INITIAL_CAPITAL_PENCE);
     expect(state.items).toEqual([]);
     expect(state.crates).toHaveLength(2);
-    expect(state.day).toMatchObject({ number: 1, phase: "preparing", targetCustomers: 3, openingCashPence: 1200, openingStockUnits: 0 });
+    expect(state.day).toMatchObject({ number: 1, phase: "preparing", targetCustomers: null, openingCashPence: 1200, openingStockUnits: 0,
+      elapsedOpenMs: 0, nextCustomerAtMs: null, closeReason: null });
     expect(state.purchases).toEqual([]);
     expect(state.inspectedProducts).toEqual([]);
     expect(getObjective(state)).toContain("进货");
@@ -194,9 +196,12 @@ describe("first-day paired purchasing and conserved goods", () => {
 
 describe("a complete business day and continued operation", () => {
   it("accounts procurement, £12 sales, £5.10 gross profit and £17.10 cash without double expensing stock", () => {
-    const state = fullDay();
+    const open = threeSales();
+    expect(canSettleDay(open)).toBe(false);
+    expect(reduceSim(open, { type: "SETTLE_DAY" }).state).toBe(open);
+    const state = act(open, { type: "CLOSE_STORE" });
     expect(getDaySummary(state)).toEqual({
-      dayNumber: 1, paidCustomers: 3, targetCustomers: 3, openingCashPence: 1200,
+      dayNumber: 1, paidCustomers: 3, targetCustomers: null, openingCashPence: 1200,
       revenuePence: 1200, procurementPence: 690, costOfGoodsPence: 690, grossProfitPence: 510,
       upgradeSpendPence: 0, closingCashPence: 1710, remainingStockUnits: 0, remainingInventoryValuePence: 0,
       recycledCrates: 0, recyclingIncomePence: 0,
@@ -208,7 +213,7 @@ describe("a complete business day and continued operation", () => {
     expect(reduceSim(state, { type: "NEXT_CUSTOMER" }).state).toBe(state);
   });
 
-  it("requires three paid orders, not just arrivals, and waits for the last customer to leave", () => {
+  it("rejects settlement while open and waits for the last customer to leave after closing", () => {
     let state = stock(buy(), 3);
     expect(canSettleDay(state)).toBe(false);
     expect(reduceSim(state, { type: "SETTLE_DAY" }).state).toBe(state);
@@ -225,13 +230,18 @@ describe("a complete business day and continued operation", () => {
     expect(getDaySummary(state).paidCustomers).toBe(3);
     expect(canSettleDay(state)).toBe(false);
     expect(reduceSim(state, { type: "SETTLE_DAY" }).state).toBe(state);
+    state = act(state, { type: "CLOSE_STORE" });
+    expect(state.day.phase).toBe("closing");
+    expect(canSettleDay(state)).toBe(false);
+    expect(reduceSim(state, { type: "SETTLE_DAY" }).state).toBe(state);
     state = act(state, { type: "CUSTOMER_ADVANCE" });
     expect(canSettleDay(state)).toBe(true);
   });
 
   it("records a settlement once without adding revenue again and blocks procurement until the next day", () => {
-    const paid = fullDay();
-    let state = act(paid, { type: "SETTLE_DAY" });
+    const paid = threeSales();
+    let state = act(paid, { type: "CLOSE_STORE" });
+    state = act(state, { type: "SETTLE_DAY" });
     expect(state.day.phase).toBe("settled");
     expect(state.cashPence).toBe(paid.cashPence);
     expect(state.transactions).toEqual(paid.transactions);
@@ -248,7 +258,7 @@ describe("a complete business day and continued operation", () => {
     expect(getDaySummary(state).revenuePence).toBe(0);
     expect(getDaySummary(state).procurementPence).toBe(0);
     expect(reduceSim(state, { type: "START_NEXT_DAY" }).state).toBe(state);
-    state = fullDay(state);
+    state = threeSales(state);
     expect(state.cashPence).toBe(2220);
     expect(state.transactions).toHaveLength(6);
     expect(state.items).toHaveLength(12);
@@ -261,6 +271,7 @@ describe("a complete business day and continued operation", () => {
     expect(getDaySummary(state)).toMatchObject({ procurementPence: 920, costOfGoodsPence: 690, grossProfitPence: 510, remainingStockUnits: 2, remainingInventoryValuePence: 230 });
     state = act(state, { type: "PICK_CRATE", crateId: "milk-crate" });
     state = act(state, { type: "SAVE_POSE", pose: { x: 0.5, z: -1, yaw: 0.3, pitch: 0.1 } });
+    state = act(state, { type: "CLOSE_STORE" });
     state = act(state, { type: "SETTLE_DAY" });
     state = act(state, { type: "BUY_UPGRADE" });
     expect(state.cashPence).toBe(680);
@@ -286,6 +297,7 @@ describe("a complete business day and continued operation", () => {
     expect(state.inspectedProducts).toEqual([]);
     expect(getDaySummary(state)).toMatchObject({ upgradeSpendPence: 800, grossProfitPence: 510 });
     expect(reduceSim(state, { type: "BUY_UPGRADE" }).state).toBe(state);
+    state = act(state, { type: "CLOSE_STORE" });
     state = act(state, { type: "SETTLE_DAY" });
     expect(state.settlements[0]?.closingCashPence).toBe(910);
   });
@@ -393,8 +405,9 @@ describe("doorstep delivery ownership and receipt", () => {
   });
 
   it("waits for the last delivery before day-end and resets receipt counts without granting free next-day stock", () => {
-    let state = fullDay();
+    let state = threeSales();
     state = act(state, { type: "PURCHASE_STOCK", orderId: "last-minute", pairs: 1 });
+    state = act(state, { type: "CLOSE_STORE" });
     expect(canSettleDay(state)).toBe(false);
     const closing = reduceSim(state, { type: "SETTLE_DAY" });
     expect(closing.state).toBe(state);
@@ -448,9 +461,10 @@ describe("v3 legacy baseline migration", () => {
     expect(legacy.items[0]!.id).toBe("milk-1");
   });
 
-  it("preserves a fully paid four-customer S0 save and permits settling without another sale", () => {
+  it("preserves a fully paid four-customer S0 save and permits closing and settling without another sale", () => {
     let state = stock(createInitialSimState(), 4);
     for (let order = 0; order < 3; order += 1) state = sale(state);
+    state = act(state, { type: "CLOSE_STORE" });
     state = act(state, { type: "SETTLE_DAY" });
     state = act(state, { type: "START_NEXT_DAY" });
     state = sale(state);
@@ -463,6 +477,10 @@ describe("v3 legacy baseline migration", () => {
     expect(result.upgraded).toBe(true);
     expect(result.upgradeDay).toBe(1);
     expect(getDaySummary(result).paidCustomers).toBe(4);
+    expect(result.day.phase).toBe("open");
+    expect(canSettleDay(result)).toBe(false);
+    expect(reduceSim(result, { type: "SETTLE_DAY" }).state).toBe(result);
+    result = act(result, { type: "CLOSE_STORE" });
     expect(canSettleDay(result)).toBe(true);
     result = act(result, { type: "SETTLE_DAY" });
     result = act(result, { type: "START_NEXT_DAY" });
@@ -496,7 +514,7 @@ describe("day and purchase ledger tamper validation", () => {
     ["forged opening cash", (state: SimState) => { state.day.openingCashPence += 50 }],
     ["forged opening units", (state: SimState) => { state.day.openingStockUnits += 2 }],
     ["forged opening valuation", (state: SimState) => { state.day.openingInventoryValuePence += 230 }],
-    ["changed target", (state: SimState) => { (state.day as { targetCustomers: number }).targetCustomers = 1 }],
+    ["changed target", (state: SimState) => { (state.day as { targetCustomers: number | null }).targetCustomers = 1 }],
     ["skipped days", (state: SimState) => { state.day.number = 3 }],
     ["premature settlement", (state: SimState) => { state.day.phase = "settled" }],
     ["incomplete purchase range", (state: SimState) => { state.day.purchaseStart = 1 }],
@@ -516,7 +534,8 @@ describe("day and purchase ledger tamper validation", () => {
     ["empty sales range", (state: SimState) => { state.settlements[0]!.transactionEnd = 0 }],
     ["unpaid customer at close", (state: SimState) => { state.customer.phase = "to-milk" }],
   ])("rejects settled report with %s", (_label, mutate) => {
-    const state = act(fullDay(), { type: "SETTLE_DAY" });
+    const closed = act(threeSales(), { type: "CLOSE_STORE" });
+    const state = act(closed, { type: "SETTLE_DAY" });
     mutate(state);
     expect(validateSimState(state)).toBe(false);
   });
