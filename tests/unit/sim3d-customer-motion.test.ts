@@ -3,7 +3,7 @@ import { Vector3, type Engine, type Scene, type TransformNode, type UniversalCam
 import {
   CUSTOMER_EXIT_STOP_SECONDS, CUSTOMER_STOP_SECONDS, CUSTOMER_WALK_SPEED,
 } from "../../src/sim3d/customerSelection";
-import { createFirstDayState, type CustomerPhase, type PlayerPose, type Position, type SimState } from "../../src/sim3d/domain";
+import { createFirstDayState, type CrateId, type CustomerPhase, type PlayerPose, type Position, type SimState } from "../../src/sim3d/domain";
 import { ShopWorld, type WorldCallbacks } from "../../src/sim3d/world";
 
 /**
@@ -18,7 +18,11 @@ interface MotionRuntime {
   camera: Pick<UniversalCamera, "position" | "rotation">;
   customer: Pick<TransformNode, "position" | "rotation" | "isEnabled" | "setEnabled">;
   state: SimState;
-  callbacks: Pick<WorldCallbacks, "onCustomerArrive" | "onFrame">;
+  callbacks: Pick<WorldCallbacks, "onCustomerArrive" | "onFrame" | "onStatus">;
+  colliders: { minX: number; maxX: number; minZ: number; maxZ: number }[];
+  occupiedCrates: Set<CrateId>;
+  customerRouteBlocked: boolean;
+  customerObstacleSignature: string;
   active: boolean;
   disposed: boolean;
   canvasWasLost: boolean;
@@ -62,8 +66,9 @@ function createMotionWorld(phase: CustomerPhase = "to-milk") {
       isEnabled: () => enabled,
       setEnabled: (value: boolean) => { enabled = value },
     },
-    state: { ...createFirstDayState(), revision: 7, customer: { phase, number: 1 } },
-    callbacks: { onCustomerArrive: onArrive, onFrame },
+    state: { ...createFirstDayState(), revision: 7, customer: { phase, number: 1, shoppingList: phase === "outside" ? [] : ["milk", "bread"] } },
+    callbacks: { onCustomerArrive: onArrive, onFrame, onStatus: vi.fn() },
+    colliders: [], occupiedCrates: new Set<CrateId>(), customerRouteBlocked: false, customerObstacleSignature: "",
     active: true, disposed: false, canvasWasLost: false, reducedMotion: true,
     customerPhase: phase, route: [{ x: 10, z: 0 }], routeIndex: 0,
     arrivalDelay: 0, arrivedRevision: -1, frameClock: 0, viewClock: 0, poseClock: 0,

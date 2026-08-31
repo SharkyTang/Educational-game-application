@@ -1,4 +1,4 @@
-/** Art catalogue only: adding a model here does not alter inventory, prices or saves. */
+/** Shared visual catalogue; the shop's audited prices and stock rules live in products.ts/domain.ts. */
 export const PRODUCT_CATEGORIES = [
   { id: "drinks", nameZh: "饮料", nameEn: "Drinks" },
   { id: "bakery", nameZh: "烘焙与零食", nameEn: "Bakery & snacks" },
@@ -72,7 +72,7 @@ export const PRODUCT_ASSET_IDS = Object.freeze(Object.keys(definitions) as Produ
 export const PRODUCT_ASSETS = Object.freeze(Object.fromEntries(PRODUCT_ASSET_IDS.map((id) => [id, Object.freeze({
   ...definitions[id], id, modelReady: true,
   modelUrl: `/assets/sim3d/products/${id}.glb`, thumbnailUrl: `/assets/sim3d/products/${id}.png`,
-  gameplay: id === "milk" || id === "bread" ? "active" : "library-only",
+  gameplay: "active",
   audio: id === "milk" || id === "bread" ? {
     wordUrl: `/assets/sim3d/audio/${id}.ogg`, phraseUrl: `/assets/sim3d/audio/${id}-phrase.wav`,
   } : null,
@@ -98,7 +98,7 @@ export function productLibraryManifest(): object {
   return {
     version: PRODUCT_LIBRARY_VERSION, units: "metres", origin: "bottom-centre", front: "-Z",
     source: "Project-authored procedural Babylon.js geometry and PBR materials; milk/bread retain their recorded texture sources.",
-    gameplayNote: "Only milk and bread are integrated with S1 orders, inventory and audio. Other models are library assets, not completed teaching tasks.",
+    gameplayNote: "All 30 products are integrated with selectable procurement, delivery, stocking and checkout. Recorded word and phrase audio remains available only for milk and bread; other products use optional browser speech in the game. Model integration is not evidence of language mastery.",
     factory: "src/sim3d/product-library/index.ts#createProductAsset", categories: PRODUCT_CATEGORIES,
     products: PRODUCT_ASSET_LIST,
   };

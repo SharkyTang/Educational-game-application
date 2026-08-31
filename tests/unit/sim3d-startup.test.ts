@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { capacityFor, countAt, createFirstDayState, createInitialSimState, DELIVERY_DROP_POINTS, getDeliverySummary, reduceSim, validateSimState, type PlayerPose, type SimCommand, type SimState } from "../../src/sim3d/domain";
+import { capacityFor, countAt, createFirstDayState, createInitialSimState, DELIVERY_DROP_POINTS, getCustomerOrder, getDeliverySummary, PRODUCTS, PRODUCT_IDS, reduceSim, validateSimState, type PlayerPose, type ProductId, type PurchaseLine, type SimCommand, type SimState } from "../../src/sim3d/domain";
 import { SIM_BACKUP_KEY, SIM_STORAGE_KEY, type SimLockManager, type StorageLike } from "../../src/sim3d/persistence";
 import type { InteractionTarget, WorldCallbacks } from "../../src/sim3d/world";
 import { SPEECH_CLIPS } from "../../src/sim3d/speechClips";
@@ -246,6 +246,32 @@ function deliveryTarget(distance = 1.3): InteractionTarget {
 
 function venueTarget(venueId: "cafe" | "restaurant" | "supermarket", distance = 1.3): InteractionTarget {
   return { id: `venue-${venueId}`, kind: "venue", venueId, label: "未来商铺", action: "查看开放条件", inspectable: false, distance };
+}
+
+function setQuantity(view: { element: (id: string) => ElementDouble }, productId: ProductId, quantity: string | number): void {
+  const input = view.element(`s3-quantity-${productId}`);
+  input.value = String(quantity);
+  input.dispatchEvent(new Event("input"));
+}
+
+function stockedSelection(lines: PurchaseLine[]): SimState {
+  let state = act(createFirstDayState(), { type: "PURCHASE_STOCK", orderId: "self-selected-stock", lines });
+  state = act(state, { type: "RECEIVE_DELIVERY" });
+  for (const line of lines) {
+    for (let slot = 0; slot < line.quantity; slot += 1) {
+      const item = state.items.find((entry) => entry.productId === line.productId && entry.location.kind === "crate")!;
+      state = act(state, { type: "TAKE_ITEM", itemId: item.id });
+      state = act(state, { type: "STOCK", productId: line.productId, slot });
+    }
+  }
+  return state;
+}
+
+function selectedCheckout(lines: PurchaseLine[]): SimState {
+  let state = act(stockedSelection(lines), { type: "OPEN_STORE" });
+  for (let step = 0; step < 3 && state.customer.phase !== "checkout"; step += 1) state = act(state, { type: "CUSTOMER_ADVANCE" });
+  expect(state.customer.phase).toBe("checkout");
+  return state;
 }
 
 describe("3D application startup and lifecycle", () => {
@@ -788,7 +814,7 @@ describe("customer identity, dialogue continuity and saved seeds", () => {
       profileIds.add(profile.id);
       voices.add(profile.voice);
       greetingIds.add(greeting.id);
-      expect(shopping.customer).toEqual({ number, phase: "to-milk" });
+      expect(shopping.customer).toEqual({ number, phase: "to-milk", shoppingList: ["milk", "bread"] });
       expect(view.element("s3-customer-name").textContent).toBe(`${profile.name} · 第 ${number} 位顾客`);
       expect(view.element("s3-customer-line").textContent).toContain(greeting.text);
       expect(view.element("s3-customer-zh").textContent).toBe(greeting.zh);
@@ -841,7 +867,7 @@ describe("customer identity, dialogue continuity and saved seeds", () => {
     expect(greetingIds.size).toBe(3);
     expect(checkoutIds.size).toBe(3);
     expect(thanksIds.size).toBe(3);
-    expect(savedState().customer).toEqual({ number: 3, phase: "complete" });
+    expect(savedState().customer).toEqual({ number: 3, phase: "complete", shoppingList: ["milk", "bread"] });
     expect(view.element("s3-panel-day").hidden).toBe(false);
     expect(view.element("s3-pause").open).toBe(true);
     expect(view.audio.play).not.toHaveBeenCalled();
@@ -1038,7 +1064,7 @@ describe("customer identity, dialogue continuity and saved seeds", () => {
     expect(entropy).toHaveBeenCalledOnce();
     expect(fresh.customerSeed).toBe(0x12345678);
     expect(fresh.customerSeed).not.toBe(77);
-    expect(fresh.customer).toEqual({ number: 1, phase: "outside" });
+    expect(fresh.customer).toEqual({ number: 1, phase: "outside", shoppingList: [] });
     expect(fresh.cashPence).toBe(1200);
     expect(fresh.transactions).toEqual([]);
     expect(storage.getItem(SIM_BACKUP_KEY)).toBe(original);
@@ -1052,11 +1078,15 @@ describe("customer identity, dialogue continuity and saved seeds", () => {
 });
 
 describe("first-day management event wiring and persistence", () => {
-  it("buys three pairs for £6.90 through the visible panel and ignores duplicate clicks after return", async () => {
+  it("starts with an empty cart, buys only manually selected quantities and ignores duplicate clicks after return", async () => {
     const view = await readyGame();
     view.element("s3-open-supply").click();
     expect(view.element("s3-panel-supply").hidden).toBe(false);
-    expect(view.element("s3-buy-three").getAttribute("aria-pressed")).toBe("true");
+    expect(view.element("s3-supply-total").textContent).toBe("−£0.00");
+    expect(view.element("s3-purchase").disabled).toBe(true);
+    for (const productId of PRODUCT_IDS) expect(view.element(`s3-quantity-${productId}`).value).toBe("0");
+    setQuantity(view, "milk", 3);
+    setQuantity(view, "bread", 3);
     expect(view.element("s3-supply-total").textContent).toBe("−£6.90");
     expect(view.element("s3-supply-after").textContent).toBe("£5.10");
     expect(view.element("s3-purchase").disabled).toBe(false);
@@ -1065,6 +1095,7 @@ describe("first-day management event wiring and persistence", () => {
     const state = savedState();
     expect(state.cashPence).toBe(510);
     expect(state.purchases).toHaveLength(1);
+    expect(state.purchases[0]?.lines).toEqual([{ productId: "milk", quantity: 3 }, { productId: "bread", quantity: 3 }]);
     expect(state.items).toHaveLength(6);
     expect(countAt(state, "milk", "crate")).toBe(0);
     expect(countAt(state, "bread", "crate")).toBe(0);
@@ -1076,20 +1107,25 @@ describe("first-day management event wiring and persistence", () => {
     expect(view.world.requestPointerLock).not.toHaveBeenCalled();
     expect(view.element("s3-toast").textContent).toContain("下单成功");
     expect(view.element("s3-toast").textContent).toContain("门口货车旁按 E 签收");
+    view.element("s3-open-supply").click();
+    expect(view.element("s3-quantity-milk").value).toBe("0");
+    expect(view.element("s3-quantity-bread").value).toBe("0");
+    expect(view.element("s3-purchase").disabled).toBe(true);
   });
 
   it("disables unaffordable purchases with an explicit reason, and a smaller selection restores availability", async () => {
     const view = await readyGame();
     key("KeyB");
-    view.element("s3-buy-six").click();
-    expect(view.element("s3-buy-six").getAttribute("aria-pressed")).toBe("true");
+    setQuantity(view, "milk", 6);
+    setQuantity(view, "bread", 6);
     expect(view.element("s3-purchase").disabled).toBe(true);
     expect(view.element("s3-supply-error").textContent).toContain("资金不足");
     expect(view.element("s3-supply-total").textContent).toBe("−£13.80");
     const before = storage.getItem(SIM_STORAGE_KEY);
     view.element("s3-purchase").click();
     expect(storage.getItem(SIM_STORAGE_KEY)).toBe(before);
-    view.element("s3-buy-one").click();
+    setQuantity(view, "milk", 1);
+    setQuantity(view, "bread", 1);
     expect(view.element("s3-purchase").disabled).toBe(false);
     expect(view.element("s3-supply-total").textContent).toBe("−£2.30");
   });
@@ -1188,19 +1224,19 @@ describe("first-day management event wiring and persistence", () => {
     now += 1;
     view.world.callbacks.onFrame?.(60, state.playerPose);
     if (paidCustomers === 1) {
-      expect(savedState().customer).toEqual({ number: 2, phase: "to-milk" });
+      expect(savedState().customer).toEqual({ number: 2, phase: "to-milk", shoppingList: ["milk", "bread"] });
       expect(view.audio.src).toBe(customerSpeechFor(savedState(), "greeting").src);
       expect(view.audio.play).toHaveBeenCalledOnce();
       expect(view.element("s3-pause").open).toBe(false);
     } else {
-      expect(savedState().customer).toEqual({ number: 3, phase: "complete" });
+      expect(savedState().customer).toEqual({ number: 3, phase: "complete", shoppingList: ["milk", "bread"] });
       expect(view.element("s3-pause").open).toBe(true);
       expect(view.element("s3-panel-day").hidden).toBe(false);
       expect(view.element("s3-settle-day").disabled).toBe(false);
       expect(view.audio.play).not.toHaveBeenCalled();
       now += 10_000;
       view.world.callbacks.onFrame?.(60, state.playerPose);
-      expect(savedState().customer).toEqual({ number: 3, phase: "complete" });
+      expect(savedState().customer).toEqual({ number: 3, phase: "complete", shoppingList: ["milk", "bread"] });
       expect(savedState().transactions).toHaveLength(3);
       expect(view.audio.play).not.toHaveBeenCalled();
     }
@@ -1221,7 +1257,7 @@ describe("doorstep delivery and high street management", () => {
     view.element("s3-interact").click();
     expect(savedState().cashPence).toBe(510);
     expect(getDeliverySummary(savedState())).toMatchObject({ pendingUnits: 0, receivedToday: 1 });
-    expect(savedState().crates.map((crate) => crate.position)).toEqual(DELIVERY_DROP_POINTS);
+    expect(savedState().crates.map((crate) => crate.position)).toEqual(DELIVERY_DROP_POINTS.slice(0, 2));
     expect(view.element("s3-delivery-hud").hidden).toBe(true);
     view.world.callbacks.onInteract();
     expect(view.element("s3-panel-supply").hidden).toBe(false);
@@ -1332,5 +1368,295 @@ describe("doorstep delivery and high street management", () => {
     expect(view.element("s3-venue-note-cafe").textContent).toContain("内部经营尚未开放");
     expect(view.element("s3-venue-status-restaurant").textContent).toBe("暂未开放");
     expect(view.element("s3-venue-status-supermarket").textContent).toBe("暂未开放");
+  });
+});
+
+describe("self-selected catalogue procurement", () => {
+  it("offers all 30 pictured products without default quantities and buys only the chosen new SKUs", async () => {
+    const view = await readyGame();
+    key("KeyB");
+    expect(view.element("s3-supply-visible").textContent).toContain("30 / 30");
+    for (const productId of PRODUCT_IDS) {
+      expect(view.element(`s3-supply-product-${productId}`).hidden).toBe(false);
+      expect(view.element(`s3-quantity-${productId}`).value).toBe("0");
+      expect(view.root.innerHTML).toContain(`/assets/sim3d/products/${productId}.png`);
+    }
+    const before = storage.getItem(SIM_STORAGE_KEY);
+    view.element("s3-purchase").dispatchEvent(new Event("click"));
+    expect(storage.getItem(SIM_STORAGE_KEY)).toBe(before);
+    setQuantity(view, "apple", 2);
+    view.element("s3-quantity-add-soap").click();
+    const cost = PRODUCTS.apple.costPence * 2 + PRODUCTS.soap.costPence;
+    expect(view.element("s3-supply-summary").textContent).toBe("已选 2 种商品 · 共 3 件");
+    expect(view.element("s3-supply-total").textContent).toBe(`−£${(cost / 100).toFixed(2)}`);
+    expect(view.element("s3-supply-after").textContent).toBe(`£${((1200 - cost) / 100).toFixed(2)}`);
+    view.element("s3-purchase").click();
+    const bought = savedState();
+    expect(bought.cashPence).toBe(1200 - cost);
+    expect(bought.purchases).toHaveLength(1);
+    expect(bought.purchases[0]?.lines).toEqual([{ productId: "apple", quantity: 2 }, { productId: "soap", quantity: 1 }]);
+    expect(bought.items.map((item) => item.productId)).toEqual(["apple", "apple", "soap"]);
+    expect(bought.items.every((item) => item.location.kind === "delivery")).toBe(true);
+    expect(view.element("s3-pause").open).toBe(false);
+    expect(view.world.requestPointerLock).not.toHaveBeenCalled();
+    key("KeyB");
+    expect(view.element("s3-quantity-apple").value).toBe("0");
+    expect(view.element("s3-quantity-soap").value).toBe("0");
+    expect(view.element("s3-supply-pending-apple").textContent).toBe("待收 2");
+    expect(view.element("s3-purchase").disabled).toBe(true);
+  });
+
+  it("retains selections through category, search, selected-only and pause-panel changes", async () => {
+    const view = await readyGame();
+    key("KeyB");
+    setQuantity(view, "apple", 1);
+    setQuantity(view, "soap", 2);
+    view.element("s3-supply-category").value = "drinks";
+    view.element("s3-supply-category").dispatchEvent(new Event("change"));
+    expect(view.element("s3-supply-product-apple").hidden).toBe(true);
+    expect(view.element("s3-supply-product-soap").hidden).toBe(true);
+    view.element("s3-supply-search").value = "气泡水";
+    view.element("s3-supply-search").dispatchEvent(new Event("input"));
+    expect(view.element("s3-supply-product-water").hidden).toBe(false);
+    expect(view.element("s3-supply-visible").textContent).toContain("1 / 30");
+    expect(view.element("s3-supply-summary").textContent).toBe("已选 2 种商品 · 共 3 件");
+    view.element("s3-supply-selected-only").checked = true;
+    view.element("s3-supply-selected-only").dispatchEvent(new Event("change"));
+    expect(view.element("s3-supply-empty").hidden).toBe(false);
+    view.element("s3-supply-search").value = "";
+    view.element("s3-supply-search").dispatchEvent(new Event("input"));
+    view.element("s3-supply-category").value = "all";
+    view.element("s3-supply-category").dispatchEvent(new Event("change"));
+    expect(view.element("s3-supply-visible").textContent).toContain("2 / 30");
+    expect(view.element("s3-quantity-apple").value).toBe("1");
+    expect(view.element("s3-quantity-soap").value).toBe("2");
+    view.element("s3-tab-street").click();
+    view.element("s3-tab-supply").click();
+    view.element("s3-resume").click();
+    key("KeyB");
+    expect(view.element("s3-quantity-soap").value).toBe("2");
+    expect(view.element("s3-purchase").disabled).toBe(false);
+    view.element("s3-clear-cart").click();
+    expect(view.element("s3-quantity-apple").value).toBe("0");
+    expect(view.element("s3-quantity-soap").value).toBe("0");
+    expect(view.element("s3-purchase").disabled).toBe(true);
+    expect(savedState().purchases).toEqual([]);
+  });
+
+  it.each(["", "1.5", "9"])("blocks a whole order for hidden invalid quantity %s instead of silently buying the valid lines", async (quantity) => {
+    const view = await readyGame();
+    key("KeyB");
+    setQuantity(view, "milk", 1);
+    setQuantity(view, "apple", quantity);
+    view.element("s3-supply-category").value = "drinks";
+    view.element("s3-supply-category").dispatchEvent(new Event("change"));
+    expect(view.element("s3-supply-product-apple").hidden).toBe(true);
+    expect(view.element("s3-quantity-apple").getAttribute("aria-invalid")).toBe("true");
+    expect(view.element("s3-supply-error").textContent).toContain("苹果的数量无效");
+    expect(view.element("s3-supply-total").textContent).toBe("请先修正数量");
+    expect(view.element("s3-purchase").disabled).toBe(true);
+    const before = storage.getItem(SIM_STORAGE_KEY);
+    view.element("s3-purchase").dispatchEvent(new Event("click"));
+    expect(storage.getItem(SIM_STORAGE_KEY)).toBe(before);
+    expect(savedState().purchases).toEqual([]);
+    setQuantity(view, "apple", 0);
+    expect(view.element("s3-purchase").disabled).toBe(false);
+    view.element("s3-purchase").click();
+    expect(savedState().purchases[0]?.lines).toEqual([{ productId: "milk", quantity: 1 }]);
+  });
+
+  it("shows pending stock capacity and allows choosing another product after removing a blocked line", async () => {
+    const pending = act(createFirstDayState(), { type: "PURCHASE_STOCK", orderId: "eight-milk", lines: [{ productId: "milk", quantity: 8 }] });
+    const view = await readyGame(pending);
+    key("KeyB");
+    expect(view.element("s3-supply-pending-milk").textContent).toBe("待收 8");
+    setQuantity(view, "milk", 1);
+    expect(view.element("s3-purchase").disabled).toBe(true);
+    expect(view.element("s3-supply-line-error-milk").hidden).toBe(false);
+    view.element("s3-quantity-remove-milk").click();
+    view.element("s3-quantity-add-apple").click();
+    expect(view.element("s3-purchase").disabled).toBe(false);
+    expect(view.element("s3-supply-summary").textContent).toBe("已选 1 种商品 · 共 1 件");
+  });
+
+  it("keeps editing controls and procurement disabled when the save is read-only", async () => {
+    const owner = await readyGame();
+    const preview = mount();
+    const loading = preview.app.init();
+    await settle();
+    doubles.World.instances.at(-1)!.complete();
+    await loading;
+    const before = storage.getItem(SIM_STORAGE_KEY);
+    expect(preview.element("s3-quantity-apple").disabled).toBe(true);
+    preview.element("s3-open-supply").click();
+    setQuantity(preview, "apple", 3);
+    preview.element("s3-purchase").dispatchEvent(new Event("click"));
+    expect(preview.element("s3-pause").open).toBe(false);
+    expect(storage.getItem(SIM_STORAGE_KEY)).toBe(before);
+    expect(owner.element("s3-pause").open).toBe(false);
+  });
+});
+
+describe("receipts for the products actually stocked", () => {
+  it("shows, scans and pays a single new product with its real price and no milk or bread rows", async () => {
+    const state = selectedCheckout([{ productId: "soap", quantity: 1 }]);
+    expect(getCustomerOrder(state)).toEqual(["soap"]);
+    const view = await readyGame(state);
+    expect(view.element("s3-receipt-line-soap").hidden).toBe(false);
+    expect(view.element("s3-receipt-line-milk").hidden).toBe(true);
+    expect(view.element("s3-receipt-line-bread").hidden).toBe(true);
+    expect(view.element("s3-receipt-count-soap").textContent).toBe("香皂 × 1");
+    const price = `£${(PRODUCTS.soap.pricePence / 100).toFixed(2)}`;
+    expect(view.element("s3-receipt-total").textContent).toBe(price);
+    expect(view.element("s3-receipt-price-soap").textContent).toBe(price);
+    expect(view.element("s3-customer-order").textContent).toContain("香皂");
+    view.world.callbacks.onTarget({ id: "counter", kind: "counter", label: "收银台", action: "扫描", inspectable: false, distance: 1 });
+    view.world.callbacks.onInteract();
+    expect(view.element("s3-scan-soap").textContent).toBe("已扫描");
+    expect(view.element("s3-receipt-help").textContent).toContain("1 件商品");
+    view.world.callbacks.onInteract();
+    expect(savedState().transactions[0]?.amountPence).toBe(PRODUCTS.soap.pricePence);
+    expect(view.element("s3-toast").textContent).toContain(`收款成功 +${price}`);
+    expect(view.element("s3-receipt-state").textContent).toBe("实收");
+    view.world.callbacks.onInteract();
+    expect(savedState().transactions).toHaveLength(1);
+  });
+
+  it("lists and scans both chosen SKUs and counts actual shelf stock in the HUD", async () => {
+    const stocked = stockedSelection([{ productId: "apple", quantity: 2 }, { productId: "water", quantity: 2 }]);
+    const view = await readyGame(stocked);
+    expect(view.element("s3-shelf-stock").textContent).toBe("货架 2 种 · 4 件");
+    expect(view.element("s3-crate-stock").textContent).toBe("箱内 0 件");
+    view.world.callbacks.onTarget({ id: "open-sign", kind: "open-sign", label: "营业牌", action: "开门", inspectable: false, distance: 1 });
+    view.world.callbacks.onInteract();
+    expect(view.element("s3-customer-order").textContent).toContain("气泡水");
+    expect(view.element("s3-receipt-help").textContent).toContain("sparkling water");
+    for (let step = 0; step < 3; step += 1) view.world.callbacks.onCustomerArrive();
+    expect(view.element("s3-receipt-line-water").hidden).toBe(false);
+    expect(view.element("s3-receipt-line-apple").hidden).toBe(false);
+    expect(view.element("s3-receipt-total").textContent).toBe(`£${((PRODUCTS.water.pricePence + PRODUCTS.apple.pricePence) / 100).toFixed(2)}`);
+    view.world.callbacks.onTarget({ id: "counter", kind: "counter", label: "收银台", action: "扫描", inspectable: false, distance: 1 });
+    view.world.callbacks.onInteract();
+    const scanned = savedState().items.find((item) => savedState().scannedIds.includes(item.id))!;
+    expect(view.element(`s3-scan-${scanned.productId}`).textContent).toBe("已扫描");
+    const other = scanned.productId === "water" ? "apple" : "water";
+    expect(view.element(`s3-scan-${other}`).textContent).toBe("未扫描");
+    view.world.callbacks.onInteract();
+    expect(view.element(`s3-scan-${other}`).textContent).toBe("已扫描");
+    expect(view.element("s3-receipt-help").textContent).toContain("2 件商品");
+  });
+
+  it("automatically invites the next customer when only one new SKU remains on the shelf", async () => {
+    let now = 1000;
+    vi.spyOn(performance, "now").mockImplementation(() => now);
+    let state = selectedCheckout([{ productId: "soap", quantity: 3 }]);
+    for (const item of state.items.filter((entry) => entry.location.kind === "checkout")) state = act(state, { type: "SCAN", itemId: item.id });
+    state = act(state, { type: "PAY", success: true });
+    state = act(state, { type: "CUSTOMER_ADVANCE" });
+    const view = await readyGame(state);
+    now += (NEXT_CUSTOMER_SECONDS + 0.05) * 1000;
+    view.world.callbacks.onFrame?.(60, state.playerPose);
+    expect(savedState().customer).toEqual({ number: 2, phase: "to-milk", shoppingList: ["soap"] });
+    expect(view.element("s3-customer-order").textContent).toContain("香皂");
+    expect(view.element("s3-pause").open).toBe(false);
+  });
+});
+
+async function inspectNewProduct(productId: ProductId = "apple") {
+  let state = act(createFirstDayState(), { type: "PURCHASE_STOCK", orderId: "inspect-new-product", lines: [{ productId, quantity: 1 }] });
+  state = act(state, { type: "RECEIVE_DELIVERY" });
+  const view = await readyGame(state);
+  const crate = state.crates.find((entry) => entry.productId === productId)!;
+  view.world.callbacks.onTarget({ id: crate.id, kind: "crate", crateId: crate.id, productId, label: PRODUCTS[productId].nameZh, action: "近看", inspectable: true, distance: 1 });
+  view.world.callbacks.onInspect();
+  return view;
+}
+
+function installBrowserVoice() {
+  class Utterance {
+    lang = "";
+    rate = 1;
+    volume = 1;
+    voice: unknown = null;
+    onstart: (() => void) | null = null;
+    onend: (() => void) | null = null;
+    onerror: (() => void) | null = null;
+    constructor(readonly text: string) {}
+  }
+  const utterances: Utterance[] = [];
+  const voice = { lang: "en-GB", name: "Device English", default: true, localService: true, voiceURI: "device-en" };
+  const synthesis = {
+    getVoices: vi.fn(() => [voice]),
+    speak: vi.fn((utterance: Utterance) => { utterances.push(utterance) }),
+    cancel: vi.fn(),
+  };
+  vi.stubGlobal("SpeechSynthesisUtterance", Utterance);
+  Object.assign(windowDouble, { speechSynthesis: synthesis });
+  return { utterances, synthesis, voice };
+}
+
+describe("honest browser speech for products without recorded audio", () => {
+  it("keeps product names and phrases readable when the browser has no speech synthesis", async () => {
+    const view = await inspectNewProduct("apple");
+    expect(view.element("s3-inspect-word").textContent).toBe("apple");
+    expect(view.element("s3-inspect-phrase").textContent).toBe("an apple");
+    expect(view.element("s3-inspect-phrase-zh").textContent).toBe("一个苹果");
+    expect(view.element("s3-inspect-audio-note").textContent).toContain("尚无本地录音");
+    view.element("s3-speak-word").click();
+    expect(view.audio.play).not.toHaveBeenCalled();
+    expect(view.element("s3-speech-status").textContent).toContain("不支持合成发音");
+    expect(view.audio.src).not.toContain("apple.ogg");
+    view.element("s3-speak-phrase").click();
+    expect(view.audio.src).not.toContain("apple-phrase");
+    expect(view.element("s3-inspect-word").textContent).toBe("apple");
+  });
+
+  it("uses browser utterances for a new product and reports completion only after actual speech events", async () => {
+    const browser = installBrowserVoice();
+    const view = await inspectNewProduct("soap");
+    view.element("s3-speak-word").click();
+    expect(browser.synthesis.speak).toHaveBeenCalledOnce();
+    expect(view.audio.play).not.toHaveBeenCalled();
+    const utterance = browser.utterances[0]!;
+    expect(utterance.text).toBe("soap");
+    expect(utterance.voice).toEqual(browser.voice);
+    expect(utterance.lang).toBe("en-GB");
+    expect(utterance.volume).toBe(0.7);
+    expect(view.element("s3-speech-status").textContent).toContain("正在尝试浏览器合成");
+    utterance.onend?.();
+    expect(view.element("s3-speech-status").textContent).not.toContain("发音结束");
+    utterance.onstart?.();
+    expect(view.element("s3-speech-status").textContent).toContain("非本地录音");
+    utterance.onend?.();
+    expect(view.element("s3-speech-status").textContent).toContain("浏览器合成发音结束");
+    view.element("s3-speak-phrase").click();
+    expect(browser.utterances[1]?.text).toBe("a bar of soap");
+    expect(view.audio.src).not.toContain("soap");
+  });
+
+  it("cancels device speech when leaving inspection and ignores a late completion callback", async () => {
+    const browser = installBrowserVoice();
+    const view = await inspectNewProduct();
+    view.element("s3-speak-word").click();
+    const utterance = browser.utterances[0]!;
+    utterance.onstart?.();
+    const lateEnd = utterance.onend;
+    view.element("s3-close-inspect").click();
+    expect(browser.synthesis.cancel).toHaveBeenCalledOnce();
+    expect(utterance.onstart).toBeNull();
+    expect(utterance.onend).toBeNull();
+    lateEnd?.();
+    expect(view.element("s3-speech-status").textContent).not.toContain("发音结束");
+    expect(view.element("s3-hud").hidden).toBe(false);
+  });
+
+  it("reports a device speech failure without inventing a missing recording or blocking inspection", async () => {
+    const browser = installBrowserVoice();
+    const view = await inspectNewProduct();
+    browser.synthesis.speak.mockImplementationOnce(() => { throw new Error("VoiceUnavailable") });
+    view.element("s3-speak-word").click();
+    expect(view.element("s3-speech-status").textContent).toContain("浏览器合成发音未能播放");
+    expect(view.audio.play).not.toHaveBeenCalled();
+    expect(view.element("s3-inspection").hidden).toBe(false);
   });
 });

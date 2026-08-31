@@ -26,8 +26,9 @@ test("product library: all 30 real models are selectable with measured geometry 
   const errors = monitorRuntime(page);
   await openLibrary(page);
   await expect(page.locator("#pl-total")).toHaveText("30");
-  await expect(page.locator("#pl-active")).toHaveText("02");
-  await expect(page.locator("#pl-pending")).toHaveText("28");
+  await expect(page.locator("#pl-active")).toHaveText("30");
+  await expect(page.locator("#pl-pending")).toHaveText("0");
+  await expect(page.locator("#pl-shop-supply")).toHaveAttribute("href", "/");
   await expect(page.locator("#pl-product-list [data-product-id]")).toHaveCount(30);
   await expect(page.locator("#pl-product-list .pl-item-thumbnail")).toHaveCount(30);
   for (const id of PRODUCT_ASSET_IDS) {
@@ -97,7 +98,7 @@ test("product library: exports a complete JSON catalogue and only the selected p
   expect(manifestDownload.suggestedFilename()).toBe("corner-shop-product-library.json");
   const manifest = JSON.parse(await readFile((await manifestDownload.path())!, "utf8"));
   expect(manifest.products).toHaveLength(30);
-  expect(manifest.products.filter((product: { gameplay: string }) => product.gameplay === "active")).toHaveLength(2);
+  expect(manifest.products.filter((product: { gameplay: string }) => product.gameplay === "active")).toHaveLength(30);
   expect(manifest.units).toBe("metres");
   const modelEvent = page.waitForEvent("download");
   await page.locator("#pl-download-glb").click();

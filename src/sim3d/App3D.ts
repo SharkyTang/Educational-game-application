@@ -1,14 +1,16 @@
 import {
   PRODUCTS, PRODUCT_IDS, UPGRADE_COST_PENCE, capacityFor, countAt,
   createFirstDayState, getCheckoutTotal, getObjective, reduceSim,
-  getDaySummary, getPurchaseOffer, getDeliverySummary, canSettleDay, DAY_CUSTOMER_TARGET,
-  type PlayerPose, type ProductId, type SimCommand, type SimState,
+  getDaySummary, getPurchaseOffer, getDeliverySummary, getCustomerOrder, getShoppingProduct,
+  canSettleDay, canStartCustomer, CRATE_CAPACITY, DAY_CUSTOMER_TARGET,
+  type PlayerPose, type ProductId, type PurchaseLine, type SimCommand, type SimState,
 } from "./domain";
 import { loadSimState, parseImportedSimState, SimSaveConflictError, SimSaveSession, SIM_STORAGE_KEY } from "./persistence";
 import { ShopWorld, type InteractionTarget, type Quality } from "./world";
 import { SPEECH_CLIPS } from "./speechClips";
 import { createCustomerSeed, customerProfileFor, customerSpeechFor, NEXT_CUSTOMER_SECONDS, type CustomerSpeechClip } from "./customerSelection";
 import { STREET_VENUES, getStreetProgress, getVenueProgress } from "./progression";
+import { PRODUCT_ASSETS, PRODUCT_CATEGORIES, type ProductCategoryId } from "./product-library/catalog";
 import type { PointerMode } from "./pointerAccess";
 import "./styles.css";
 
@@ -34,9 +36,26 @@ const SETTINGS_KEY = "english-high-street:sim3d:settings:v1";
 const MAX_INTERACTION_DISTANCE = 2.6;
 const DEFAULT_SETTINGS: Settings = { schemaVersion: 1, sensitivity: 1, quality: "standard", reducedMotion: true, volume: 0.7, autoSpeech: true };
 const money = (pence: number): string => `£${(pence / 100).toFixed(2)}`;
-const unitPhrase = (id: ProductId): string => id === "milk" ? "a carton of milk" : "a loaf of bread";
+const unitPhrase = (id: ProductId): string => PRODUCTS[id].phraseEn;
 const clamp = (number: number, min: number, max: number): number => Math.max(min, Math.min(max, number));
 const activeInstances = new Set<App3D>();
+
+/** Preserve invalid edits as errors so a hidden or half-edited quantity cannot become an order. */
+export function parsePurchaseQuantities(values: ReadonlyMap<ProductId, string>): { lines: PurchaseLine[]; invalidProductIds: ProductId[]; error?: string } {
+  const lines: PurchaseLine[] = [];
+  const invalidProductIds: ProductId[] = [];
+  for (const productId of PRODUCT_IDS) {
+    const raw = values.get(productId) ?? "0";
+    const quantity = Number(raw);
+    if (!/^\d+$/.test(raw) || !Number.isSafeInteger(quantity) || quantity < 0 || quantity > CRATE_CAPACITY) {
+      invalidProductIds.push(productId);
+    } else if (quantity > 0) lines.push({ productId, quantity });
+  }
+  return {
+    lines, invalidProductIds,
+    ...(invalidProductIds.length ? { error: `${PRODUCTS[invalidProductIds[0]!].nameZh}的数量无效，请填写 0–${CRATE_CAPACITY} 的整数；0 表示不进货。${invalidProductIds.length > 1 ? `另有 ${invalidProductIds.length - 1} 项需要修正。` : ""}` } : {}),
+  };
+}
 
 export function interactionInReach(target: InteractionTarget | null): target is InteractionTarget {
   return target !== null && Number.isFinite(target.distance) && target.distance >= 0 && target.distance <= MAX_INTERACTION_DISTANCE;
@@ -115,6 +134,7 @@ export class App3D {
   private statusTimer: ReturnType<typeof setTimeout> | undefined;
   private speechTimer: ReturnType<typeof setTimeout> | undefined;
   private speechGeneration = 0;
+  private synthesisUtterance: SpeechSynthesisUtterance | null = null;
   private dragLookFallback = false;
   private pointerMode: PointerMode = "free";
   private customerClip: CustomerSpeechClip = customerSpeechFor(this.state, "greeting");
@@ -122,7 +142,10 @@ export class App3D {
   private lastFrameAt = 0;
   private nextCustomerElapsed = 0;
   private dayReadyNotified = 0;
-  private purchasePairs: 1 | 3 | 6 = 3;
+  private readonly purchaseQuantities = new Map<ProductId, string>();
+  private purchaseSearch = "";
+  private purchaseCategory: ProductCategoryId | "all" = "all";
+  private purchaseSelectedOnly = false;
   private purchaseOrderId = "";
   private purchaseBusy = false;
   private managementSection: ManagementSection = "supply";
@@ -253,7 +276,7 @@ export class App3D {
             <details id="s3-task" class="s3-task" open>
               <summary><span id="s3-phase">准备开店</span><span class="s3-fold-hint">目标</span></summary>
               <p id="s3-objective"></p>
-              <div class="s3-stock-line"><span id="s3-milk-stock"></span><span id="s3-bread-stock"></span></div>
+              <div class="s3-stock-line"><span id="s3-shelf-stock"></span><span id="s3-crate-stock"></span></div>
             </details>
             <p id="s3-delivery-hud" class="s3-delivery-hud" role="status" aria-live="polite" hidden></p>
             <nav class="s3-business-nav" aria-label="小店经营">
@@ -270,17 +293,17 @@ export class App3D {
           <p id="s3-guide" class="s3-guide"></p>
           <div id="s3-reticle" class="s3-reticle" aria-hidden="true"></div>
           <details id="s3-receipt" class="s3-receipt" hidden>
-            <summary><span id="s3-receipt-title">本单小票</span><span id="s3-receipt-summary">£4.00</span></summary>
+            <summary><span id="s3-receipt-title">本单小票</span><span id="s3-receipt-summary">£0.00</span></summary>
             <div class="s3-receipt-body">
               <p id="s3-customer-name" class="s3-muted"></p>
               <p id="s3-customer-line" class="s3-customer-line">“Hello!”</p>
               <p id="s3-customer-zh" class="s3-muted"></p>
+              <p id="s3-customer-order" class="s3-customer-order"></p>
               <div class="s3-customer-actions"><button id="s3-read-customer" class="s3-secondary-button" type="button">重听 <kbd>R</kbd></button><button id="s3-repeat-customer" class="s3-secondary-button" type="button">请再说一遍</button></div>
               <p id="s3-customer-audio-status" class="s3-muted" role="status" aria-live="polite"></p>
               <div id="s3-receipt-items">
-              <div class="s3-receipt-row"><span>milk <small>牛奶 × 1</small></span><span id="s3-scan-milk">未扫描</span><strong>£1.60</strong></div>
-              <div class="s3-receipt-row"><span>bread <small>面包 × 1</small></span><span id="s3-scan-bread">未扫描</span><strong>£2.40</strong></div>
-              <div class="s3-receipt-total"><span id="s3-receipt-state">应收</span><strong id="s3-receipt-total">£4.00</strong></div>
+              ${PRODUCT_IDS.map((productId) => `<div id="s3-receipt-line-${productId}" class="s3-receipt-row" hidden><span>${PRODUCTS[productId].nameEn}<small id="s3-receipt-count-${productId}">${PRODUCTS[productId].nameZh}</small></span><span id="s3-scan-${productId}">未扫描</span><strong id="s3-receipt-price-${productId}"></strong></div>`).join("")}
+              <div class="s3-receipt-total"><span id="s3-receipt-state">应收</span><strong id="s3-receipt-total">£0.00</strong></div>
               </div>
               <p id="s3-receipt-help" class="s3-muted">靠近收银台，逐件扫描后启用刷卡机。</p>
             </div>
@@ -305,11 +328,11 @@ export class App3D {
           <div class="s3-start-card">
             <p class="s3-eyebrow">ENGLISH HIGH STREET · YOUR FIRST SHOP</p>
             <h1 id="s3-start-title">Corner<br>Shop<span>一条商业街，从你的小店开始。</span></h1>
-            <p class="s3-start-description">每天的送货车停在门口，签收后亲手搬货上架。<br>迎接邻居、听见英语，也看看街上的咖啡店、餐厅与未来大商超。</p>
+            <p class="s3-start-description">从 30 种商品里挑选你的小店要卖什么。<br>选好数量、门口签收，再亲手摆上货架，迎接街坊的第一笔生意。</p>
             <div class="s3-start-stock"><span><span id="s3-start-capital">£12</span><small id="s3-start-capital-label">首日本金 · 进货会扣钱</small></span><span>3 guests <small>下单 → 签收 → 营业 → 成长</small></span></div>
-            <p id="s3-start-note" class="s3-muted">首次建议购买 3 份组合货，共 £6.90。到门口按 E 签收；商业街店铺的开放条件可按 M 查看。</p>
+            <p id="s3-start-note" class="s3-muted">按 B 打开进货清单，商品与数量都由你选择。至少上架一种商品就能迎客；按 M 看看商业街。</p>
             <button id="s3-start-button" class="s3-primary-button" type="button" disabled>开始第一天</button>
-            <a id="s3-asset-library-link" class="s3-asset-library-link" href="?assets=1">商品素材库 <span>30 种模型 · 查看与调用 ↗</span></a>
+            <a id="s3-asset-library-link" class="s3-asset-library-link" href="?assets=1">商品素材库 <span>30 种模型 · 预览与导出 ↗</span></a>
             <p id="s3-readonly-note" class="s3-pause-alert" role="status" hidden></p>
             <button id="s3-takeover" class="s3-secondary-button" type="button" hidden>读取最新进度并尝试接管</button>
             <button id="s3-export-readonly" class="s3-text-button" type="button" hidden>下载本页快照</button>
@@ -326,11 +349,13 @@ export class App3D {
             <p class="s3-eyebrow">认识手里的实物</p>
             <h2 id="s3-inspect-word">milk</h2><p id="s3-inspect-chinese" class="s3-inspect-chinese">牛奶</p>
             <p id="s3-inspect-phrase" class="s3-inspect-phrase">a carton of milk</p>
+            <p id="s3-inspect-phrase-zh" class="s3-inspect-note">一盒牛奶</p>
             <div class="s3-inspect-buttons"><button id="s3-speak-word" class="s3-light-button" type="button">听单词</button><button id="s3-speak-phrase" class="s3-light-button" type="button">听搭配</button></div>
             <p id="s3-speech-status" class="s3-inspect-note" aria-live="polite">观察外形和材质，试着把英文与实物对应。</p>
+            <p id="s3-inspect-audio-note" class="s3-inspect-note"></p>
             <p class="s3-inspect-note">这次只记录接触，不计为独立掌握。</p>
           </div>
-          <div class="s3-inspection-bottom"><div class="s3-inspection-meta"><span>拖动商品，换个角度看</span><p class="s3-audio-credit">单词真人：Judith Franck / Shtooka · <a href="https://creativecommons.org/licenses/by/3.0/us/" target="_blank" rel="noopener noreferrer">CC BY 3.0 US</a> · <a href="/assets/sim3d/audio/audio-SOURCES.md" target="_blank" rel="noopener noreferrer" aria-label="查看单词发音来源与许可说明">来源</a><br>搭配：本地英式合成语音 · <a href="/assets/sim3d/audio/phrase-SOURCES.md" target="_blank" rel="noopener noreferrer" aria-label="查看合成短句来源与许可说明">Cori 来源</a><br>顾客：本地男女声 · <a href="/assets/sim3d/audio/customer-phrase-SOURCES.md" target="_blank" rel="noopener noreferrer" aria-label="查看顾客配音来源与许可说明">配音来源</a></p></div><button id="s3-close-inspect" class="s3-glass-button" type="button">返回小店 <kbd>F / Esc</kbd></button></div>
+          <div class="s3-inspection-bottom"><div class="s3-inspection-meta"><span>拖动商品，换个角度看</span><p class="s3-audio-credit">milk / bread 单词录音：Judith Franck / Shtooka · <a href="https://creativecommons.org/licenses/by/3.0/us/" target="_blank" rel="noopener noreferrer">CC BY 3.0 US</a> · <a href="/assets/sim3d/audio/audio-SOURCES.md" target="_blank" rel="noopener noreferrer" aria-label="查看单词发音来源与许可说明">来源</a><br>milk / bread 搭配：<a href="/assets/sim3d/audio/phrase-SOURCES.md" target="_blank" rel="noopener noreferrer" aria-label="查看合成短句来源与许可说明">本地 Cori 合成音频</a>；其他商品：浏览器合成发音<br>顾客：本地男女声 · <a href="/assets/sim3d/audio/customer-phrase-SOURCES.md" target="_blank" rel="noopener noreferrer" aria-label="查看顾客配音来源与许可说明">配音来源</a></p></div><button id="s3-close-inspect" class="s3-glass-button" type="button">返回小店 <kbd>F / Esc</kbd></button></div>
         </section>
 
         <dialog id="s3-pause" class="s3-pause" aria-labelledby="s3-pause-title">
@@ -346,17 +371,31 @@ export class App3D {
           </nav>
           <section id="s3-panel-supply" class="s3-management-panel" aria-labelledby="s3-supply-title">
             <p class="s3-eyebrow">DAILY DOORSTEP DELIVERY</p><h3 id="s3-supply-title">今天的货，送到小店门口</h3>
-            <p class="s3-muted">每份组合包含 milk 牛奶 1 盒（£0.90）和 bread 面包 1 袋（£1.40）。送货车每天来店门口，下单后需亲自签收，不会自动上架。</p>
+            <p class="s3-muted">30 种商品自由选购。数量默认为 0，选好后才下单；送货车每天来店门口，签收后还需亲手上架。</p>
             <ol class="s3-delivery-steps" aria-label="进货流程"><li><span>01</span>下单扣款</li><li><span>02</span>门口按 E 签收</li><li><span>03</span>抱箱搬货上架</li></ol>
             <p id="s3-delivery-summary" class="s3-delivery-summary" role="status" aria-live="polite"></p>
-            <div class="s3-purchase-options" role="group" aria-label="选择进货份数">
-              <button id="s3-buy-one" type="button" aria-pressed="false">1 份<small>少量补货 · £2.30</small></button>
-              <button id="s3-buy-three" type="button" aria-pressed="true">3 份<small>首日推荐 · £6.90</small></button>
-              <button id="s3-buy-six" type="button" aria-pressed="false">6 份<small>提前备货 · £13.80</small></button>
+            <div class="s3-supply-filters">
+              <label class="s3-supply-search-label" for="s3-supply-search"><span>找商品</span><input id="s3-supply-search" type="search" placeholder="搜索中文或英文商品名" autocomplete="off"></label>
+              <label for="s3-supply-category"><span>商品分类</span><select id="s3-supply-category"><option value="all">全部分类</option>${PRODUCT_CATEGORIES.map((category) => `<option value="${category.id}">${category.nameZh}</option>`).join("")}</select></label>
             </div>
-            <dl class="s3-account-lines"><div><dt>现有资金</dt><dd id="s3-supply-cash"></dd></div><div><dt>本次进货</dt><dd id="s3-supply-total"></dd></div><div><dt>购买后剩余</dt><dd id="s3-supply-after"></dd></div></dl>
-            <p id="s3-supply-summary" class="s3-muted"></p><p id="s3-supply-error" class="s3-inline-reason" role="status"></p>
-            <button id="s3-purchase" class="s3-primary-button" type="button">确认下单</button>
+            <div class="s3-supply-list-tools"><p id="s3-supply-visible" class="s3-muted" role="status"></p><label><input id="s3-supply-selected-only" type="checkbox">仅看已选</label><button id="s3-clear-cart" class="s3-text-button" type="button">清空选择</button></div>
+            <div id="s3-supply-catalog" class="s3-supply-catalog" role="group" aria-label="选择进货商品和数量" tabindex="0">
+              <p id="s3-supply-empty" class="s3-supply-empty" hidden>没有找到商品。试试其他关键词或分类；已有选择会保留。</p>
+              ${PRODUCT_IDS.map((productId) => { const product = PRODUCTS[productId]; return `<article id="s3-supply-product-${productId}" class="s3-supply-product" aria-label="${product.nameZh}">
+                <img src="${PRODUCT_ASSETS[productId].thumbnailUrl}" alt="" width="64" height="64" loading="lazy">
+                <div class="s3-supply-product-info"><strong>${product.nameZh}</strong><span class="s3-product-en">${product.nameEn}</span><p><span id="s3-supply-inventory-${productId}"></span><span id="s3-supply-pending-${productId}"></span></p></div>
+                <div class="s3-supply-product-prices"><span>进价 <strong>${money(product.costPence)}</strong></span><small>售价 ${money(product.pricePence)}</small></div>
+                <div class="s3-supply-quantity"><div class="s3-quantity-stepper"><button id="s3-quantity-remove-${productId}" type="button" aria-label="减少${product.nameZh}进货数量">−</button><input id="s3-quantity-${productId}" type="number" min="0" max="${CRATE_CAPACITY}" step="1" inputmode="numeric" value="0" aria-label="${product.nameZh}进货数量" aria-describedby="s3-supply-line-error-${productId}"><button id="s3-quantity-add-${productId}" type="button" aria-label="增加${product.nameZh}进货数量">+</button></div><span id="s3-supply-line-total-${productId}" class="s3-supply-line-total"></span></div>
+                <p id="s3-supply-line-error-${productId}" class="s3-supply-line-error" hidden></p>
+              </article>` }).join("")}
+            </div>
+            <div class="s3-supply-checkout">
+              <p id="s3-supply-summary" class="s3-supply-summary" aria-live="polite"></p>
+              <dl class="s3-account-lines s3-supply-account"><div><dt>现有资金</dt><dd id="s3-supply-cash"></dd></div><div><dt>本次进货</dt><dd id="s3-supply-total"></dd></div><div><dt>下单后余额</dt><dd id="s3-supply-after"></dd></div></dl>
+              <p id="s3-supply-error" class="s3-inline-reason" role="status"></p>
+              <button id="s3-purchase" class="s3-primary-button" type="button" disabled>先选择商品与数量</button>
+              <p class="s3-supply-capacity-note">每种商品箱内和待收货合计最多 ${CRATE_CAPACITY} 件。确认扣款一次，门口签收不再收费。</p>
+            </div>
           </section>
           <section id="s3-panel-day" class="s3-management-panel" aria-labelledby="s3-day-title" hidden>
             <p id="s3-day-eyebrow" class="s3-eyebrow">TODAY AT THE CORNER SHOP</p><h3 id="s3-day-title">今天的小店</h3>
@@ -369,7 +408,7 @@ export class App3D {
           <section id="s3-panel-upgrade" class="s3-management-panel" aria-labelledby="s3-upgrade-title" hidden>
             <p class="s3-eyebrow">MORE ROOM TO GROW</p><h3 id="s3-upgrade-title">让货架多一层空间</h3>
             <div id="s3-capacity-comparison" class="s3-capacity-comparison"><span><span id="s3-capacity-label">现在</span> <strong id="s3-capacity-now">4</strong> 个 / 每种</span><span id="s3-capacity-arrow" aria-hidden="true">→</span><span id="s3-capacity-next">扩容后 <strong>8</strong> 个 / 每种</span></div>
-            <p class="s3-muted">£8 一次性启用冰柜和面包架的预留层位。只检查资金，不设英语等级门槛；不会凭空补货，也不是店面扩建。</p>
+            <p class="s3-muted">£8 一次性启用各商品陈列区的预留层位。只检查资金，不设英语等级门槛；不会凭空补货，也不是店面扩建。</p>
             <p id="s3-upgrade-status" class="s3-inline-reason" role="status"></p><button id="s3-upgrade" class="s3-primary-button" type="button">£8 · 扩充货架容量</button><span id="s3-upgrade-badge" class="s3-upgrade-badge">£8</span>
           </section>
           <section id="s3-panel-street" class="s3-management-panel s3-street-panel" aria-labelledby="s3-street-title" hidden>
@@ -394,7 +433,7 @@ export class App3D {
             <label for="s3-reduced-motion">减少镜头动态</label><input id="s3-reduced-motion" type="checkbox" checked>
             <label for="s3-volume">发音音量 <output id="s3-volume-value">70%</output></label><input id="s3-volume" type="range" min="0" max="1" step="0.1" value="0.7">
             <label for="s3-auto-speech">顾客自动说话</label><input id="s3-auto-speech" type="checkbox" checked>
-          </div><p class="s3-muted">单词为英式真人录音，短句为本地英式合成音频，不依赖系统语音。字幕始终保留，R 可重听，不录音、不要求开麦。</p></details>
+          </div><p class="s3-muted">milk / bread 使用现有单词录音与本地短句音频；其他商品尚未录制，按设备能力使用浏览器合成发音。顾客继续使用本地配音。字幕始终保留，不录音、不要求开麦。</p></details>
           <details class="s3-pause-section"><summary>存档与试玩管理</summary><p id="s3-pause-save" class="s3-muted"></p><div class="s3-management-buttons"><button id="s3-export" class="s3-secondary-button" type="button">下载存档备份</button><button id="s3-import" class="s3-secondary-button" type="button">导入存档备份</button><input id="s3-import-file" type="file" accept="application/json,.json" aria-label="选择本游戏导出的 3D JSON 存档" hidden><button id="s3-cancel-customer" class="s3-secondary-button" type="button">取消本单并归还商品</button><button id="s3-restart" class="s3-text-button" type="button">重新试玩</button></div><p class="s3-muted">导入文件只在本机校验，确认后才替换进度。取消订单只退回尚未付款的商品。</p></details>
           <section id="s3-restart-confirm" class="s3-confirm" aria-labelledby="s3-confirm-title" hidden><h3 id="s3-confirm-title">重新开始这轮试营业？</h3><p>当前 3D 进度会被新一轮替换，上一有效快照会保留为备份。建议先下载存档；旧版 2D 存档不受影响。</p><div><button id="s3-restart-confirm-button" class="s3-danger-button" type="button">确认重新试玩</button><button id="s3-restart-cancel" class="s3-secondary-button" type="button">保留当前进度</button></div></section>
           <section id="s3-import-confirm" class="s3-confirm" aria-labelledby="s3-import-title" hidden><h3 id="s3-import-title">确认导入这份存档？</h3><p id="s3-import-summary"></p><p>会替换当前 3D 进度，覆盖前保留当前有效快照。旧版 2D 存档不变；文件不会上传。</p><div><button id="s3-import-confirm-button" class="s3-primary-button" type="button">确认导入并替换进度</button><button id="s3-import-cancel" class="s3-secondary-button" type="button">保留当前进度</button></div></section>
@@ -436,13 +475,40 @@ export class App3D {
         this.renderStreet();
       });
     }
-    for (const [id, pairs] of [["one", 1], ["three", 3], ["six", 6]] as const) {
-      click(`s3-buy-${id}`, () => {
-        this.purchasePairs = pairs;
-        this.purchaseOrderId = crypto.randomUUID();
-        this.renderManagement();
-      });
+    for (const productId of PRODUCT_IDS) {
+      this.el<HTMLInputElement>(`s3-quantity-${productId}`).addEventListener("input", () => {
+        this.setPurchaseQuantity(productId, this.el<HTMLInputElement>(`s3-quantity-${productId}`).value);
+      }, { signal });
+      for (const [operation, delta] of [["remove", -1], ["add", 1]] as const) {
+        click(`s3-quantity-${operation}-${productId}`, () => {
+          const raw = this.purchaseQuantities.get(productId) ?? "0";
+          if (!/^\d+$/.test(raw)) return;
+          const quantity = Number(raw);
+          if (Number.isSafeInteger(quantity) && quantity + delta >= 0 && quantity + delta <= CRATE_CAPACITY) {
+            this.setPurchaseQuantity(productId, String(quantity + delta));
+          }
+        });
+      }
     }
+    this.el<HTMLInputElement>("s3-supply-search").addEventListener("input", () => {
+      this.purchaseSearch = this.el<HTMLInputElement>("s3-supply-search").value;
+      this.renderSupply();
+    }, { signal });
+    this.el<HTMLSelectElement>("s3-supply-category").addEventListener("change", () => {
+      const category = this.el<HTMLSelectElement>("s3-supply-category").value;
+      this.purchaseCategory = PRODUCT_CATEGORIES.find((entry) => entry.id === category)?.id ?? "all";
+      this.renderSupply();
+    }, { signal });
+    this.el<HTMLInputElement>("s3-supply-selected-only").addEventListener("change", () => {
+      this.purchaseSelectedOnly = this.el<HTMLInputElement>("s3-supply-selected-only").checked;
+      this.renderSupply();
+    }, { signal });
+    click("s3-clear-cart", () => {
+      if (this.mode !== "paused" || !this.saveSession?.canWrite || this.purchaseBusy) return;
+      this.purchaseQuantities.clear();
+      this.purchaseOrderId = crypto.randomUUID();
+      this.renderSupply();
+    });
     click("s3-purchase", () => this.purchaseStock());
     click("s3-settle-day", () => this.dispatch({ type: "SETTLE_DAY" }));
     click("s3-next-day", () => {
@@ -519,7 +585,7 @@ export class App3D {
     this.persist();
     if (!this.saveSession.canWrite) return;
     this.renderCaptureHint();
-    this.notify(this.loadedSession ? "欢迎回来，货物和资金已恢复。待收货订单请到门口签收；B 进货，M 查看商业街。" : "先按 B 下单，推荐 3 份 £6.90。返回小店走到门口货车旁按 E 签收，再搬运上架。");
+    this.notify(this.loadedSession ? "欢迎回来，货物和资金已恢复。待收货订单请到门口签收；B 进货，M 查看商业街。" : "按 B 从 30 种商品中选择数量，确认总价后下单。到门口货车旁按 E 签收，再把想卖的商品上架。");
     this.syncCustomerCue();
   }
 
@@ -568,6 +634,10 @@ export class App3D {
     this.text("s3-inspect-word", PRODUCTS[productId].nameEn);
     this.text("s3-inspect-chinese", PRODUCTS[productId].nameZh);
     this.text("s3-inspect-phrase", unitPhrase(productId));
+    this.text("s3-inspect-phrase-zh", PRODUCTS[productId].phraseZh);
+    this.text("s3-inspect-audio-note", PRODUCT_ASSETS[productId].audio
+      ? "本商品可播放现有单词录音与本地搭配音频。"
+      : "本商品尚无本地录音。点击发音将尝试浏览器合成语音，效果取决于设备；字幕始终可读。");
     this.text("s3-speech-status", "观察外形和材质，试着把英文与实物对应。");
     this.el("s3-speak-word").focus();
   }
@@ -623,18 +693,31 @@ export class App3D {
 
   private purchaseStock(): void {
     if (this.mode !== "paused" || this.purchaseBusy) return;
-    const offer = getPurchaseOffer(this.state, this.purchasePairs);
+    const selection = parsePurchaseQuantities(this.purchaseQuantities);
+    if (selection.error) { this.notify(selection.error); return }
+    const offer = getPurchaseOffer(this.state, selection.lines);
     if (!offer.allowed) { this.notify(offer.reason ?? "本次暂时不能进货。"); return }
     this.purchaseOrderId ||= crypto.randomUUID();
     this.purchaseBusy = true;
     this.renderManagement();
-    const bought = this.dispatch({ type: "PURCHASE_STOCK", orderId: this.purchaseOrderId, pairs: this.purchasePairs });
+    const bought = this.dispatch({ type: "PURCHASE_STOCK", orderId: this.purchaseOrderId, lines: offer.lines });
     this.purchaseBusy = false;
+    if (bought) {
+      this.purchaseQuantities.clear();
+      this.purchaseOrderId = crypto.randomUUID();
+    }
     this.renderManagement();
     if (bought) {
       this.resume(false);
-      this.notify(`下单成功：牛奶、面包各 ${this.purchasePairs} 件，已扣 ${money(offer.costPence)}。走到门口货车旁按 E 签收，再抱箱上架；签收不再扣款。`);
+      this.notify(`下单成功：${offer.lines.length} 种商品，共 ${offer.unitCount} 件，已扣 ${money(offer.costPence)}。走到门口货车旁按 E 签收，再抱箱上架；签收不再扣款。`);
     }
+  }
+
+  private setPurchaseQuantity(productId: ProductId, raw: string): void {
+    if (this.mode !== "paused" || !this.saveSession?.canWrite || this.purchaseBusy) return;
+    this.purchaseQuantities.set(productId, raw);
+    this.purchaseOrderId = crypto.randomUUID();
+    this.renderSupply();
   }
 
   private resume(lockPointer: boolean): void {
@@ -703,7 +786,8 @@ export class App3D {
       if (showMessage && result.message) this.notify(result.message);
       if (result.changed && command.type === "PAY" && command.success) {
         const summary = getDaySummary(this.state);
-        this.notify(`收款成功 +£4 · 今日 ${summary.paidCustomers} / ${summary.targetCustomers} 单。${!this.state.upgraded && this.state.cashPence >= UPGRADE_COST_PENCE ? "按 U 可查看 £8 扩容；注意留足下次进货资金。" : `当前资金 ${money(this.state.cashPence)}。`}`);
+        const payment = this.state.transactions.find((transaction) => transaction.customerNumber === this.state.customer.number);
+        this.notify(`收款成功 +${money(payment?.amountPence ?? 0)} · 今日 ${summary.paidCustomers} / ${summary.targetCustomers} 单。${!this.state.upgraded && this.state.cashPence >= UPGRADE_COST_PENCE ? "按 U 可查看 £8 扩容；注意留足下次进货资金。" : `当前资金 ${money(this.state.cashPence)}。`}`);
       }
       return result.changed;
     } catch (error) {
@@ -751,7 +835,7 @@ export class App3D {
           this.dayReadyNotified = this.state.day.number;
           this.openManagement("day");
           this.notify("三位顾客都已结账离店。看看今天的账目，再点击日结；收入不会再重复计入。");
-        } else if (getDaySummary(this.state).paidCustomers < DAY_CUSTOMER_TARGET && PRODUCT_IDS.every((id) => countAt(this.state, id, "shelf") > 0)) {
+        } else if (getDaySummary(this.state).paidCustomers < DAY_CUSTOMER_TARGET && canStartCustomer(this.state)) {
           this.nextCustomerElapsed = 0;
           this.dispatch({ type: "NEXT_CUSTOMER" });
         }
@@ -780,15 +864,17 @@ export class App3D {
     this.el("s3-export-readonly").hidden = !this.writerWarning;
     this.text("s3-start-note", this.loadedSession
       ? `已恢复${this.state.openingKind === "legacy-s0" ? "旧试玩" : "本机"}进度：第 ${this.state.day.number} 天，${money(this.state.cashPence)} 资金。${delivery.pendingOrders ? `还有 ${delivery.pendingUnits} 件待到门口签收。` : "货物、收款记录和扩容保持不变。"}不另加本金。按 M 可查看商业街条件。`
-      : "首日建议先买 3 份牛奶与面包，£6.90。到门口签收、上架后迎客；按 M 查看咖啡店、餐厅与大商超的条件。");
+      : "按 B 打开进货清单，自己选择商品与数量，再确认总价下单。至少上架一种商品即可迎客；按 M 查看商业街的成长目标。");
     this.text("s3-start-capital", money(this.state.cashPence));
     this.text("s3-start-capital-label", this.loadedSession ? "已保存资金 · 原进度保留" : "首日本金 · 进货会扣钱");
     this.text("s3-objective", getObjective(this.state));
     this.text("s3-phase", `第 ${this.state.day.number} 天 · ${this.state.day.phase === "settled" ? "已日结" : this.state.day.phase === "preparing" ? "进货与开店" : `营业 ${day.paidCustomers} / ${day.targetCustomers} 单`}`);
     this.text("s3-cash", money(this.state.cashPence));
     this.text("s3-sold", `今日 ${day.paidCustomers} / ${day.targetCustomers} 单 · 库存 ${day.remainingStockUnits} 件`);
-    this.text("s3-milk-stock", `牛奶 ${countAt(this.state, "milk", "shelf")} / ${capacityFor(this.state)}`);
-    this.text("s3-bread-stock", `面包 ${countAt(this.state, "bread", "shelf")} / ${capacityFor(this.state)}`);
+    const stockedProducts = PRODUCT_IDS.filter((productId) => countAt(this.state, productId, "shelf") > 0);
+    const shelvedUnits = this.state.items.filter((item) => item.location.kind === "shelf").length;
+    this.text("s3-shelf-stock", `货架 ${stockedProducts.length} 种 · ${shelvedUnits} 件`);
+    this.text("s3-crate-stock", `箱内 ${this.state.items.filter((item) => item.location.kind === "crate").length} 件`);
     this.el("s3-delivery-hud").hidden = delivery.pendingOrders === 0;
     this.text("s3-delivery-hud", delivery.pendingOrders ? `${delivery.pendingUnits} 件待签收 · 门口货车旁按 E` : "");
     this.renderReceipt();
@@ -808,26 +894,13 @@ export class App3D {
   private renderManagement(): void {
     const writable = !!this.saveSession?.canWrite;
     const day = getDaySummary(this.state);
-    const offer = getPurchaseOffer(this.state, this.purchasePairs);
     const delivery = getDeliverySummary(this.state);
     this.el("s3-pause").classList.toggle("s3-pause-street", this.managementSection === "street");
-    for (const [id, pairs] of [["one", 1], ["three", 3], ["six", 6]] as const) {
-      this.el(`s3-buy-${id}`).setAttribute("aria-pressed", String(this.purchasePairs === pairs));
-    }
+    this.el("s3-pause").classList.toggle("s3-pause-supply", this.managementSection === "supply");
     for (const candidate of MANAGEMENT_SECTIONS) {
       this.el(`s3-panel-${candidate}`).hidden = candidate !== this.managementSection;
     }
-    this.text("s3-supply-cash", money(this.state.cashPence));
-    this.text("s3-supply-total", `−${money(offer.costPence)}`);
-    this.text("s3-supply-after", this.state.cashPence < offer.costPence ? `还差 ${money(offer.costPence - this.state.cashPence)}` : money(this.state.cashPence - offer.costPence));
-    this.text("s3-delivery-summary", delivery.pendingOrders
-      ? `${delivery.pendingOrders} 笔已付款订单 · ${delivery.pendingUnits} 件待签收。${delivery.canReceive ? "返回场景，空手走到门口货车旁按 E 卸货。" : delivery.reason ?? "返回场景后到门口签收。"}`
-      : delivery.receivedToday ? `今日已签收 ${delivery.receivedToday} 笔订单。需要补货时可再次下单，继续到车旁签收；不会免费补满。`
-        : `第 ${this.state.day.number} 天的送货服务已备好。选好数量下单，再到门口签收；未下单不会扣款。`);
-    this.text("s3-supply-summary", `本次共 ${this.purchasePairs * 2} 件。箱内：牛奶 ${countAt(this.state, "milk", "crate")} 件、面包 ${countAt(this.state, "bread", "crate")} 件；待签收 ${delivery.pendingUnits} 件。每箱最多 8 件，待收货也占预留容量。`);
-    this.text("s3-supply-error", offer.reason ?? "确认下单时扣款一次，门口签收不再收费。签收后货箱放在室外卸货区，需要自己搬运上架。");
-    this.el<HTMLButtonElement>("s3-purchase").disabled = !writable || !offer.allowed || this.purchaseBusy;
-    this.text("s3-purchase", this.purchaseBusy ? "正在下单…" : `确认下单 · ${money(offer.costPence)}`);
+    this.renderSupply();
     this.text("s3-day-title", `第 ${day.dayNumber} 天${this.state.day.phase === "settled" ? " · 日结完成" : " · 营业账本"}`);
     this.text("s3-day-progress", `已收款 ${day.paidCustomers} / ${day.targetCustomers} 单 · 开始时资金 ${money(day.openingCashPence)}`);
     for (const [suffix, value] of [["revenue", day.revenuePence], ["cogs", day.costOfGoodsPence], ["profit", day.grossProfitPence], ["procurement", day.procurementPence], ["investment", day.upgradeSpendPence], ["cash", day.closingCashPence]] as const) {
@@ -836,7 +909,7 @@ export class App3D {
     this.text("s3-day-inventory", `${day.remainingStockUnits} 件 / ${money(day.remainingInventoryValuePence)}`);
     const settled = this.state.day.phase === "settled";
     const canSettle = canSettleDay(this.state);
-    this.text("s3-day-reason", settled ? "今天的账已记好。可以先扩容，也可以留钱备货；下一天会保留全部资金、库存与扩容。送货车每天都会来，补货仍需下单。" : delivery.pendingUnits > 0 ? `还有 ${delivery.pendingUnits} 件已付款商品待签收。先返回门口货车旁签收，才能结束今天的营业。` : canSettle ? "今天的 3 单都已完成，顾客已经离店。可以日结了。" : this.state.day.phase === "preparing" ? "先按 B 下单，到门口签收并摆好两种商品，再去门口翻转营业牌。" : day.paidCustomers >= day.targetCustomers ? "最后一位顾客正在离店，返回小店稍等片刻即可日结。" : `还需完成 ${day.targetCustomers - day.paidCustomers} 单收款。顾客会依次进店；缺货时先补货。`);
+    this.text("s3-day-reason", settled ? "今天的账已记好。可以先扩容，也可以留钱备货；下一天会保留全部资金、库存与扩容。送货车每天都会来，补货仍需下单。" : delivery.pendingUnits > 0 ? `还有 ${delivery.pendingUnits} 件已付款商品待签收。先返回门口货车旁签收，才能结束今天的营业。` : canSettle ? "今天的 3 单都已完成，顾客已经离店。可以日结了。" : this.state.day.phase === "preparing" ? "按 B 自选商品并下单，到门口签收，至少上架一种商品后去翻转营业牌。" : day.paidCustomers >= day.targetCustomers ? "最后一位顾客正在离店，返回小店稍等片刻即可日结。" : `还需完成 ${day.targetCustomers - day.paidCustomers} 单收款。顾客会从已上架商品中挑选；缺货时先补货。`);
     this.el("s3-settle-day").hidden = settled;
     this.el<HTMLButtonElement>("s3-settle-day").disabled = !writable || !canSettle;
     this.el("s3-next-day").hidden = !settled;
@@ -850,11 +923,69 @@ export class App3D {
     this.el("s3-capacity-arrow").hidden = this.state.upgraded;
     this.el("s3-capacity-next").hidden = this.state.upgraded;
     this.el("s3-capacity-comparison").classList.toggle("s3-capacity-complete", this.state.upgraded);
-    this.text("s3-upgrade-status", this.state.upgraded ? "冰柜和面包架的新层位已经启用，不会再次扣钱。去店里看看，也可以继续备货。" : availableUpgrade ? `资金足够。购买后剩 ${money(this.state.cashPence - UPGRADE_COST_PENCE)}；请为进货留一些资金（每份 £2.30）。不需要答题解锁。` : `当前 ${money(this.state.cashPence)}，还差 ${money(UPGRADE_COST_PENCE - this.state.cashPence)}。只检查资金，不要求英语等级。`);
+    this.text("s3-upgrade-status", this.state.upgraded ? "各商品陈列区的新层位已经启用，不会再次扣钱。去店里看看，也可以继续备货。" : availableUpgrade ? `资金足够。购买后剩 ${money(this.state.cashPence - UPGRADE_COST_PENCE)}；请为自选商品进货留一些资金。不需要答题解锁。` : `当前 ${money(this.state.cashPence)}，还差 ${money(UPGRADE_COST_PENCE - this.state.cashPence)}。只检查资金，不要求英语等级。`);
     this.el("s3-open-upgrade").classList.toggle("s3-upgrade-ready", availableUpgrade);
     this.el("s3-open-upgrade").setAttribute("aria-label", this.state.upgraded ? "货架已扩容，查看详情 U" : availableUpgrade ? "资金足够，查看扩容 U" : "查看扩容条件 U");
     this.el("s3-open-day").classList.toggle("s3-upgrade-ready", canSettle);
     this.renderStreet();
+  }
+
+  private renderSupply(): void {
+    const writable = !!this.saveSession?.canWrite;
+    const editable = writable && this.mode === "paused" && !this.purchaseBusy;
+    const selection = parsePurchaseQuantities(this.purchaseQuantities);
+    const invalidIds = new Set(selection.invalidProductIds);
+    const selectedIds = new Set(selection.lines.map((line) => line.productId));
+    const offer = getPurchaseOffer(this.state, selection.lines);
+    const delivery = getDeliverySummary(this.state);
+    const needle = this.purchaseSearch.trim().toLocaleLowerCase();
+    let visibleCount = 0;
+    for (const productId of PRODUCT_IDS) {
+      const product = PRODUCTS[productId];
+      const raw = this.purchaseQuantities.get(productId) ?? "0";
+      const quantity = Number(raw);
+      const invalid = invalidIds.has(productId);
+      const selected = selectedIds.has(productId);
+      const visible = (this.purchaseCategory === "all" || product.category === this.purchaseCategory)
+        && (!needle || `${productId} ${product.nameZh} ${product.nameEn} ${product.phraseEn}`.toLocaleLowerCase().includes(needle))
+        && (!this.purchaseSelectedOnly || selected || invalid);
+      const row = this.el(`s3-supply-product-${productId}`);
+      row.hidden = !visible;
+      row.classList.toggle("s3-supply-product-selected", selected);
+      if (visible) visibleCount += 1;
+      const available = this.state.items.filter((item) => item.productId === productId && item.location.kind !== "sold" && item.location.kind !== "delivery").length;
+      const pending = countAt(this.state, productId, "delivery");
+      this.text(`s3-supply-inventory-${productId}`, `现货 ${available} · 架上 ${countAt(this.state, productId, "shelf")}`);
+      this.text(`s3-supply-pending-${productId}`, `待收 ${pending}`);
+      const input = this.el<HTMLInputElement>(`s3-quantity-${productId}`);
+      if (input.value !== raw) input.value = raw;
+      input.disabled = !editable;
+      input.setAttribute("aria-invalid", String(invalid));
+      this.el<HTMLButtonElement>(`s3-quantity-remove-${productId}`).disabled = !editable || invalid || quantity <= 0;
+      this.el<HTMLButtonElement>(`s3-quantity-add-${productId}`).disabled = !editable || invalid || quantity >= CRATE_CAPACITY;
+      this.text(`s3-supply-line-total-${productId}`, invalid ? "数量待修正" : selected ? `小计 ${money(quantity * product.costPence)}` : "未选择");
+      const itemOffer = selected ? getPurchaseOffer(this.state, [{ productId, quantity }]) : null;
+      const error = invalid ? `请填写 0–${CRATE_CAPACITY} 的整数，0 表示不进货。` : itemOffer && !itemOffer.allowed ? itemOffer.reason ?? "当前数量无法进货。" : "";
+      this.text(`s3-supply-line-error-${productId}`, error);
+      this.el(`s3-supply-line-error-${productId}`).hidden = !error;
+    }
+    this.el("s3-supply-empty").hidden = visibleCount > 0;
+    this.text("s3-supply-empty", this.purchaseSelectedOnly && !selection.lines.length && !selection.invalidProductIds.length
+      ? "还没有选中的商品。取消“仅看已选”，就能继续挑选。"
+      : "没有找到商品。试试其他关键词或分类；已有选择会保留。");
+    this.text("s3-supply-visible", `显示 ${visibleCount} / ${PRODUCT_IDS.length} 种商品 · 筛选不清空选择`);
+    this.text("s3-supply-cash", money(this.state.cashPence));
+    this.text("s3-supply-total", selection.error ? "请先修正数量" : `−${money(offer.costPence)}`);
+    this.text("s3-supply-after", selection.error ? "—" : this.state.cashPence < offer.costPence ? `还差 ${money(offer.costPence - this.state.cashPence)}` : money(this.state.cashPence - offer.costPence));
+    this.text("s3-supply-summary", `${selection.lines.length ? `已选 ${selection.lines.length} 种商品 · 共 ${offer.unitCount} 件` : "尚未选择商品 · 共 0 件"}${selection.error ? ` · ${selection.invalidProductIds.length} 项数量待修正` : ""}`);
+    this.text("s3-supply-error", selection.error ?? offer.reason ?? "请核对商品、数量与总价。提交后到门口签收，再把商品搬上货架。");
+    this.el<HTMLButtonElement>("s3-purchase").disabled = !editable || !!selection.error || !offer.allowed;
+    this.text("s3-purchase", this.purchaseBusy ? "正在下单…" : selection.error ? "请先修正商品数量" : selection.lines.length ? `确认下单 · ${money(offer.costPence)}` : "先选择商品与数量");
+    this.el<HTMLButtonElement>("s3-clear-cart").disabled = !editable || (!selection.lines.length && !selection.invalidProductIds.length);
+    this.text("s3-delivery-summary", delivery.pendingOrders
+      ? `${delivery.pendingOrders} 笔已付款订单 · ${delivery.pendingUnits} 件待签收。${delivery.canReceive ? "返回场景，空手走到门口货车旁按 E 卸货。" : delivery.reason ?? "返回场景后到门口签收。"}`
+      : delivery.receivedToday ? `今日已签收 ${delivery.receivedToday} 笔订单。需要补货时可再次自选商品下单，继续到车旁签收。`
+        : `第 ${this.state.day.number} 天配送已就绪。选择数量前不会产生订单，浏览与筛选都不扣款。`);
   }
 
   private renderStreet(): void {
@@ -926,11 +1057,21 @@ export class App3D {
     this.text("s3-receipt-summary", shopping ? "听听问候" : money(total));
     this.text("s3-receipt-total", money(total));
     this.el("s3-receipt-items").hidden = !atCheckout && !showPaid;
+    const receiptItems = transaction && showPaid
+      ? this.state.items.filter((item) => transaction.itemIds.includes(item.id))
+      : this.state.items.filter((item) => item.location.kind === "checkout");
     for (const productId of PRODUCT_IDS) {
-      const scanned = showPaid || this.state.items.some((item) => item.productId === productId && this.state.scannedIds.includes(item.id));
+      const items = receiptItems.filter((item) => item.productId === productId);
+      const scanned = items.length > 0 && (showPaid || items.every((item) => this.state.scannedIds.includes(item.id)));
+      this.el(`s3-receipt-line-${productId}`).hidden = items.length === 0;
+      this.text(`s3-receipt-count-${productId}`, `${PRODUCTS[productId].nameZh} × ${items.length}`);
+      this.text(`s3-receipt-price-${productId}`, money(items.length * PRODUCTS[productId].pricePence));
       this.text(`s3-scan-${productId}`, scanned ? "已扫描" : "未扫描");
       this.el(`s3-scan-${productId}`).classList.toggle("s3-scanned", scanned);
     }
+    const order = showPaid ? [...new Set(receiptItems.map((item) => item.productId))] : getCustomerOrder(this.state);
+    const shoppingProduct = getShoppingProduct(this.state);
+    this.text("s3-customer-order", order.length ? `${showPaid ? "本单商品" : "购物清单"}：${order.map((productId) => PRODUCTS[productId].nameZh).join("、")}` : "");
     const profile = customerProfileFor(this.state);
     this.text("s3-customer-name", `${profile.name} · 第 ${this.state.customer.number} 位顾客`);
     this.customerClip = customerSpeechFor(this.state, showPaid ? "thanks" : atCheckout ? "checkout" : "greeting");
@@ -938,7 +1079,8 @@ export class App3D {
     this.text("s3-customer-line", `“${clip.text}”`);
     this.text("s3-customer-zh", clip.zh);
     this.el("s3-repeat-customer").hidden = !atCheckout;
-    this.text("s3-receipt-help", showPaid ? "金额已入账，不会重复收费。可在营业账本中查看今天的收支。" : shopping ? "顾客会自己拿取牛奶与面包，再到收银台。R 可重听；Tab 释放鼠标。" : this.state.scannedIds.length === 2 ? "全部已扫描。靠近收银台按 E 启用刷卡机。" : "鼠标已释放，可点击重听。走到收银台内侧，按 E 逐件扫描。");
+    const allScanned = receiptItems.length > 0 && receiptItems.every((item) => this.state.scannedIds.includes(item.id));
+    this.text("s3-receipt-help", showPaid ? "金额已入账，不会重复收费。可在营业账本中查看今天的收支。" : shopping ? `${shoppingProduct ? `顾客正在找 ${PRODUCTS[shoppingProduct].nameEn} / ${PRODUCTS[shoppingProduct].nameZh}。` : "顾客选好商品，正在走向收银台。"}R 可重听；Tab 释放鼠标。` : allScanned ? `本单 ${receiptItems.length} 件商品全部已扫描。靠近收银台按 E 启用刷卡机。` : `本单 ${receiptItems.length} 件商品，请在收银台内侧按 E 逐件扫描。鼠标已释放，可点击重听。`);
   }
 
   private renderSaveStatus(): void {
@@ -1108,7 +1250,10 @@ export class App3D {
     const clip = typeof input === "string"
       ? Object.values(SPEECH_CLIPS).find((candidate) => normalize(candidate.text) === normalize(text))
       : input;
-    if (!word && !clip) { report("这句话暂未配音，字幕和操作不受影响。"); return }
+    if (!word && !clip) {
+      this.speakWithBrowser(text, rate, generation, liveReport, onDone);
+      return;
+    }
     const audio = this.el<HTMLAudioElement>("s3-word-audio");
     let started = false;
     let failed = false;
@@ -1146,10 +1291,63 @@ export class App3D {
     catch { fail() }
   }
 
+  private speakWithBrowser(text: string, rate: number, generation: number, report: (message: string) => void, onDone?: () => void): void {
+    if (!("speechSynthesis" in window) || typeof SpeechSynthesisUtterance === "undefined") {
+      report("本商品尚无本地录音，当前浏览器也不支持合成发音。可继续查看英文、中文与搭配，操作不受影响。");
+      return;
+    }
+    const synthesis = window.speechSynthesis;
+    let started = false;
+    let failed = false;
+    const current = (): boolean => !this.disposed && generation === this.speechGeneration;
+    const fail = (): void => {
+      if (!current() || failed) return;
+      failed = true;
+      if (this.speechTimer) clearTimeout(this.speechTimer);
+      report("浏览器合成发音未能播放；本商品尚无本地录音。请重试或继续阅读字幕。");
+    };
+    try {
+      const utterance = new SpeechSynthesisUtterance(text);
+      this.synthesisUtterance = utterance;
+      const voices = synthesis.getVoices();
+      const voice = voices.find((entry) => entry.lang.toLowerCase() === "en-gb") ?? voices.find((entry) => entry.lang.toLowerCase().startsWith("en"));
+      if (voice) utterance.voice = voice;
+      utterance.lang = voice?.lang ?? "en-GB";
+      utterance.rate = clamp(rate, 0.5, 1.5);
+      utterance.volume = this.settings.volume;
+      utterance.onstart = () => {
+        if (!current() || failed) return;
+        started = true;
+        if (this.speechTimer) clearTimeout(this.speechTimer);
+        report(`正在播放浏览器合成发音：${text}（非本地录音）`);
+      };
+      utterance.onend = () => {
+        if (!current() || !started || failed) return;
+        this.synthesisUtterance = null;
+        report("浏览器合成发音结束，可以再听一次。声音由当前设备提供。");
+        onDone?.();
+      };
+      utterance.onerror = fail;
+      report("本商品尚无本地录音，正在尝试浏览器合成发音…");
+      this.speechTimer = setTimeout(() => {
+        if (current() && !started && !failed) report("浏览器合成发音尚未开始，请重试；设备可能没有可用的英语声音，字幕仍可阅读。");
+      }, 4000);
+      synthesis.speak(utterance);
+    } catch { fail() }
+  }
+
   private stopSpeech(): void {
     this.speechGeneration += 1;
     if (this.speechTimer) clearTimeout(this.speechTimer);
     this.speechTimer = undefined;
+    if (this.synthesisUtterance) {
+      this.synthesisUtterance.onstart = null;
+      this.synthesisUtterance.onend = null;
+      this.synthesisUtterance.onerror = null;
+      this.synthesisUtterance = null;
+      try { window.speechSynthesis?.cancel() }
+      catch { /* A missing or unavailable device voice must not block returning to the shop. */ }
+    }
     const audio = this.root.querySelector<HTMLAudioElement>("#s3-word-audio");
     if (audio) {
       const wasPlaying = !audio.paused;
@@ -1223,6 +1421,8 @@ export class App3D {
       return;
     }
     this.state = imported;
+    this.purchaseQuantities.clear();
+    this.purchaseOrderId = "";
     this.loadedSession = true;
     this.saveError = "";
     this.loadWarning = "";
@@ -1253,6 +1453,8 @@ export class App3D {
       return;
     }
     this.state = fresh;
+    this.purchaseQuantities.clear();
+    this.purchaseOrderId = "";
     this.loadedSession = false;
     this.target = null;
     this.receiptCustomer = 0;

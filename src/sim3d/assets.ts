@@ -13,6 +13,8 @@ import {
   VertexBuffer,
   VertexData,
 } from "@babylonjs/core";
+import { PRODUCT_ASSET_IDS, PRODUCT_ASSETS, type ProductAssetId } from "./product-library/catalog";
+import { crateDimensions } from "./productLayout";
 
 /** All distances are metres. Products and crates are anchored at their bottom. */
 type ProductId = "milk" | "bread";
@@ -25,7 +27,7 @@ export interface ShopCollider {
 export interface ShopTarget {
   id: string;
   kind: "shelf" | "counter" | "open-sign" | "drop-zone";
-  productId?: ProductId;
+  productId?: ProductAssetId;
   position: Vector3;
   mesh: AbstractMesh;
 }
@@ -235,13 +237,15 @@ export interface CheckoutDisplayState {
   scanned: number;
   totalPence: number;
   paid: boolean;
+  itemCount?: number;
 }
 
 /** Changes the actual till/reader screens, without allocating a texture each frame. */
 export function setCheckoutDisplay(scene: Scene, state: CheckoutDisplayState): void {
   const scanned = Number.isFinite(state.scanned) ? Math.max(0, Math.trunc(state.scanned)) : 0;
   const totalPence = Number.isFinite(state.totalPence) ? Math.max(0, Math.trunc(state.totalPence)) : 0;
-  const signature = `${scanned}:${totalPence}:${state.paid}`;
+  const itemCount = Math.max(0, Math.trunc(state.itemCount ?? 2));
+  const signature = `${scanned}:${totalPence}:${state.paid}${state.itemCount === undefined ? "" : `:${itemCount}`}`;
   const amount = `£${(totalPence / 100).toFixed(2)}`;
   updateDisplay(scene, "pos-screen", signature, (ctx, width, height) => {
     ctx.fillStyle = "#193b31";
@@ -254,7 +258,7 @@ export function setCheckoutDisplay(scene: Scene, state: CheckoutDisplayState): v
     ctx.font = `600 ${height * 0.28}px Arial, sans-serif`;
     ctx.fillText(amount, width / 2, height * 0.58, width - 80);
     ctx.font = `${height * 0.102}px Arial, sans-serif`;
-    ctx.fillText(state.paid ? "PAYMENT RECEIVED" : scanned ? `${scanned} / 2 items scanned` : "READY TO SCAN", width / 2, height * 0.82, width - 90);
+    ctx.fillText(state.paid ? "PAYMENT RECEIVED" : scanned ? `${scanned} / ${itemCount} items scanned` : "READY TO SCAN", width / 2, height * 0.82, width - 90);
   });
   updateDisplay(scene, "reader-screen", signature, (ctx, width, height) => {
     ctx.fillStyle = state.paid ? "#d5e3c6" : "#dae5df";
@@ -262,16 +266,16 @@ export function setCheckoutDisplay(scene: Scene, state: CheckoutDisplayState): v
     ctx.textAlign = "center";
     ctx.fillStyle = "#244f3c";
     ctx.font = `600 ${height * 0.24}px Arial, sans-serif`;
-    ctx.fillText(state.paid ? "PAID" : scanned >= 2 ? amount : "CARD", width / 2, height * 0.49, width - 60);
+    ctx.fillText(state.paid ? "PAID" : itemCount > 0 && scanned >= itemCount ? amount : "CARD", width / 2, height * 0.49, width - 60);
     ctx.font = `${height * 0.10}px Arial, sans-serif`;
-    ctx.fillText(state.paid ? "Thank you!" : scanned >= 2 ? "Tap to pay" : "Scan your items", width / 2, height * 0.76, width - 60);
+    ctx.fillText(state.paid ? "Thank you!" : itemCount > 0 && scanned >= itemCount ? "Tap to pay" : "Scan your items", width / 2, height * 0.76, width - 60);
   });
 }
 
 /** The extra shelf exists physically; its reserved-space cards leave when purchased. */
 export function setShelfCapacity(scene: Scene, upgraded: boolean): void {
-  for (const name of ["milk-capacity-note", "bread-capacity-note"]) {
-    const mesh = scene.getMeshByName(name);
+  for (const productId of PRODUCT_ASSET_IDS) {
+    const mesh = scene.getMeshByName(`${productId}-capacity-note`);
     if (!mesh) continue;
     mesh.setEnabled(!upgraded);
     mesh.metadata = { ...mesh.metadata, capacityLocked: !upgraded };
@@ -488,11 +492,9 @@ export function createProduct(scene: Scene, productId: ProductId, name: string):
   return root;
 }
 
-export function createCrate(scene: Scene, productId: ProductId, name: string): TransformNode {
+export function createCrate(scene: Scene, productId: ProductAssetId, name: string): TransformNode {
   const root = new TransformNode(name, scene);
-  const width = productId === "milk" ? 0.46 : 0.70;
-  const depth = productId === "milk" ? 0.36 : 0.40;
-  const height = 0.205;
+  const { width, depth, height } = crateDimensions(productId);
   root.metadata = { productId, assetType: "crate", baseAnchored: true, width, depth, height };
   box(scene, root, `${name}-bottom`, new Vector3(width, 0.007, depth), new Vector3(0, 0.004, 0), "kraft");
   for (const side of [-1, 1]) {
@@ -509,7 +511,7 @@ export function createCrate(scene: Scene, productId: ProductId, name: string): T
     }
   }
   box(scene, root, `${name}-bottom-tape`, new Vector3(0.052, 0.001, depth * 0.99), new Vector3(0, 0.008, 0), "tape");
-  sign(scene, root, `${name}-delivery-label`, width * 0.6, 0.094, new Vector3(0, 0.108, -depth / 2 - 0.0035), productId === "milk" ? "MILK" : "BREAD", "CORNER SHOP · DELIVERY", true);
+  sign(scene, root, `${name}-delivery-label`, width * 0.72, 0.094, new Vector3(0, 0.108, -depth / 2 - 0.0035), PRODUCT_ASSETS[productId].nameEn.toUpperCase(), "CORNER SHOP · DELIVERY", true);
   mergeProductParts(root);
   return root;
 }
@@ -669,7 +671,7 @@ function entrance(scene: Scene, root: TransformNode): ShopTarget {
   return { id: "open-sign", kind: "open-sign", position: new Vector3(0.62, 1.73, -4.40), mesh: hanging };
 }
 
-export function createShop(scene: Scene): ShopEnvironment {
+export function createShop(scene: Scene, options: { catalogFixtures?: boolean } = {}): ShopEnvironment {
   const root = new TransformNode("corner-shop-environment", scene);
   const targets: ShopTarget[] = [];
   const floor = finish(MeshBuilder.CreateGround("oak-floor", { width: 6.8, height: 9.2 }, scene), root, material(scene, "oak"), Vector3.Zero());
@@ -686,7 +688,7 @@ export function createShop(scene: Scene): ShopEnvironment {
   }
   wallPanels(scene, root);
   targets.push(createCounter(scene, root), createFridge(scene, root), createBreadRack(scene, root), entrance(scene, root));
-  pantry(scene, root);
+  if (!options.catalogFixtures) pantry(scene, root);
 
   const door = box(scene, root, "stockroom-door", new Vector3(0.91, 2.13, 0.072), new Vector3(-2.01, 1.065, 4.49), "sageDark");
   for (const x of [-0.498, 0.498]) box(scene, door, `door-frame-${x}`, new Vector3(0.074, 2.24, 0.09), new Vector3(x, 0.035, -0.035), "sage");
@@ -735,7 +737,7 @@ export function createShop(scene: Scene): ShopEnvironment {
     { minX: -2.84, maxX: -1.56, minZ: -3.035, maxZ: -1.365 },
     { minX: -0.51, maxX: 0.51, minZ: 3.62, maxZ: 4.51 },
     { minX: 2.59, maxX: 3.29, minZ: -0.62, maxZ: 1.22 },
-    { minX: 1.44, maxX: 2.42, minZ: 3.86, maxZ: 4.52 },
+    ...(!options.catalogFixtures ? [{ minX: 1.44, maxX: 2.42, minZ: 3.86, maxZ: 4.52 }] : []),
     { minX: -3.22, maxX: -2.81, minZ: -3.83, maxZ: -3.41 },
     { minX: -1.10, maxX: -0.70, minZ: 3.82, maxZ: 4.22 },
   ];

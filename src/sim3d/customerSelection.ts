@@ -1,5 +1,4 @@
 import corpus from "./customerCorpus.json" with { type: "json" };
-import type { SimState } from "./domain";
 
 export type CustomerVoice = "female" | "male";
 export type CustomerScene = "greeting" | "checkout" | "thanks";
@@ -33,7 +32,8 @@ export const CUSTOMER_EXIT_STOP_SECONDS = .1;
 export const NEXT_CUSTOMER_SECONDS = .65; // Was 2 s after leaving.
 
 const LEGACY_CUSTOMER_SEED = 31;
-type VisitState = Pick<SimState, "customer" | "customerSeed">;
+// Appearance and dialogue depend on visit identity, never on the shopping basket.
+type VisitState = { customer: { number: number }; customerSeed?: number };
 
 /** Stored once per new game. Old snapshots have a stable fallback, not a new draw on load. */
 export function createCustomerSeed(): number {

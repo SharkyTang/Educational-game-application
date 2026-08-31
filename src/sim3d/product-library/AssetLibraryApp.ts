@@ -108,10 +108,10 @@ export class AssetLibraryApp {
       <main class="product-library-app" aria-labelledby="pl-title">
         <header class="pl-masthead">
           <a class="pl-wordmark" href="/" aria-label="Corner Shop，返回游戏"><span class="pl-brand-mark">cs.</span><span>Corner Shop<small>THE PRODUCT COLLECTION</small></span></a>
-          <a class="pl-back" id="pl-back-game" href="/">← <span>返回游戏</span></a>
+          <a class="pl-back" id="pl-back-game" href="/">← <span>返回小店 · B 进货</span></a>
         </header>
         <section class="pl-intro">
-          <div><p class="pl-eyebrow">ASSET LIBRARY · VOL. 01</p><h1 id="pl-title">商品素材库<span>为你的小店，准备就绪。</span></h1><p class="pl-intro-note">可旋转查看的真实 3D 商品，独立保存，随时调用。</p></div>
+          <div><p class="pl-eyebrow">ASSET LIBRARY · VOL. 01</p><h1 id="pl-title">商品素材库<span>为你的小店，准备就绪。</span></h1><p class="pl-intro-note">30 种商品已接入经营。返回小店按 B，自选商品和数量进货；这里仍可查看与导出模型。</p></div>
           <div class="pl-overview" aria-label="制作与接入进度">
             <div><strong id="pl-total">${PRODUCT_ASSET_LIST.length}</strong><span>商品模型已制作</span></div>
             <div><strong id="pl-active">${String(activeCount).padStart(2, "0")}</strong><span>已接入游戏</span></div>
@@ -148,13 +148,14 @@ export class AssetLibraryApp {
             <p class="pl-appearance" id="pl-appearance"></p>
             <dl class="pl-specs"><div><dt>单位短语</dt><dd><span id="pl-phrase-en" lang="en"></span><small id="pl-phrase-zh"></small></dd></div><div><dt>推荐陈列</dt><dd id="pl-shelf"></dd></div><div><dt>实际尺寸</dt><dd><span id="pl-bounds">正在测量…</span><small>宽 × 高 × 深 · 厘米</small></dd></div><div><dt>语音素材</dt><dd id="pl-audio-status"></dd></div></dl>
             <div class="pl-model-stats" aria-label="当前模型实际统计"><div><strong id="pl-mesh-count">—</strong><span>网格</span></div><div><strong id="pl-triangle-count">—</strong><span>三角面</span></div><div><strong id="pl-material-count">—</strong><span>材质</span></div></div>
+            <a id="pl-shop-supply" class="pl-shop-supply" href="/">去小店选购 · 按 B 打开进货清单 ↗</a>
             <div class="pl-export-actions"><button type="button" class="pl-primary" id="pl-download-glb" data-pl-action="glb" disabled>↓ 下载单品 GLB</button><button type="button" class="pl-secondary" id="pl-copy-code" data-pl-action="copy-code">复制调用代码</button></div>
             <details class="pl-code-details"><summary>查看调用示例</summary><pre><code id="pl-code"></code></pre></details>
             <section id="pl-copy-fallback" class="pl-copy-fallback" aria-label="手动复制文本" hidden><label for="pl-copy-text">浏览器未允许自动复制，请手动复制：</label><textarea id="pl-copy-text" readonly rows="4" spellcheck="false"></textarea><button type="button" class="pl-link-button" data-pl-action="select-copy">选中全部文本</button></section>
             <p class="pl-notice" id="pl-notice" role="status" aria-live="polite">本页不会读取或修改你的游戏存档。</p>
           </aside>
         </div>
-        <footer class="pl-footer"><p><strong>素材制作 ≠ 玩法接入。</strong> 牛奶与面包已接入首日经营；其余 ${PRODUCT_ASSET_LIST.length - activeCount} 件已有模型，后续仍需配置订单、价格、库存规则与教学配音。</p><span>CORNER SHOP · PRODUCT LIBRARY 01</span></footer>
+        <footer class="pl-footer"><p><strong>全部 ${activeCount} 种商品均可自选进货。</strong> 下单、门口签收、上架和收款由游戏处理，无需自己调用代码。牛奶与面包有本地单词录音，其余商品在游戏内可使用浏览器朗读；不以模型数量代替教学完成度。</p><span>CORNER SHOP · PRODUCT LIBRARY 01</span></footer>
       </main>`;
   }
 

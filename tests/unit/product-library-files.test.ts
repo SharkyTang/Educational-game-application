@@ -7,7 +7,7 @@ interface ProductGlb {
   buffers: { byteLength: number; uri?: string }[];
   bufferViews: { buffer: number; byteOffset?: number; byteLength: number; byteStride?: number }[];
   accessors: { bufferView: number; byteOffset?: number; count: number; componentType: number; type: string }[];
-  nodes: { name?: string; extras?: { productId?: string; libraryVersion?: string; baseAnchored?: boolean; units?: string } }[];
+  nodes: { name?: string; extras?: { productId?: string; libraryVersion?: string; baseAnchored?: boolean; units?: string; gameplay?: string } }[];
   meshes: { primitives: { attributes: Record<string, number> }[] }[];
   images?: { bufferView?: number; uri?: string; mimeType?: string }[];
   cameras?: unknown[];
@@ -50,7 +50,7 @@ describe("shipped reusable product files", () => {
     expect(gltf.cameras ?? []).toHaveLength(0);
     expect(gltf.nodes.some((node) => /plinth|camera|soft-fill|library-key|library-rim/.test(node.name ?? ""))).toBe(false);
     expect(gltf.nodes.find((node) => node.extras?.productId === id)?.extras).toMatchObject({
-      productId: id, libraryVersion: PRODUCT_LIBRARY_VERSION, baseAnchored: true, units: "metres",
+      productId: id, libraryVersion: PRODUCT_LIBRARY_VERSION, baseAnchored: true, units: "metres", gameplay: "active",
     });
     for (const view of gltf.bufferViews) {
       expect(view.buffer).toBe(0);

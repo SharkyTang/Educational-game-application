@@ -16,7 +16,8 @@ const builders = {
  * Independent reusable art factory. Distances are metres; front is -Z.
  * A root can be placed in a crate, hand, shelf or inspection scene unchanged.
  * Dispose roots with root.dispose(false, false): cached materials belong to Scene.
- * Nothing here registers SKUs with the S1 economy or reads/writes its save.
+ * The game uses this same factory for its registered SKUs. This factory itself
+ * never creates inventory, charges money or reads/writes a save.
  */
 export function createProductAsset(scene: Scene, productId: ProductAssetId, name = `product-${productId}`): TransformNode {
   if (!isProductAssetId(productId)) throw new Error(`Unknown product asset: ${String(productId)}`);
@@ -28,8 +29,8 @@ export function createProductAsset(scene: Scene, productId: ProductAssetId, name
       builders[productId](scene, root);
       mergeParts(root);
     }
-    // Normalize library instances only, including the two original models.
-    // The game's existing createProduct factory and its placements stay unchanged.
+    // One bottom-centred contract for library previews and in-game instances,
+    // including the two original models supplied by the base factory.
     const originalBounds = root.getHierarchyBoundingVectors(true);
     const offset = new Vector3((originalBounds.min.x + originalBounds.max.x) / 2, originalBounds.min.y, (originalBounds.min.z + originalBounds.max.z) / 2);
     for (const child of root.getChildren(undefined, true)) {

@@ -1,20 +1,8 @@
-/** First-person shop inventory and first-day economy, separate from the legacy 2D game. */
-export const PRODUCT_IDS = ["milk", "bread"] as const;
-export type ProductId = (typeof PRODUCT_IDS)[number];
-export type CrateId = "milk-crate" | "bread-crate";
-
-export interface ProductDefinition {
-  nameEn: string;
-  nameZh: string;
-  unitEn: string;
-  pricePence: number;
-  costPence: number;
-}
-
-export const PRODUCTS: Record<ProductId, ProductDefinition> = {
-  milk: { nameEn: "milk", nameZh: "牛奶", unitEn: "carton", pricePence: 160, costPence: 90 },
-  bread: { nameEn: "bread", nameZh: "面包", unitEn: "loaf", pricePence: 240, costPence: 140 },
-};
+/** First-person shop inventory and economy, separate from the legacy 2D game. */
+import { PRODUCTS, PRODUCT_IDS, isProductId, type CrateId, type ProductId } from "./products";
+export { PRODUCTS, PRODUCT_IDS, isProductId, type CrateId, type ProductId, type ProductDefinition } from "./products";
+const LEGACY_PRODUCT_IDS = ["milk", "bread"] as const;
+const isLegacyProductId = (value: unknown): value is (typeof LEGACY_PRODUCT_IDS)[number] => value === "milk" || value === "bread";
 
 export interface Position { x: number; z: number }
 export interface PlayerPose extends Position { yaw: number; pitch: number }
@@ -25,9 +13,15 @@ const INDOOR_DROP_POINTS: readonly Position[] = [
   { x: -1.1, z: 2.6 },
   { x: 1.8, z: 1.35 },
 ];
-export const DELIVERY_DROP_POINTS: readonly Position[] = [
+const LEGACY_DELIVERY_DROP_POINTS: readonly Position[] = [
   { x: 1.35, z: -6 },
   { x: 2.3, z: -6 },
+];
+export const DELIVERY_DROP_POINTS: readonly Position[] = [
+  ...LEGACY_DELIVERY_DROP_POINTS,
+  ...[4.7, 5.85, 7, 8.15, 9.3, 10.45, 11.6, 12.75, 13.9, 15.05, 16.2, 17.35]
+    .flatMap((x) => [-5.1, -6.2, -7.25].map((z) => ({ x, z })))
+    .filter(({ x, z }) => !(Math.abs(x - 10.35) < 1 && z < -5.5) && !(Math.abs(x - 8.25) < 0.7 && z < -7)),
 ];
 export const SAFE_DROP_POINTS: readonly Position[] = [...INDOOR_DROP_POINTS, ...DELIVERY_DROP_POINTS];
 const INDOOR_BOUNDS = { minX: -3.4, maxX: 3.4, minZ: -4.6, maxZ: 4.6 } as const;
@@ -98,8 +92,19 @@ export interface SimPurchaseV4 {
   itemIds: string[];
   amountPence: number;
 }
-export interface SimPurchase extends SimPurchaseV4 {
+export interface SimPurchaseV5 extends SimPurchaseV4 {
   /** Null means paid goods are still on the delivery vehicle; never available for sale. */
+  receivedDay: number | null;
+}
+export interface PurchaseLine { productId: ProductId; quantity: number }
+export interface SimPurchase {
+  id: string;
+  dayNumber: number;
+  lines: PurchaseLine[];
+  /** Kept only for migrated/legacy paired orders, with exact matching lines. */
+  pairs?: PurchasePairs;
+  itemIds: string[];
+  amountPence: number;
   receivedDay: number | null;
 }
 export interface SimDay {
@@ -144,8 +149,13 @@ interface SimEconomyState extends SimWorldState {
   settlements: SimSettlement[];
 }
 export interface SimStateV4 extends SimEconomyState { schemaVersion: 4; purchases: SimPurchaseV4[] }
-export interface SimState extends SimEconomyState { schemaVersion: 5; purchases: SimPurchase[] }
-type EconomySnapshot = SimState | SimStateV4;
+export interface SimStateV5 extends SimEconomyState { schemaVersion: 5; purchases: SimPurchaseV5[] }
+export interface SimState extends SimEconomyState {
+  schemaVersion: 6;
+  purchases: SimPurchase[];
+  customer: { phase: CustomerPhase; number: number; shoppingList: ProductId[] };
+}
+type EconomySnapshot = SimState | SimStateV4 | SimStateV5;
 export interface DeliverySummary {
   pendingOrders: number;
   pendingUnits: number;
@@ -155,7 +165,9 @@ export interface DeliverySummary {
   reason?: string;
 }
 export interface PurchaseOffer {
-  pairs: PurchasePairs;
+  pairs?: PurchasePairs;
+  lines: PurchaseLine[];
+  unitCount: number;
   costPence: number;
   allowed: boolean;
   reason?: string;
@@ -175,7 +187,8 @@ export type SimCommand =
   | { type: "NEXT_CUSTOMER" }
   | { type: "CANCEL_CUSTOMER" }
   | { type: "BUY_UPGRADE" }
-  | { type: "PURCHASE_STOCK"; orderId: string; pairs: PurchasePairs }
+  | { type: "PURCHASE_STOCK"; orderId: string; pairs: PurchasePairs; lines?: never }
+  | { type: "PURCHASE_STOCK"; orderId: string; lines: readonly PurchaseLine[]; pairs?: never }
   | { type: "RECEIVE_DELIVERY" }
   | { type: "SETTLE_DAY" }
   | { type: "START_NEXT_DAY" }
@@ -183,7 +196,6 @@ export type SimCommand =
 export interface SimResult { state: SimState; changed: boolean; message?: string }
 
 const crateIdFor = (productId: ProductId): CrateId => `${productId}-crate`;
-const isProductId = (value: unknown): value is ProductId => value === "milk" || value === "bread";
 const isInteger = (value: unknown): value is number => typeof value === "number" && Number.isSafeInteger(value);
 const isFiniteNumber = (value: unknown): value is number => typeof value === "number" && Number.isFinite(value);
 const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === "object" && value !== null && !Array.isArray(value);
@@ -195,7 +207,7 @@ function createLegacyInitialState(): LegacySimState {
   return {
     schemaVersion: 3,
     revision: 0,
-    items: PRODUCT_IDS.flatMap((productId) => Array.from({ length: 4 }, (_, index) => ({
+    items: LEGACY_PRODUCT_IDS.flatMap((productId) => Array.from({ length: 4 }, (_, index) => ({
       id: `${productId}-${index + 1}`, productId,
       location: { kind: "crate" as const, crateId: crateIdFor(productId) },
     }))),
@@ -233,7 +245,8 @@ export function createInitialSimState(): SimState {
 export function createFirstDayState(): SimState {
   const world = createLegacyInitialState();
   return {
-    ...world, schemaVersion: 5, items: [], cashPence: INITIAL_CAPITAL_PENCE,
+    ...world, schemaVersion: 6, items: [], cashPence: INITIAL_CAPITAL_PENCE,
+    customer: { ...world.customer, shoppingList: [] },
     openingKind: "first-day", day: firstDay("first-day"), purchases: [], upgradeDay: null, settlements: [],
   };
 }
@@ -245,7 +258,8 @@ export function migrateLegacySimState(value: unknown): SimState {
   const day = firstDay("legacy-s0");
   day.phase = legacy.customer.phase === "outside" ? "preparing" : "open";
   const migrated: SimState = {
-    ...legacy, schemaVersion: 5, openingKind: "legacy-s0", day,
+    ...legacy, schemaVersion: 6, openingKind: "legacy-s0", day,
+    customer: { ...legacy.customer, shoppingList: legacy.customer.phase === "outside" ? [] : [...LEGACY_PRODUCT_IDS] },
     purchases: [], upgradeDay: legacy.upgraded ? 1 : null, settlements: [],
   };
   if (!validateSimState(migrated)) throw new Error("旧版 3D 存档迁移校验失败，原始存档未改变。");
@@ -257,10 +271,24 @@ export function migrateV4SimState(value: unknown): SimState {
   if (!validateV4SimState(value)) throw new Error("旧版 v4 存档校验失败，不能迁移这份库存或金额。");
   const previous = structuredClone(value);
   const migrated: SimState = {
-    ...previous, schemaVersion: 5,
-    purchases: previous.purchases.map((purchase) => ({ ...purchase, receivedDay: purchase.dayNumber })),
+    ...previous, schemaVersion: 6,
+    customer: { ...previous.customer, shoppingList: previous.customer.phase === "outside" ? [] : [...LEGACY_PRODUCT_IDS] },
+    purchases: previous.purchases.map((purchase) => ({ ...purchase, lines: pairLines(purchase.pairs), receivedDay: purchase.dayNumber })),
   };
   if (!validateSimState(migrated)) throw new Error("旧版 v4 存档迁移校验失败，原始存档未改变。");
+  return migrated;
+}
+
+/** v5 preserves paid, unreceived deliveries as well as the whole existing world and ledger. */
+export function migrateV5SimState(value: unknown): SimState {
+  if (!validateV5SimState(value)) throw new Error("旧版 v5 存档校验失败，不能迁移这份库存或金额。");
+  const previous = structuredClone(value);
+  const migrated: SimState = {
+    ...previous, schemaVersion: 6,
+    customer: { ...previous.customer, shoppingList: previous.customer.phase === "outside" ? [] : [...LEGACY_PRODUCT_IDS] },
+    purchases: previous.purchases.map((purchase) => ({ ...purchase, lines: pairLines(purchase.pairs) })),
+  };
+  if (!validateSimState(migrated)) throw new Error("旧版 v5 存档迁移校验失败，原始存档未改变。");
   return migrated;
 }
 
@@ -281,33 +309,88 @@ function inventoryValue(items: SimItem[]): number {
   return items.reduce((sum, item) => sum + PRODUCTS[item.productId].costPence, 0);
 }
 
-function purchaseItemIds(orderId: string, pairs: PurchasePairs): string[] {
-  return PRODUCT_IDS.flatMap((productId) => Array.from({ length: pairs }, (_, index) => `${productId}-purchase-${orderId}-${index + 1}`));
-}
-
 const validOrderId = (id: unknown): id is string => typeof id === "string" && /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,79}$/.test(id);
 const validPairs = (pairs: unknown): pairs is PurchasePairs => PURCHASE_PAIR_OPTIONS.some((option) => option === pairs);
 
-/** A paired delivery always preserves both product types needed for a payable order. */
-export function getPurchaseOffer(state: SimState, pairs: PurchasePairs): PurchaseOffer {
-  const costPence = validPairs(pairs) ? pairs * PURCHASE_PAIR_COST_PENCE : 0;
-  const denied = (reason: string): PurchaseOffer => ({ pairs, costPence, allowed: false, reason });
-  if (!validPairs(pairs)) return denied("每次可订购 1、3 或 6 份组合货；每份含 1 盒牛奶和 1 袋面包。");
+function pairLines(pairs: PurchasePairs): PurchaseLine[] {
+  return LEGACY_PRODUCT_IDS.map((productId) => ({ productId, quantity: pairs }));
+}
+
+function purchaseItemIds(orderId: string, lines: readonly PurchaseLine[]): string[] {
+  return lines.flatMap(({ productId, quantity }) => Array.from({ length: quantity }, (_, index) => `${productId}-purchase-${orderId}-${index + 1}`));
+}
+
+function sameLines(a: readonly PurchaseLine[], b: readonly PurchaseLine[]): boolean {
+  return a.length === b.length && a.every((line, index) => line.productId === b[index]?.productId && line.quantity === b[index]?.quantity);
+}
+
+function normalizeSelection(input: unknown): { lines: PurchaseLine[]; pairs?: PurchasePairs; reason?: string } {
+  if (typeof input === "number") return validPairs(input) ? { lines: pairLines(input), pairs: input }
+    : { lines: [], reason: "旧版组合货数量只支持 1、3 或 6 份；也可以在清单中自选商品。" };
+  if (!Array.isArray(input) || input.length === 0) return { lines: [], reason: "请先选择商品，并填写要订购的数量。" };
+  if (input.length > PRODUCT_IDS.length) return { lines: [], reason: "进货清单商品种类过多。" };
+  const selected = new Map<ProductId, number>();
+  for (const line of input) {
+    if (!isRecord(line) || !isProductId(line.productId)) return { lines: [], reason: "进货清单含有不支持的商品。" };
+    if (!isInteger(line.quantity) || line.quantity < 1 || line.quantity > CRATE_CAPACITY) return { lines: [], reason: `每种商品的订购数量须为 1 到 ${CRATE_CAPACITY} 的整数。` };
+    if (selected.has(line.productId)) return { lines: [], reason: "同一种商品只能填写一行，请直接修改这一行的数量。" };
+    selected.set(line.productId, line.quantity);
+  }
+  return { lines: PRODUCT_IDS.filter((id) => selected.has(id)).map((productId) => ({ productId, quantity: selected.get(productId)! })) };
+}
+
+/** The caller chooses every SKU and quantity; paired quantities remain an explicit legacy API. */
+export function getPurchaseOffer(state: SimState, selection: readonly PurchaseLine[] | PurchasePairs): PurchaseOffer {
+  const normalized = normalizeSelection(selection);
+  const { lines, pairs } = normalized;
+  const costPence = lines.reduce((sum, line) => sum + PRODUCTS[line.productId].costPence * line.quantity, 0);
+  const unitCount = lines.reduce((sum, line) => sum + line.quantity, 0);
+  const base = { lines, unitCount, costPence, ...(pairs === undefined ? {} : { pairs }) };
+  const denied = (reason: string): PurchaseOffer => ({ ...base, allowed: false, reason });
+  if (normalized.reason) return denied(normalized.reason);
   if (state.day.phase === "settled") return denied("今天已经日结，请先开始次日再进货。");
-  if (state.cashPence < costPence) return denied(`资金不足，需要 £${(costPence / 100).toFixed(2)}；可以选择较小的一份补货。`);
-  for (const productId of PRODUCT_IDS) {
+  if (state.cashPence < costPence) return denied(`资金不足，本次需要 £${(costPence / 100).toFixed(2)}；请减少数量或先卖出库存。`);
+  for (const { productId, quantity } of lines) {
     const held = state.held;
     // A hand-held item reserves its exact crate return space until placed elsewhere.
     const reserved = held.kind === "item" && held.returnTo.kind === "crate" && held.returnTo.crateId === crateIdFor(productId) ? 1 : 0;
-    if (countAt(state, productId, "crate") + countAt(state, productId, "delivery") + reserved + pairs > CRATE_CAPACITY) {
+    if (countAt(state, productId, "crate") + countAt(state, productId, "delivery") + reserved + quantity > CRATE_CAPACITY) {
       return denied(`${PRODUCTS[productId].nameZh}箱最多容纳 ${CRATE_CAPACITY} 件，请先上架或卖出部分商品。`);
     }
     // Keep room to cancel an unpaid basket safely even after shelf replenishment.
-    if (unsoldItems(state, productId).length + pairs > CRATE_CAPACITY + capacityFor(state)) {
+    if (unsoldItems(state, productId).length + quantity > CRATE_CAPACITY + capacityFor(state)) {
       return denied(`${PRODUCTS[productId].nameZh}暂存空间不足，请先完成当前交易或卖出部分商品。`);
     }
   }
-  return { pairs, costPence, allowed: true };
+  return { ...base, allowed: true };
+}
+
+function crateDimensions(productId: ProductId): { halfWidth: number; halfDepth: number } {
+  return productId === "milk" ? { halfWidth: 0.23, halfDepth: 0.20 }
+    : productId === "bread" ? { halfWidth: 0.35, halfDepth: 0.20 } : { halfWidth: 0.40, halfDepth: 0.23 };
+}
+
+function playerOccupiesDrop(state: SimState, productId: ProductId, point: Position): boolean {
+  const { halfWidth, halfDepth } = crateDimensions(productId);
+  return Math.abs(state.playerPose.x - point.x) < halfWidth + 0.24
+    && Math.abs(state.playerPose.z - point.z) < halfDepth + 0.24;
+}
+
+function deliveryPlacements(state: SimState): { productId: ProductId; position: Position }[] | undefined {
+  const pendingProducts = PRODUCT_IDS.filter((productId) => countAt(state, productId, "delivery") > 0);
+  // Empty reusable crates retain a distinct return location for later returns/cancellations.
+  const occupied = state.crates.filter((crate) => !pendingProducts.includes(crate.productId)).map((crate) => crate.position);
+  const nearestPoints = [...DELIVERY_DROP_POINTS].sort((a, b) => Math.hypot(a.x, a.z + 4.6) - Math.hypot(b.x, b.z + 4.6));
+  const placements: { productId: ProductId; position: Position }[] = [];
+  for (const productId of pendingProducts) {
+    const existing = state.crates.find((crate) => crate.productId === productId)?.position;
+    const reusable = existing && DELIVERY_DROP_POINTS.some((point) => positionEquals(point, existing)) ? [existing] : [];
+    const point = [...reusable, ...nearestPoints].find((candidate) => !occupied.some((position) => positionEquals(position, candidate)));
+    if (!point) return undefined;
+    occupied.push(point);
+    placements.push({ productId, position: { ...point } });
+  }
+  return placements;
 }
 
 export function getDeliverySummary(state: SimState): DeliverySummary {
@@ -319,14 +402,33 @@ export function getDeliverySummary(state: SimState): DeliverySummary {
   };
   if (!pending.length) return { ...summary, canReceive: false, reason: "还没有待收货订单，可以先打开经营面板订货。" };
   if (state.held.kind !== "none") return { ...summary, canReceive: false, reason: "请先放下手里的货箱或商品，再到送货车旁签收。" };
-  for (const [index, productId] of PRODUCT_IDS.entries()) {
-    const point = DELIVERY_DROP_POINTS[index]!;
-    const halfWidth = productId === "milk" ? 0.23 : 0.35;
-    if (Math.abs(state.playerPose.x - point.x) < halfWidth + 0.24 && Math.abs(state.playerPose.z - point.z) < 0.44) {
+  const placements = deliveryPlacements(state);
+  if (!placements) return { ...summary, canReceive: false, reason: "卸货区暂时放不下本次货箱，请先上架或搬开已有货箱。" };
+  for (const { productId, position } of placements) {
+    if (playerOccupiesDrop(state, productId, position)) {
       return { ...summary, canReceive: false, reason: "请先离开门外的卸货点，给送货员留出放箱空间。" };
     }
   }
   return { ...summary, canReceive: true };
+}
+
+export function getCustomerOrder(state: SimState): readonly ProductId[] { return state.customer.shoppingList }
+
+export function getShoppingProduct(state: SimState): ProductId | null {
+  return state.customer.phase === "to-milk" ? state.customer.shoppingList[0] ?? null
+    : state.customer.phase === "to-bread" ? state.customer.shoppingList[1] ?? null : null;
+}
+
+export function canStartCustomer(state: SimState): boolean {
+  return state.day.phase !== "settled" && getDaySummary(state).paidCustomers < DAY_CUSTOMER_TARGET
+    && ["outside", "complete"].includes(state.customer.phase) && state.items.some((item) => item.location.kind === "shelf");
+}
+
+function chooseCustomerOrder(state: SimState): ProductId[] {
+  const available = PRODUCT_IDS.filter((productId) => countAt(state, productId, "shelf") > 0);
+  if (available.length <= 2) return available;
+  const start = ((Math.imul(state.customer.number, 1103515245) ^ (state.customerSeed ?? 0)) >>> 0) % available.length;
+  return [available[start]!, available[(start + 1) % available.length]!];
 }
 
 function summaryForRange(
@@ -386,7 +488,7 @@ export function getObjective(state: SimState): string {
     const item = held.kind === "item" ? state.items.find((entry) => entry.id === held.itemId) : undefined;
     const heldProduct = crate?.productId ?? item?.productId;
     if (crate && !state.items.some((entry) => entry.location.kind === "crate" && entry.location.crateId === crate.id)) {
-      if (!unsoldItems(state, crate.productId).length) return "货箱是空的，打开经营面板订购牛奶与面包组合货；首单建议 3 份。";
+      if (!unsoldItems(state, crate.productId).length) return "货箱是空的，打开经营面板，从进货清单选择想订购的商品和数量。";
       return "货箱已经空了，走近安全卸货点按 G 放下，再搬下一箱货。";
     }
     if (heldProduct) {
@@ -394,24 +496,27 @@ export function getObjective(state: SimState): string {
       if (!state.inspectedProducts.includes(heldProduct)) return `先按 F 近看手里的${product.nameZh}，把 ${product.nameEn} 和实物对应起来。`;
       if (countAt(state, heldProduct, "shelf") >= capacityFor(state)) return `${product.nameZh}货架已满，先按 G 放下手里的货物。`;
       const remaining = crate ? state.items.filter((entry) => entry.location.kind === "crate" && entry.location.crateId === crate.id).length : 1;
-      return `把手里的${product.nameZh}摆上${heldProduct === "milk" ? "牛奶冰柜" : "面包架"}，看向货架按 E，逐件上架${crate ? `（箱内剩 ${remaining} 件）` : ""}。`;
+      const shelfName = heldProduct === "milk" ? "牛奶冰柜" : heldProduct === "bread" ? "面包架" : `${product.nameZh}货位`;
+      return `把手里的${product.nameZh}摆上${shelfName}，看向货架按 E，逐件上架${crate ? `（箱内剩 ${remaining} 件）` : ""}。`;
     }
-    const missing = PRODUCT_IDS.find((id) => countAt(state, id, "shelf") < 1);
-    if (missing && !unsoldItems(state, missing).length) return "先打开经营面板进货：每份含 1 盒牛奶和 1 袋面包，首单建议 3 份，共 £6.90。";
+    const missing = PRODUCT_IDS.find((id) => countAt(state, id, "shelf") < 1 && countAt(state, id, "crate") > 0);
+    if (!missing && !state.items.some((entry) => entry.location.kind === "shelf")) return "先打开经营面板进货：从清单自主选择商品和数量，签收后上架至少一件即可营业。";
     if (missing) return state.inspectedProducts.includes(missing)
-      ? `搬起${PRODUCTS[missing].nameZh}货箱，把商品摆上${missing === "milk" ? "牛奶冰柜" : "面包架"}。`
+      ? `搬起${PRODUCTS[missing].nameZh}货箱，把商品摆上${missing === "milk" ? "牛奶冰柜" : missing === "bread" ? "面包架" : "对应货位"}。`
       : `搬起门边的${PRODUCTS[missing].nameZh}货箱，按 F 近看商品，再摆上货架。`;
     // Observation is a suggestion, not an additional condition for opening the store.
     return "商品已经就位，到门口翻转营业牌。";
   }
-  if (state.customer.phase === "to-milk") return countAt(state, "milk", "shelf") ? "顾客正在寻找牛奶。" : "冰箱空了，先补一盒牛奶。";
-  if (state.customer.phase === "to-bread") return countAt(state, "bread", "shelf") ? "顾客正在挑选面包。" : "面包架空了，先补一袋面包。";
+  const shoppingProduct = getShoppingProduct(state);
+  if (shoppingProduct) return countAt(state, shoppingProduct, "shelf") ? `顾客正在挑选${PRODUCTS[shoppingProduct].nameZh}。`
+    : `${PRODUCTS[shoppingProduct].nameZh}货位暂时空了，请按这位顾客原有清单补货；购物清单不会随补货改变。`;
   if (state.customer.phase === "to-checkout") return "顾客正在前往收银台，你也可以准备收银。";
-  if (state.customer.phase === "checkout") return state.scannedIds.length < 2 ? "扫描台面上的两件商品。" : "商品已扫描，启用刷卡机完成收款。";
+  if (state.customer.phase === "checkout") return state.scannedIds.length < state.customer.shoppingList.length
+    ? `扫描台面上的 ${state.customer.shoppingList.length} 件商品。` : "商品已扫描，启用刷卡机完成收款。";
   if (state.customer.phase === "leaving") return "顾客正在离店，可以整理货架或补货。";
-  if (PRODUCT_IDS.some((id) => unsoldItems(state, id).length === 0)) return "商品不足，打开经营面板订购组合货，再分别摆上牛奶冰柜和面包架。";
+  if (!unsoldItems(state).length) return "库存已经售完，打开经营面板自主选择商品和数量订购，签收后继续补货。";
   if (!state.upgraded && state.cashPence >= UPGRADE_COST_PENCE) return "资金已足够，按 U 可查看 £8 普通容量升级，也可以留钱进货。";
-  return "补齐牛奶和面包，准备接待下一位顾客。";
+  return "整理已购商品并给货架补货，准备接待下一位顾客。";
 }
 
 function freeSlot(state: SimState, productId: ProductId): number | undefined {
@@ -452,9 +557,7 @@ export function reduceSim(state: SimState, command: SimCommand): SimResult {
       if (next.crates.some((crate) => crate.id !== (next.held.kind === "crate" ? next.held.crateId : "") && positionEquals(crate.position, position))) return reject("这个卸货点已有货箱，请选择另一个位置。");
       const crate = next.crates.find((candidate) => next.held.kind === "crate" && candidate.id === next.held.crateId);
       if (!crate) return reject("找不到这个货箱。");
-      const halfWidth = crate.productId === "milk" ? 0.23 : 0.35;
-      if (Math.abs(position.x - next.playerPose.x) < halfWidth + 0.24
-        && Math.abs(position.z - next.playerPose.z) < 0.20 + 0.24) return reject("请先离卸货点远一点，不能把货箱放在自己脚下。");
+      if (playerOccupiesDrop(next, crate.productId, position)) return reject("请先离卸货点远一点，不能把货箱放在自己脚下。");
       crate.position = { ...position };
       next.held = { kind: "none" };
       return finish("货箱已放稳。");
@@ -488,7 +591,7 @@ export function reduceSim(state: SimState, command: SimCommand): SimResult {
         ? next.items.find((candidate) => candidate.location.kind === "crate" && candidate.location.crateId === held.crateId)
         : held.kind === "item" ? next.items.find((candidate) => candidate.id === held.itemId) : undefined;
       if (!item) return reject(held.kind === "crate" ? "货箱已经空了。" : "先抱起货箱或拿起一件商品。");
-      if (item.productId !== command.productId) return reject(`${PRODUCTS[item.productId].nameZh}应放在${item.productId === "milk" ? "冰箱" : "面包架"}。`);
+      if (item.productId !== command.productId) return reject(`${PRODUCTS[item.productId].nameZh}应放在标有同种商品的货架上。`);
       item.location = { kind: "shelf", productId: command.productId, slot: command.slot };
       if (held.kind === "item") next.held = { kind: "none" };
       return finish(`${PRODUCTS[item.productId].nameEn} · 上架成功。`);
@@ -507,19 +610,21 @@ export function reduceSim(state: SimState, command: SimCommand): SimResult {
       if (getDaySummary(next).paidCustomers >= DAY_CUSTOMER_TARGET) return reject("今天的三单已经完成，请等顾客离店后进行日结。");
       const expected = command.type === "OPEN_STORE" ? "outside" : "complete";
       if (next.customer.phase !== expected) return reject("请先完成当前顾客的流程。");
-      if (PRODUCT_IDS.some((id) => countAt(next, id, "shelf") < 1)) return reject("先给牛奶和面包各补至少一件货。");
+      if (!next.items.some((item) => item.location.kind === "shelf")) return reject("先选择商品进货，并给货架补上至少一件商品。");
       if (command.type === "NEXT_CUSTOMER") next.customer.number += 1;
+      next.customer.shoppingList = chooseCustomerOrder(next);
       next.day.phase = "open";
       next.customer.phase = "to-milk";
       return finish("营业开始，一位邻居走进了小店。");
     }
     case "CUSTOMER_ADVANCE": {
       if (next.customer.phase === "to-milk" || next.customer.phase === "to-bread") {
-        const productId = next.customer.phase === "to-milk" ? "milk" : "bread";
+        const productId = getShoppingProduct(next);
+        if (!productId) return reject("当前顾客没有对应的购物项目。");
         const item = next.items.find((candidate) => candidate.productId === productId && candidate.location.kind === "shelf");
         if (!item) return reject(`顾客还没拿到${PRODUCTS[productId].nameZh}，请先补货。`);
         item.location = { kind: "basket" };
-        next.customer.phase = productId === "milk" ? "to-bread" : "to-checkout";
+        next.customer.phase = next.customer.phase === "to-milk" && next.customer.shoppingList.length > 1 ? "to-bread" : "to-checkout";
         return finish(`顾客取走一件${PRODUCTS[productId].nameZh}。`);
       }
       if (next.customer.phase === "to-checkout") {
@@ -575,25 +680,33 @@ export function reduceSim(state: SimState, command: SimCommand): SimResult {
     }
     case "PURCHASE_STOCK": {
       if (!validOrderId(command.orderId)) return reject("进货单号不可用，请重新发起订货。");
+      if (command.lines !== undefined && command.pairs !== undefined) return reject("一张订单只能提交自选清单或旧版组合数量，不能同时提交。");
+      const selection = normalizeSelection(command.lines ?? command.pairs);
       const prior = next.purchases.find((purchase) => purchase.id === command.orderId);
-      if (prior) return reject(prior.pairs === command.pairs ? "这笔进货单已经记录，不会再次扣钱或发货。" : "同一进货单号不能改成不同数量。");
-      const offer = getPurchaseOffer(next, command.pairs);
+      if (prior) return reject(!selection.reason && sameLines(prior.lines, selection.lines) ? "这笔进货单已经记录，不会再次扣钱或发货。" : "同一进货单号不能改成不同商品或数量。");
+      const offer = getPurchaseOffer(next, command.lines ?? command.pairs!);
       if (!offer.allowed) return reject(offer.reason ?? "当前无法进货。");
-      const itemIds = purchaseItemIds(command.orderId, command.pairs);
-      next.purchases.push({ id: command.orderId, dayNumber: next.day.number, pairs: command.pairs, itemIds, amountPence: offer.costPence, receivedDay: null });
-      for (const [index, id] of itemIds.entries()) {
-        const productId = index < command.pairs ? "milk" : "bread";
-        next.items.push({ id, productId, location: { kind: "delivery", orderId: command.orderId } });
+      const itemIds = purchaseItemIds(command.orderId, offer.lines);
+      next.purchases.push({ id: command.orderId, dayNumber: next.day.number, lines: offer.lines,
+        ...(offer.pairs === undefined ? {} : { pairs: offer.pairs }), itemIds, amountPence: offer.costPence, receivedDay: null });
+      for (const line of offer.lines) {
+        for (const id of purchaseItemIds(command.orderId, [line])) next.items.push({ id, productId: line.productId, location: { kind: "delivery", orderId: command.orderId } });
       }
       next.cashPence -= offer.costPence;
-      return finish(`订货成功 -£${(offer.costPence / 100).toFixed(2)}：${command.pairs} 盒牛奶和 ${command.pairs} 袋面包待收货，请到门口送货车旁按 E 签收。`);
+      return finish(`订货成功 -£${(offer.costPence / 100).toFixed(2)}：自选 ${offer.lines.length} 种、${offer.unitCount} 件商品待收货，请到门口送货车旁按 E 签收。`);
     }
     case "RECEIVE_DELIVERY": {
       const delivery = getDeliverySummary(next);
       if (!delivery.canReceive) return reject(delivery.reason ?? "当前无法签收送货。");
+      const placements = deliveryPlacements(next);
+      if (!placements) return reject("卸货区暂时没有足够的安全空位。");
       for (const purchase of next.purchases) if (purchase.receivedDay === null) purchase.receivedDay = next.day.number;
       for (const item of next.items) if (item.location.kind === "delivery") item.location = { kind: "crate", crateId: crateIdFor(item.productId) };
-      for (const crate of next.crates) crate.position = { ...DELIVERY_DROP_POINTS[PRODUCT_IDS.indexOf(crate.productId)]! };
+      for (const { productId, position } of placements) {
+        const crate = next.crates.find((candidate) => candidate.productId === productId);
+        if (crate) crate.position = position;
+        else next.crates.push({ id: crateIdFor(productId), productId, position });
+      }
       return finish(`已签收 ${delivery.pendingOrders} 单、${delivery.pendingUnits} 件商品，货箱放在门外卸货点；本次不会再次扣款。`);
     }
     case "SETTLE_DAY": {
@@ -612,7 +725,7 @@ export function reduceSim(state: SimState, command: SimCommand): SimResult {
         transactionStart: next.transactions.length, purchaseStart: next.purchases.length,
         openingCashPence: next.cashPence, openingInventoryValuePence: inventoryValue(stock), openingStockUnits: stock.length,
       };
-      next.customer = { phase: "outside", number: next.customer.number + 1 };
+      next.customer = { phase: "outside", number: next.customer.number + 1, shoppingList: [] };
       return finish(`第 ${next.day.number} 天开始。资金、剩余商品和货架扩容全部保留，不会追加免费本金。`);
     }
     case "SAVE_POSE": {
@@ -639,9 +752,9 @@ export function canUnlockAdvancedUpgrade(input: {
     && input.requiredTaskIds.every((id) => id.length > 0 && input.completedIndependentTaskIds.includes(id));
 }
 
-function validPose(value: unknown, version: 3 | 4 | 5): value is PlayerPose {
+function validPose(value: unknown, version: 3 | 4 | 5 | 6): value is PlayerPose {
   return isRecord(value) && isFiniteNumber(value.x) && isFiniteNumber(value.z) && isFiniteNumber(value.yaw) && isFiniteNumber(value.pitch)
-    && (version === 5 ? isWalkablePosition({ x: value.x, z: value.z })
+    && (version >= 5 ? isWalkablePosition({ x: value.x, z: value.z })
       : value.x >= INDOOR_BOUNDS.minX && value.x <= INDOOR_BOUNDS.maxX && value.z >= INDOOR_BOUNDS.minZ && value.z <= INDOOR_BOUNDS.maxZ)
     && Math.abs(value.yaw) <= Math.PI + 0.00001 && Math.abs(value.pitch) <= 1.35;
 }
@@ -653,21 +766,24 @@ function validReturnLocation(value: unknown, productId: ProductId, capacity: num
 }
 
 /** Shared physical ownership checks; S0 additionally requires its fixed eight-unit grant. */
-function validateWorldState(value: unknown, version: 3 | 4 | 5): value is SimState | SimStateV4 | LegacySimState {
+function validateWorldState(value: unknown, version: 3 | 4 | 5 | 6): value is SimState | SimStateV4 | SimStateV5 | LegacySimState {
   const legacy = version === 3;
+  const knownProduct = (input: unknown): input is ProductId => version === 6 ? isProductId(input) : isLegacyProductId(input);
   if (!isRecord(value) || value.schemaVersion !== version || !isInteger(value.revision) || value.revision < 0
     || typeof value.upgraded !== "boolean" || !isInteger(value.cashPence) || value.cashPence < 0 || !validPose(value.playerPose, version)) return false;
-  if (!Array.isArray(value.crates) || value.crates.length !== 2 || !Array.isArray(value.items) || (legacy && value.items.length !== 8)
+  if (!Array.isArray(value.crates) || (version === 6 ? value.crates.length < 2 || value.crates.length > PRODUCT_IDS.length : value.crates.length !== 2)
+    || !Array.isArray(value.items) || (legacy && value.items.length !== 8)
     || !Array.isArray(value.transactions) || (legacy && value.transactions.length > 4) || !Array.isArray(value.scannedIds)
-    || !Array.isArray(value.inspectedProducts) || value.inspectedProducts.some((id) => !isProductId(id))
+    || !Array.isArray(value.inspectedProducts) || value.inspectedProducts.some((id) => !knownProduct(id))
     || new Set(value.inspectedProducts).size !== value.inspectedProducts.length) return false;
   const crateIds = new Set<string>();
   const cratePositions: Position[] = [];
   for (const crate of value.crates) {
-    if (!isRecord(crate) || !isProductId(crate.productId) || typeof crate.id !== "string" || crate.id !== crateIdFor(crate.productId)
+    if (!isRecord(crate) || !knownProduct(crate.productId) || typeof crate.id !== "string" || crate.id !== crateIdFor(crate.productId)
       || !isRecord(crate.position) || !isFiniteNumber(crate.position.x) || !isFiniteNumber(crate.position.z)) return false;
     const position = { x: crate.position.x, z: crate.position.z };
-    if (!(version === 5 ? SAFE_DROP_POINTS : INDOOR_DROP_POINTS).some((point) => positionEquals(point, position)) || crateIds.has(crate.id)
+    const allowedPoints = version === 6 ? SAFE_DROP_POINTS : version === 5 ? [...INDOOR_DROP_POINTS, ...LEGACY_DELIVERY_DROP_POINTS] : INDOOR_DROP_POINTS;
+    if (!allowedPoints.some((point) => positionEquals(point, position)) || crateIds.has(crate.id)
       || cratePositions.some((previous) => positionEquals(previous, position))) return false;
     crateIds.add(crate.id);
     cratePositions.push(position);
@@ -679,26 +795,27 @@ function validateWorldState(value: unknown, version: 3 | 4 | 5): value is SimSta
   const occupiedSlots = new Set<string>();
   const items: SimItem[] = [];
   for (const item of value.items) {
-    if (!isRecord(item) || !isProductId(item.productId) || typeof item.id !== "string"
+    if (!isRecord(item) || !knownProduct(item.productId) || typeof item.id !== "string"
       || (legacy && ![1, 2, 3, 4].some((number) => item.id === `${item.productId}-${number}`))
       || item.id.length === 0 || item.id.length > 128 || itemIds.has(item.id) || !isRecord(item.location)) return false;
     const location = item.location;
     if (location.kind === "crate" || location.kind === "shelf") {
       if (!validReturnLocation(location, item.productId, capacity)) return false;
+      if (location.kind === "crate" && !crateIds.has(crateIdFor(item.productId))) return false;
       if (location.kind === "shelf") {
         const key = `${location.productId}:${location.slot}`;
         if (occupiedSlots.has(key)) return false;
         occupiedSlots.add(key);
       }
     } else if (location.kind === "delivery") {
-      if (version !== 5 || !validOrderId(location.orderId)) return false;
+      if (version < 5 || !validOrderId(location.orderId)) return false;
     } else if (location.kind === "sold") {
       if (typeof location.transactionId !== "string") return false;
     } else if (typeof location.kind !== "string" || !["hand", "basket", "checkout"].includes(location.kind)) return false;
     itemIds.add(item.id);
     items.push(item as unknown as SimItem);
   }
-  if (legacy && !PRODUCT_IDS.every((productId) => items.filter((item) => item.productId === productId).length === 4)) return false;
+  if (legacy && !LEGACY_PRODUCT_IDS.every((productId) => items.filter((item) => item.productId === productId).length === 4)) return false;
   if (!isRecord(value.held)) return false;
   const handItems = items.filter((item) => item.location.kind === "hand");
   if (value.held.kind === "none") {
@@ -708,16 +825,26 @@ function validateWorldState(value: unknown, version: 3 | 4 | 5): value is SimSta
   } else if (value.held.kind === "item") {
     const item = handItems[0];
     if (handItems.length !== 1 || !item || value.held.itemId !== item.id || !validReturnLocation(value.held.returnTo, item.productId, capacity)) return false;
+    if (value.held.returnTo.kind === "crate" && !crateIds.has(crateIdFor(item.productId))) return false;
   } else return false;
+  let shoppingList: ProductId[] = [...LEGACY_PRODUCT_IDS];
+  if (version === 6) {
+    const list = value.customer.shoppingList;
+    if (!Array.isArray(list) || list.some((id) => !knownProduct(id)) || new Set(list).size !== list.length
+      || (value.customer.phase === "outside" ? list.length !== 0 : list.length < 1 || list.length > 2)
+      || list.some((id) => !items.some((item) => item.productId === id))) return false;
+    shoppingList = list as ProductId[];
+  }
   const basket = items.filter((item) => item.location.kind === "basket");
   const checkout = items.filter((item) => item.location.kind === "checkout");
-  const isPair = (goods: SimItem[]): boolean => goods.length === 2 && PRODUCT_IDS.every((productId) => goods.some((item) => item.productId === productId));
+  const matchesOrder = (goods: SimItem[]): boolean => goods.length === shoppingList.length
+    && shoppingList.every((productId) => goods.some((item) => item.productId === productId));
   if (value.customer.phase === "to-bread") {
-    if (basket.length !== 1 || basket[0]?.productId !== "milk" || checkout.length !== 0) return false;
+    if (shoppingList.length !== 2 || basket.length !== 1 || basket[0]?.productId !== shoppingList[0] || checkout.length !== 0) return false;
   } else if (value.customer.phase === "to-checkout") {
-    if (!isPair(basket) || checkout.length !== 0) return false;
+    if (!matchesOrder(basket) || checkout.length !== 0) return false;
   } else if (value.customer.phase === "checkout") {
-    if (basket.length !== 0 || !isPair(checkout)) return false;
+    if (basket.length !== 0 || !matchesOrder(checkout)) return false;
   } else if (basket.length !== 0 || checkout.length !== 0) return false;
   if (value.scannedIds.some((id) => typeof id !== "string" || !checkout.some((item) => item.id === id))
     || new Set(value.scannedIds).size !== value.scannedIds.length) return false;
@@ -729,7 +856,9 @@ function validateWorldState(value: unknown, version: 3 | 4 | 5): value is SimSta
     if (!isRecord(transaction) || !isInteger(transaction.customerNumber) || transaction.customerNumber <= previousCustomerNumber
       || transaction.customerNumber > value.customer.number || transaction.id !== `sale-${transaction.customerNumber}`
       || transactionIds.has(transaction.id) || !isInteger(transaction.amountPence)
-      || !Array.isArray(transaction.itemIds) || transaction.itemIds.length !== 2 || new Set(transaction.itemIds).size !== 2) return false;
+      || !Array.isArray(transaction.itemIds)
+      || (version === 6 ? transaction.itemIds.length < 1 || transaction.itemIds.length > 2 : transaction.itemIds.length !== 2)
+      || new Set(transaction.itemIds).size !== transaction.itemIds.length) return false;
     if (transaction.customerNumber === value.customer.number && value.customer.phase !== "leaving" && value.customer.phase !== "complete") return false;
     const goods: SimItem[] = [];
     for (const id of transaction.itemIds) {
@@ -738,7 +867,10 @@ function validateWorldState(value: unknown, version: 3 | 4 | 5): value is SimSta
       soldIds.add(item.id);
       goods.push(item);
     }
-    if (!isPair(goods) || transaction.amountPence !== goods.reduce((sum, item) => sum + PRODUCTS[item.productId].pricePence, 0)) return false;
+    if ((version === 6 ? new Set(goods.map((item) => item.productId)).size !== goods.length
+      : !LEGACY_PRODUCT_IDS.every((productId) => goods.some((item) => item.productId === productId)))
+      || transaction.amountPence !== goods.reduce((sum, item) => sum + PRODUCTS[item.productId].pricePence, 0)) return false;
+    if (version === 6 && transaction.customerNumber === value.customer.number && !matchesOrder(goods)) return false;
     transactionIds.add(transaction.id);
     grossPence += transaction.amountPence;
     previousCustomerNumber = transaction.customerNumber;
@@ -758,7 +890,7 @@ const SUMMARY_FIELDS = [
 ] as const;
 
 /** The ledger proves each item source, purchase quantity, paid sale, daily carry and cash balance. */
-function validateEconomyState(value: unknown, version: 4 | 5): value is EconomySnapshot {
+function validateEconomyState(value: unknown, version: 4 | 5 | 6): value is EconomySnapshot {
   if (!validateWorldState(value, version) || value.schemaVersion === 3) return false;
   if (value.customerSeed !== undefined && (!isInteger(value.customerSeed) || value.customerSeed < 0 || value.customerSeed > 0xffffffff)) return false;
   if (value.openingKind !== "first-day" && value.openingKind !== "legacy-s0") return false;
@@ -776,7 +908,7 @@ function validateEconomyState(value: unknown, version: 4 | 5): value is EconomyS
   const sourceIds = new Set<string>();
   const sourceDay = new Map<string, number>();
   if (value.openingKind === "legacy-s0") {
-    for (const productId of PRODUCT_IDS) for (let number = 1; number <= 4; number += 1) {
+    for (const productId of LEGACY_PRODUCT_IDS) for (let number = 1; number <= 4; number += 1) {
       const id = `${productId}-${number}`;
       if (itemById.get(id)?.productId !== productId || itemById.get(id)?.location.kind === "delivery") return false;
       sourceIds.add(id);
@@ -786,17 +918,30 @@ function validateEconomyState(value: unknown, version: 4 | 5): value is EconomyS
   const purchaseIds = new Set<string>();
   let purchaseDay = 1;
   let purchaseSpendPence = 0;
+  const expectedCrateIds = new Set<string>(LEGACY_PRODUCT_IDS.map(crateIdFor));
   for (const purchase of value.purchases) {
-    if (!isRecord(purchase) || !validOrderId(purchase.id) || purchaseIds.has(purchase.id) || !validPairs(purchase.pairs)
+    if (!isRecord(purchase) || !validOrderId(purchase.id) || purchaseIds.has(purchase.id)
       || !isInteger(purchase.dayNumber) || purchase.dayNumber < purchaseDay || purchase.dayNumber > value.day.number
-      || purchase.amountPence !== purchase.pairs * PURCHASE_PAIR_COST_PENCE || !Array.isArray(purchase.itemIds)) return false;
-    const receivedDay = version === 5 ? purchase.receivedDay : purchase.dayNumber;
+      || !Array.isArray(purchase.itemIds)) return false;
+    let lines: PurchaseLine[];
+    if (version === 6) {
+      const normalized = normalizeSelection(purchase.lines);
+      if (normalized.reason || !Array.isArray(purchase.lines) || !sameLines(purchase.lines, normalized.lines)) return false;
+      lines = normalized.lines;
+      if (purchase.pairs !== undefined && (!validPairs(purchase.pairs) || !sameLines(lines, pairLines(purchase.pairs)))) return false;
+    } else {
+      if (!validPairs(purchase.pairs)) return false;
+      lines = pairLines(purchase.pairs);
+    }
+    if (purchase.amountPence !== lines.reduce((sum, line) => sum + PRODUCTS[line.productId].costPence * line.quantity, 0)) return false;
+    const receivedDay = version >= 5 ? purchase.receivedDay : purchase.dayNumber;
     if (receivedDay !== null && (!isInteger(receivedDay) || receivedDay !== purchase.dayNumber)) return false;
     if (receivedDay === null && (purchase.dayNumber !== value.day.number || value.day.phase === "settled")) return false;
-    const expectedIds = purchaseItemIds(purchase.id, purchase.pairs);
+    const expectedIds = purchaseItemIds(purchase.id, lines);
+    const expectedProducts = lines.flatMap((line) => Array.from({ length: line.quantity }, () => line.productId));
     if (purchase.itemIds.length !== expectedIds.length || purchase.itemIds.some((id, index) => id !== expectedIds[index])) return false;
     for (const [index, id] of expectedIds.entries()) {
-      const expectedProduct = index < purchase.pairs ? "milk" : "bread";
+      const expectedProduct = expectedProducts[index]!;
       const item = itemById.get(id);
       if (sourceIds.has(id) || item?.productId !== expectedProduct) return false;
       if (receivedDay === null) {
@@ -806,10 +951,12 @@ function validateEconomyState(value: unknown, version: 4 | 5): value is EconomyS
       sourceDay.set(id, receivedDay ?? Infinity);
     }
     purchaseIds.add(purchase.id);
+    if (receivedDay !== null) for (const line of lines) expectedCrateIds.add(crateIdFor(line.productId));
     purchaseDay = purchase.dayNumber;
     purchaseSpendPence += purchase.amountPence;
   }
   if (sourceIds.size !== value.items.length || value.items.some((item) => !sourceIds.has(item.id))) return false;
+  if (version === 6 && (value.crates.length !== expectedCrateIds.size || value.crates.some((crate) => !expectedCrateIds.has(crate.id)))) return false;
   for (const productId of PRODUCT_IDS) {
     const held = value.held;
     const reserved = held.kind === "item" && held.returnTo.kind === "crate" && held.returnTo.crateId === crateIdFor(productId) ? 1 : 0;
@@ -877,6 +1024,10 @@ export function validateV4SimState(value: unknown): value is SimStateV4 {
   return validateEconomyState(value, 4) && value.schemaVersion === 4;
 }
 
-export function validateSimState(value: unknown): value is SimState {
+export function validateV5SimState(value: unknown): value is SimStateV5 {
   return validateEconomyState(value, 5) && value.schemaVersion === 5;
+}
+
+export function validateSimState(value: unknown): value is SimState {
+  return validateEconomyState(value, 6) && value.schemaVersion === 6;
 }

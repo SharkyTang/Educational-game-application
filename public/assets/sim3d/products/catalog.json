@@ -4,7 +4,7 @@
   "origin": "bottom-centre",
   "front": "-Z",
   "source": "Project-authored procedural Babylon.js geometry and PBR materials; milk/bread retain their recorded texture sources.",
-  "gameplayNote": "Only milk and bread are integrated with S1 orders, inventory and audio. Other models are library assets, not completed teaching tasks.",
+  "gameplayNote": "All 30 products are integrated with selectable procurement, delivery, stocking and checkout. Recorded word and phrase audio remains available only for milk and bread; other products use optional browser speech in the game. Model integration is not evidence of language mastery.",
   "factory": "src/sim3d/product-library/index.ts#createProductAsset",
   "categories": [
     {
@@ -105,7 +105,7 @@
       "modelReady": true,
       "modelUrl": "/assets/sim3d/products/water.glb",
       "thumbnailUrl": "/assets/sim3d/products/water.png",
-      "gameplay": "library-only",
+      "gameplay": "active",
       "audio": null
     },
     {
@@ -126,7 +126,7 @@
       "modelReady": true,
       "modelUrl": "/assets/sim3d/products/orange-juice.glb",
       "thumbnailUrl": "/assets/sim3d/products/orange-juice.png",
-      "gameplay": "library-only",
+      "gameplay": "active",
       "audio": null
     },
     {
@@ -147,7 +147,7 @@
       "modelReady": true,
       "modelUrl": "/assets/sim3d/products/cola.glb",
       "thumbnailUrl": "/assets/sim3d/products/cola.png",
-      "gameplay": "library-only",
+      "gameplay": "active",
       "audio": null
     },
     {
@@ -168,7 +168,7 @@
       "modelReady": true,
       "modelUrl": "/assets/sim3d/products/crisps.glb",
       "thumbnailUrl": "/assets/sim3d/products/crisps.png",
-      "gameplay": "library-only",
+      "gameplay": "active",
       "audio": null
     },
     {
@@ -189,7 +189,7 @@
       "modelReady": true,
       "modelUrl": "/assets/sim3d/products/biscuits.glb",
       "thumbnailUrl": "/assets/sim3d/products/biscuits.png",
-      "gameplay": "library-only",
+      "gameplay": "active",
       "audio": null
     },
     {
@@ -210,7 +210,7 @@
       "modelReady": true,
       "modelUrl": "/assets/sim3d/products/chocolate.glb",
       "thumbnailUrl": "/assets/sim3d/products/chocolate.png",
-      "gameplay": "library-only",
+      "gameplay": "active",
       "audio": null
     },
     {
@@ -231,7 +231,7 @@
       "modelReady": true,
       "modelUrl": "/assets/sim3d/products/yoghurt.glb",
       "thumbnailUrl": "/assets/sim3d/products/yoghurt.png",
-      "gameplay": "library-only",
+      "gameplay": "active",
       "audio": null
     },
     {
@@ -252,7 +252,7 @@
       "modelReady": true,
       "modelUrl": "/assets/sim3d/products/cheese.glb",
       "thumbnailUrl": "/assets/sim3d/products/cheese.png",
-      "gameplay": "library-only",
+      "gameplay": "active",
       "audio": null
     },
     {
@@ -273,7 +273,7 @@
       "modelReady": true,
       "modelUrl": "/assets/sim3d/products/butter.glb",
       "thumbnailUrl": "/assets/sim3d/products/butter.png",
-      "gameplay": "library-only",
+      "gameplay": "active",
       "audio": null
     },
     {
@@ -294,7 +294,7 @@
       "modelReady": true,
       "modelUrl": "/assets/sim3d/products/eggs.glb",
       "thumbnailUrl": "/assets/sim3d/products/eggs.png",
-      "gameplay": "library-only",
+      "gameplay": "active",
       "audio": null
     },
     {
@@ -315,7 +315,7 @@
       "modelReady": true,
       "modelUrl": "/assets/sim3d/products/apple.glb",
       "thumbnailUrl": "/assets/sim3d/products/apple.png",
-      "gameplay": "library-only",
+      "gameplay": "active",
       "audio": null
     },
     {
@@ -336,7 +336,7 @@
       "modelReady": true,
       "modelUrl": "/assets/sim3d/products/banana.glb",
       "thumbnailUrl": "/assets/sim3d/products/banana.png",
-      "gameplay": "library-only",
+      "gameplay": "active",
       "audio": null
     },
     {
@@ -357,7 +357,7 @@
       "modelReady": true,
       "modelUrl": "/assets/sim3d/products/orange.glb",
       "thumbnailUrl": "/assets/sim3d/products/orange.png",
-      "gameplay": "library-only",
+      "gameplay": "active",
       "audio": null
     },
     {
@@ -378,7 +378,7 @@
       "modelReady": true,
       "modelUrl": "/assets/sim3d/products/tomato.glb",
       "thumbnailUrl": "/assets/sim3d/products/tomato.png",
-      "gameplay": "library-only",
+      "gameplay": "active",
       "audio": null
     },
     {
@@ -399,7 +399,7 @@
       "modelReady": true,
       "modelUrl": "/assets/sim3d/products/potato.glb",
       "thumbnailUrl": "/assets/sim3d/products/potato.png",
-      "gameplay": "library-only",
+      "gameplay": "active",
       "audio": null
     },
     {
@@ -420,7 +420,7 @@
       "modelReady": true,
       "modelUrl": "/assets/sim3d/products/carrot.glb",
       "thumbnailUrl": "/assets/sim3d/products/carrot.png",
-      "gameplay": "library-only",
+      "gameplay": "active",
       "audio": null
     },
     {
@@ -441,7 +441,7 @@
       "modelReady": true,
       "modelUrl": "/assets/sim3d/products/lettuce.glb",
       "thumbnailUrl": "/assets/sim3d/products/lettuce.png",
-      "gameplay": "library-only",
+      "gameplay": "active",
       "audio": null
     },
     {
@@ -462,7 +462,7 @@
       "modelReady": true,
       "modelUrl": "/assets/sim3d/products/cucumber.glb",
       "thumbnailUrl": "/assets/sim3d/products/cucumber.png",
-      "gameplay": "library-only",
+      "gameplay": "active",
       "audio": null
     },
     {
@@ -483,7 +483,7 @@
       "modelReady": true,
       "modelUrl": "/assets/sim3d/products/cereal.glb",
       "thumbnailUrl": "/assets/sim3d/products/cereal.png",
-      "gameplay": "library-only",
+      "gameplay": "active",
       "audio": null
     },
     {
@@ -504,7 +504,7 @@
       "modelReady": true,
       "modelUrl": "/assets/sim3d/products/pasta.glb",
       "thumbnailUrl": "/assets/sim3d/products/pasta.png",
-      "gameplay": "library-only",
+      "gameplay": "active",
       "audio": null
     },
     {
@@ -525,7 +525,7 @@
       "modelReady": true,
       "modelUrl": "/assets/sim3d/products/rice.glb",
       "thumbnailUrl": "/assets/sim3d/products/rice.png",
-      "gameplay": "library-only",
+      "gameplay": "active",
       "audio": null
     },
     {
@@ -546,7 +546,7 @@
       "modelReady": true,
       "modelUrl": "/assets/sim3d/products/flour.glb",
       "thumbnailUrl": "/assets/sim3d/products/flour.png",
-      "gameplay": "library-only",
+      "gameplay": "active",
       "audio": null
     },
     {
@@ -567,7 +567,7 @@
       "modelReady": true,
       "modelUrl": "/assets/sim3d/products/sugar.glb",
       "thumbnailUrl": "/assets/sim3d/products/sugar.png",
-      "gameplay": "library-only",
+      "gameplay": "active",
       "audio": null
     },
     {
@@ -588,7 +588,7 @@
       "modelReady": true,
       "modelUrl": "/assets/sim3d/products/tea.glb",
       "thumbnailUrl": "/assets/sim3d/products/tea.png",
-      "gameplay": "library-only",
+      "gameplay": "active",
       "audio": null
     },
     {
@@ -609,7 +609,7 @@
       "modelReady": true,
       "modelUrl": "/assets/sim3d/products/coffee.glb",
       "thumbnailUrl": "/assets/sim3d/products/coffee.png",
-      "gameplay": "library-only",
+      "gameplay": "active",
       "audio": null
     },
     {
@@ -630,7 +630,7 @@
       "modelReady": true,
       "modelUrl": "/assets/sim3d/products/soap.glb",
       "thumbnailUrl": "/assets/sim3d/products/soap.png",
-      "gameplay": "library-only",
+      "gameplay": "active",
       "audio": null
     },
     {
@@ -651,7 +651,7 @@
       "modelReady": true,
       "modelUrl": "/assets/sim3d/products/shampoo.glb",
       "thumbnailUrl": "/assets/sim3d/products/shampoo.png",
-      "gameplay": "library-only",
+      "gameplay": "active",
       "audio": null
     },
     {
@@ -672,7 +672,7 @@
       "modelReady": true,
       "modelUrl": "/assets/sim3d/products/tissues.glb",
       "thumbnailUrl": "/assets/sim3d/products/tissues.png",
-      "gameplay": "library-only",
+      "gameplay": "active",
       "audio": null
     }
   ]

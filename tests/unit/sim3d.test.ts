@@ -191,12 +191,14 @@ describe("3D S0 conserved physical inventory", () => {
 });
 
 describe("3D customer, scanning and transactional payment", () => {
-  it("requires both products on display but never requires English progress to open", () => {
+  it("requires stocked goods, accepts a single SKU and never requires English progress to open", () => {
     const initial = createInitialSimState();
     expect(reduceSim(initial, { type: "OPEN_STORE" }).changed).toBe(false);
     let state = act(initial, { type: "TAKE_ITEM", itemId: "milk-1" });
     state = act(state, { type: "STOCK", productId: "milk", slot: 0 });
-    expect(reduceSim(state, { type: "OPEN_STORE" }).changed).toBe(false);
+    const singleProduct = reduceSim(state, { type: "OPEN_STORE" });
+    expect(singleProduct.changed).toBe(true);
+    expect(singleProduct.state.customer.shoppingList).toEqual(["milk"]);
     state = act(state, { type: "TAKE_ITEM", itemId: "bread-1" });
     state = act(state, { type: "STOCK", productId: "bread", slot: 0 });
     state = act(state, { type: "OPEN_STORE" });

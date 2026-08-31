@@ -137,6 +137,9 @@ body.product-library-page { margin: 0; background: #f7f4eb; }
 .product-library-app .pl-model-stats { display: grid; grid-template-columns: 1fr 1.2fr 1fr; gap: 7px; padding: 12px 0; border-top: 1px solid var(--pl-line); border-bottom: 1px solid var(--pl-line); }
 .product-library-app .pl-model-stats strong { display: block; color: #536744; font: 400 19px/1.3 Georgia, "Times New Roman", serif; font-variant-numeric: tabular-nums; }
 .product-library-app .pl-model-stats span { display: block; margin-top: 4px; color: #859076; font-size: 9px; }
+.product-library-app .pl-shop-supply { display: block; margin-top: 17px; padding: 12px; border: 1px solid var(--pl-green); border-radius: 5px; color: #fff9eb; background: var(--pl-green); text-align: center; text-decoration: none; font-size: 12px; line-height: 1.6; }
+.product-library-app .pl-shop-supply:hover { background: #274333; }
+.product-library-app .pl-shop-supply:focus-visible { outline: 3px solid #b09247; outline-offset: 3px; }
 .product-library-app .pl-export-actions { display: grid; gap: 8px; margin-top: 17px; }
 .product-library-app .pl-primary,
 .product-library-app .pl-secondary { display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-height: 40px; padding: 9px 13px; border: 1px solid #d0d7c1; border-radius: 5px; color: #496140; background: #f8f7ef; font-size: 11px; font-weight: 550; text-decoration: none; }

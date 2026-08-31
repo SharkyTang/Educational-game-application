@@ -7,11 +7,14 @@ import {
 import { CustomerActors } from "./customerActors";
 import { CUSTOMER_EXIT_STOP_SECONDS, CUSTOMER_STOP_SECONDS, CUSTOMER_WALK_SPEED } from "./customerSelection";
 import { PointerAccess, type PointerMode } from "./pointerAccess";
-import { createCrate, createPlayerHands, createProduct, createShop, setCheckoutDisplay, setShelfCapacity, setShopSignState } from "./assets";
+import { createCrate, createPlayerHands, createShop, setCheckoutDisplay, setShelfCapacity, setShopSignState } from "./assets";
+import { createCatalogFixtures, createReceivingPads } from "./productFixtures";
+import { basketPlacement, checkoutPlacement, crateDimensions, cratePlacement, findCustomerRoute, fitProduct, PRODUCT_DISPLAYS } from "./productLayout";
+import { crateRestingHeight, measureCrateSupport, ProductVisuals, productDimensions, type CrateSupport } from "./productPresentation";
 import { createStreet, setDeliveryTruckStatus, setStreetVenueStatus, type StreetEnvironment } from "./street";
 import { STREET_VENUES, getVenueProgress, type VenueId } from "./progression";
 import {
-  countAt, canSettleDay, getDaySummary, getDeliverySummary, isWalkablePosition, PRODUCTS, SAFE_DROP_POINTS, type CrateId, type CustomerPhase,
+  countAt, canSettleDay, canStartCustomer, getCheckoutTotal, getCustomerOrder, getShoppingProduct, getDaySummary, getDeliverySummary, isWalkablePosition, PRODUCTS, PRODUCT_IDS, SAFE_DROP_POINTS, type CrateId, type CustomerPhase,
   type PlayerPose, type Position, type ProductId, type SimState,
 } from "./domain";
 
@@ -50,21 +53,6 @@ const KEY_CODES = new Set([
   "KeyW", "KeyA", "KeyS", "KeyD", "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight",
   "KeyI", "KeyJ", "KeyK", "KeyL", "KeyE", "KeyF", "KeyG", "Escape",
 ]);
-const paths: Record<CustomerPhase, Position[]> = {
-  outside: [],
-  "to-milk": [{ x: 0, z: -3.8 }, { x: 0, z: -.65 }, { x: 0, z: 2.72 }],
-  "to-bread": [{ x: .9, z: 2.25 }, { x: 1.65, z: .35 }],
-  "to-checkout": [{ x: .15, z: -.65 }, { x: -.94, z: -2.15 }],
-  checkout: [],
-  leaving: [{ x: 0, z: -3.15 }, { x: 0, z: -5.3 }],
-  complete: [],
-};
-const phaseStart: Record<CustomerPhase, Position> = {
-  outside: { x: 0, z: -5.3 }, "to-milk": { x: 0, z: -4.35 },
-  "to-bread": { x: 0, z: 2.72 }, "to-checkout": { x: 1.65, z: .35 },
-  checkout: { x: -.94, z: -2.15 }, leaving: { x: -.94, z: -2.15 },
-  complete: { x: 0, z: -5.3 },
-};
 
 /** Rendering and embodied input only; inventory and money live in the pure reducer. */
 export class ShopWorld {
@@ -78,17 +66,22 @@ export class ShopWorld {
   private readonly colliders: Collider[] = [];
   private readonly crates = new Map<CrateId, TransformNode>();
   private readonly products = new Map<string, TransformNode>();
+  private readonly productVisuals: ProductVisuals;
+  private readonly occupiedCrates = new Set<CrateId>();
+  private readonly crateSupports: CrateSupport[] = [];
   private readonly shelfSlots: Record<ProductId, Vector3[]>;
   private readonly hands: TransformNode;
   private readonly customer: TransformNode;
   private readonly customerActors: CustomerActors;
   private readonly basket: TransformNode;
-  private readonly inspection: Record<ProductId, TransformNode>;
+  private readonly inspection = new Map<ProductId, TransformNode>();
   private customerPhase: CustomerPhase;
   private route: Position[] = [];
   private routeIndex = 0;
   private arrivalDelay = 0;
   private arrivedRevision = -1;
+  private customerRouteBlocked = false;
+  private customerObstacleSignature = "";
   private active = false;
   private disposed = false;
   private inspectionProduct: ProductId | null = null;
@@ -114,6 +107,7 @@ export class ShopWorld {
     this.engine = new Engine(canvas, true, { stencil: true, preserveDrawingBuffer: false, powerPreference: "high-performance" });
     this.engine.setHardwareScalingLevel(1 / Math.min(window.devicePixelRatio || 1, 1.5));
     this.scene = new Scene(this.engine);
+    this.productVisuals = new ProductVisuals(this.scene);
     this.scene.clearColor = Color4.FromHexString("#dceaf0ff");
     this.scene.fogMode = Scene.FOGMODE_LINEAR;
     this.scene.fogColor = Color3.FromHexString("#dceaf0");
@@ -153,8 +147,10 @@ export class ShopWorld {
       light.diffuse = new Color3(1, .89, .71);
     }
 
-    const shop = createShop(this.scene);
+    const shop = createShop(this.scene, { catalogFixtures: true });
     this.colliders.push(...shop.colliders);
+    const fixtures = createCatalogFixtures(this.scene, PRODUCTS);
+    this.colliders.push(...fixtures.colliders);
     this.street = createStreet(this.scene);
     this.colliders.push(...this.street.colliders);
     for (const target of this.street.targets) {
@@ -163,59 +159,37 @@ export class ShopWorld {
         ...(target.venueId ? { venueId: target.venueId } : {}),
         position: { x: target.position.x, z: target.position.z },
       });
+      if (target.kind === "drop-zone") this.crateSupports.push(measureCrateSupport(target.position, target.mesh));
     }
     // A delivery is physical interaction with the stopped vehicle, not an invisible trigger.
     this.tag(this.street.truck, { id: "daily-delivery", kind: "delivery" });
     this.resetTruck(initialState.day.phase === "settled" ? "away" : initialState.purchases.length > 0 || initialState.day.phase === "open" ? "parked" : "arriving");
-    const slots = shop.root.metadata?.shelfSlots as Record<ProductId, Vector3[]> | undefined;
-    this.shelfSlots = slots ?? {
-      milk: Array.from({ length: 8 }, (_, i) => new Vector3(-.3 + (i % 4) * .2, i < 4 ? .94 : 1.4, 3.68)),
-      bread: Array.from({ length: 8 }, (_, i) => new Vector3(2.65, i < 4 ? .82 : 1.3, -.21 + (i % 4) * .34)),
-    };
-    for (const target of shop.targets) {
+    this.shelfSlots = Object.fromEntries(PRODUCT_IDS.map((id) => [id, PRODUCT_DISPLAYS[id].slots.map((point) => new Vector3(point.x, point.y, point.z))])) as Record<ProductId, Vector3[]>;
+    for (const target of [...shop.targets, ...fixtures.targets, ...createReceivingPads(this.scene, SAFE_DROP_POINTS)]) {
       this.tag(target.mesh, {
         id: target.id, kind: target.kind,
-        ...(target.productId ? { productId: target.productId } : {}),
+        ...("productId" in target && target.productId ? { productId: target.productId } : {}),
         position: { x: target.position.x, z: target.position.z },
       });
-    }
-    for (const crate of initialState.crates) {
-      const root = createCrate(this.scene, crate.productId, crate.id);
-      this.crates.set(crate.id, root);
-    }
-    for (const item of initialState.items) {
-      const root = createProduct(this.scene, item.productId, item.id);
-      this.products.set(item.id, root);
+      if (target.kind === "drop-zone") this.crateSupports.push(measureCrateSupport(target.position, target.mesh));
     }
     this.hands = createPlayerHands(this.scene);
     this.hands.parent = this.camera;
     this.hands.position.set(0, -.39, .80);
     this.hands.setEnabled(false);
     this.setViewModel(this.hands, true);
-    this.inspection = {
-      milk: createProduct(this.scene, "milk", "inspect-milk"),
-      bread: createProduct(this.scene, "bread", "inspect-bread"),
-    };
-    for (const [id, root] of Object.entries(this.inspection)) {
-      root.parent = this.camera;
-      root.position.set(-.10, id === "milk" ? -.17 : -.09, .60);
-      root.scaling.setAll(id === "milk" ? 1.5 : 1.2);
-      this.setViewModel(root, true);
-      root.setEnabled(false);
-    }
-    this.layoutInspection();
     this.customer = new TransformNode("customer-path-root", this.scene);
     this.customerActors = new CustomerActors(this.scene, this.shadow, this.customer);
     this.basket = this.createBasket();
     this.basket.parent = this.customer;
     this.basket.position.set(.34, .47, .04);
     this.customerPhase = initialState.customer.phase;
-    this.setCustomerRoute(true);
     this.syncInventory();
+    this.setCustomerRoute(true);
     this.syncStreet();
     this.ensureSafePose();
     for (const mesh of this.scene.meshes) {
-      if (mesh.renderingGroupId === 2) continue;
+      if (mesh.renderingGroupId === 2 || !mesh.isEnabled()) continue;
       mesh.receiveShadows = true;
       if (mesh.getTotalVertices() > 12 && !/glass|pane|floor|wall|ceiling|label|letter|drop-/i.test(mesh.name)) {
         this.shadow.addShadowCaster(mesh, false);
@@ -259,6 +233,7 @@ export class ShopWorld {
 
   setState(state: SimState): void {
     const phaseChanged = this.customerPhase !== state.customer.phase;
+    const newCustomer = this.state.customer.number !== state.customer.number;
     const newDay = this.state.day.number !== state.day.number;
     const freshRun = state.revision < this.state.revision && state.purchases.length === 0 && state.transactions.length === 0;
     const closed = this.state.day.phase !== "settled" && state.day.phase === "settled";
@@ -266,8 +241,9 @@ export class ShopWorld {
     this.customerActors.select(state);
     if (newDay || freshRun) this.resetTruck(state.day.phase === "settled" ? "away" : "arriving");
     else if (closed && this.truckPhase !== "away") this.truckPhase = "departing";
-    if (phaseChanged) this.setCustomerRoute(false);
     this.syncInventory();
+    const obstacles = this.crateObstacleSignature();
+    if (phaseChanged || newCustomer || freshRun || obstacles !== this.customerObstacleSignature) this.setCustomerRoute(freshRun || newCustomer);
     this.syncStreet();
     this.ensureSafePose();
     this.updateTarget();
@@ -275,34 +251,57 @@ export class ShopWorld {
 
   private syncInventory(): void {
     const state = this.state;
-    const visibleIds = new Set(state.items.filter((item) => item.location.kind !== "sold" && item.location.kind !== "delivery").map((item) => item.id));
+    // Old transactions can contain thousands of sold items. They never create scene models.
+    const activeItems = state.items.filter((item) => item.location.kind !== "sold" && item.location.kind !== "delivery");
+    const visibleIds = new Set(activeItems.map((item) => item.id));
+    const crateContents = new Map<CrateId, typeof activeItems>();
+    const basketItems = activeItems.filter((item) => item.location.kind === "basket");
+    const checkoutItems = activeItems.filter((item) => item.location.kind === "checkout");
+    this.occupiedCrates.clear();
+    for (const item of activeItems) if (item.location.kind === "crate") {
+      const siblings = crateContents.get(item.location.crateId) ?? [];
+      siblings.push(item); crateContents.set(item.location.crateId, siblings);
+      this.occupiedCrates.add(item.location.crateId);
+    }
     for (const [id, root] of this.products) {
-      if (visibleIds.has(id)) continue;
+      if (visibleIds.has(id)) { root.parent = null; continue; }
       for (const mesh of root.getChildMeshes()) this.shadow.removeShadowCaster(mesh, false);
       root.dispose(false, false);
       this.products.delete(id);
     }
+    const crateIds = new Set(state.crates.map((crate) => crate.id));
+    for (const [id, root] of this.crates) if (!crateIds.has(id)) {
+      for (const mesh of root.getChildMeshes()) this.shadow.removeShadowCaster(mesh, false);
+      root.dispose(false, false); this.crates.delete(id);
+    }
     for (const crate of state.crates) {
-      const root = this.crates.get(crate.id)!;
       const held = state.held.kind === "crate" && state.held.crateId === crate.id;
+      const visible = this.occupiedCrates.has(crate.id) || held;
+      let root = this.crates.get(crate.id);
+      if (!root && !visible) continue;
+      if (!root) {
+        root = createCrate(this.scene, crate.productId, crate.id);
+        this.crates.set(crate.id, root);
+        for (const mesh of root.getChildMeshes()) if (mesh.getTotalVertices() > 12) this.shadow.addShadowCaster(mesh, false);
+      }
       root.parent = held ? this.camera : null;
-      root.position.set(held ? 0 : crate.position.x, held ? -.39 : .025, held ? .80 : crate.position.z);
+      root.position.set(held ? 0 : crate.position.x, held ? -.39 : crateRestingHeight(crate.position, this.crateSupports), held ? .80 : crate.position.z);
       root.rotation.set(0, 0, 0);
-      root.setEnabled(!held || !this.inspectionProduct);
+      root.setEnabled(visible && (!held || !this.inspectionProduct));
       this.setViewModel(root, held);
       this.tag(root, { id: crate.id, kind: "crate", crateId: crate.id, productId: crate.productId });
     }
-    for (const item of state.items) {
-      if (item.location.kind === "sold" || item.location.kind === "delivery") continue;
+    for (const item of activeItems) {
       let root = this.products.get(item.id);
       if (!root) {
-        root = createProduct(this.scene, item.productId, item.id);
+        root = this.productVisuals.create(item.productId, item.id);
         this.products.set(item.id, root);
         for (const mesh of root.getChildMeshes()) {
           mesh.receiveShadows = true;
           if (mesh.getTotalVertices() > 12 && !/glass|label|letter/i.test(mesh.name)) this.shadow.addShadowCaster(mesh, false);
         }
       }
+      const dimensions = productDimensions(root);
       const location = item.location;
       root.parent = null;
       root.rotation.set(0, 0, 0);
@@ -312,13 +311,12 @@ export class ShopWorld {
       this.tag(root, { id: item.id, kind: "item", itemId: item.id, productId: item.productId });
       if (location.kind === "crate") {
         const crate = this.crates.get(location.crateId)!;
-        const siblings = state.items.filter((entry) => entry.location.kind === "crate" && entry.location.crateId === location.crateId);
+        const siblings = crateContents.get(location.crateId)!;
         const index = siblings.findIndex((entry) => entry.id === item.id);
-        const withinLayer = index % 4;
-        const layer = Math.floor(index / 4);
+        const layout = cratePlacement(item.productId, dimensions, index);
         root.parent = crate;
-        if (item.productId === "milk") root.position.set((withinLayer % 2 - .5) * .15, .025 + layer * .265, (Math.floor(withinLayer / 2) - .5) * .14);
-        else root.position.set((withinLayer % 2 - .5) * .31, .025 + layer * .16, (Math.floor(withinLayer / 2) - .5) * .18);
+        root.position.set(layout.position.x, layout.position.y, layout.position.z);
+        root.scaling.setAll(layout.scale);
         const isHeld = state.held.kind === "crate" && state.held.crateId === location.crateId;
         this.setViewModel(root, isHeld);
         this.tag(root, { id: location.crateId, kind: "crate", crateId: location.crateId, productId: item.productId });
@@ -326,32 +324,43 @@ export class ShopWorld {
         root.parent = this.camera;
         root.position.set(.20, -.37, .53);
         root.rotation.y = -.22;
+        root.scaling.setAll(fitProduct(dimensions, { width: .30, height: .34, depth: .30 }));
         root.setEnabled(!this.inspectionProduct);
         this.setViewModel(root, true);
       } else if (location.kind === "shelf") {
         root.position.copyFrom(this.shelfSlots[item.productId][location.slot]!);
-        if (item.productId === "bread") root.rotation.y = Math.PI / 2;
+        const layout = PRODUCT_DISPLAYS[item.productId];
+        root.rotation.y = layout.yaw;
+        root.scaling.setAll(fitProduct(dimensions, layout.maxSize));
       } else if (location.kind === "basket") {
+        const layout = basketPlacement(dimensions, basketItems.findIndex((entry) => entry.id === item.id), basketItems.length);
         root.parent = this.basket;
-        root.position.set(item.productId === "milk" ? -.10 : .06, .045, 0);
-        root.scaling.setAll(.8);
-        if (item.productId === "bread") root.rotation.z = -.14;
+        root.position.set(layout.position.x, layout.position.y, layout.position.z);
+        root.scaling.setAll(layout.scale);
+        root.rotation.y = layout.yaw;
+        // Goods in an NPC's basket are not a free source for the player's inventory.
+        for (const mesh of root.getChildMeshes()) mesh.isPickable = false;
       } else if (location.kind === "checkout") {
         const scanned = state.scannedIds.includes(item.id);
-        root.position.set(scanned ? -2.30 : -1.77, 1.012, item.productId === "milk" ? -2.31 : -1.93);
-        root.rotation.y = Math.PI / 2;
+        const order = getCustomerOrder(state);
+        const index = Math.max(0, order.length ? order.indexOf(item.productId) : checkoutItems.findIndex((entry) => entry.id === item.id));
+        const layout = checkoutPlacement(dimensions, index, scanned);
+        root.position.set(layout.position.x, layout.position.y, layout.position.z);
+        root.scaling.setAll(layout.scale); root.rotation.y = layout.yaw;
       }
     }
     this.hands.setEnabled(state.held.kind === "crate" && !this.inspectionProduct);
     const heldProduct = state.held.kind === "crate" ? state.crates.find((crate) => state.held.kind === "crate" && crate.id === state.held.crateId)?.productId : null;
-    this.hands.scaling.x = heldProduct === "bread" ? .70 / .46 : 1;
+    this.hands.scaling.x = heldProduct ? crateDimensions(heldProduct).width / .46 : 1;
+    this.hands.scaling.z = heldProduct ? crateDimensions(heldProduct).depth / .36 : 1;
     const transaction = state.transactions.find((sale) => sale.customerNumber === state.customer.number);
     const paid = !!transaction && (state.customer.phase === "leaving" || state.customer.phase === "complete");
     setShopSignState(this.scene, state.day.phase === "open");
     setCheckoutDisplay(this.scene, {
-      scanned: paid ? 2 : state.scannedIds.length,
+      scanned: paid ? transaction.itemIds.length : state.scannedIds.length,
       totalPence: paid ? transaction.amountPence : state.items.filter((item) => state.scannedIds.includes(item.id)).reduce((total, item) => total + PRODUCTS[item.productId].pricePence, 0),
       paid,
+      itemCount: paid ? transaction.itemIds.length : getCustomerOrder(state).length,
     });
     setShelfCapacity(this.scene, state.upgraded);
   }
@@ -395,18 +404,48 @@ export class ShopWorld {
 
   private setCustomerRoute(initial: boolean): void {
     const phase = this.state.customer.phase;
-    const freshCustomer = phase === "to-milk";
+    const order = getCustomerOrder(this.state);
+    const freshCustomer = phase === "to-milk" && this.customerPhase !== "to-milk";
     if (initial || freshCustomer) {
-      const start = phaseStart[phase];
+      const first = order[0] ? PRODUCT_DISPLAYS[order[0]].approach : { x: 0, z: 2.72 };
+      const lastProduct = order.at(-1);
+      const last = lastProduct ? PRODUCT_DISPLAYS[lastProduct].approach : first;
+      const start = phase === "to-milk" ? { x: 0, z: -4.35 }
+        : phase === "to-bread" ? first : phase === "to-checkout" ? last
+          : phase === "checkout" || phase === "leaving" ? { x: -.94, z: -2.15 } : { x: 0, z: -5.3 };
       this.customer.position.set(start.x, 0, start.z);
     }
     this.customerPhase = phase;
     this.customer.setEnabled(phase !== "outside" && phase !== "complete");
-    this.route = paths[phase].map((point) => ({ ...point }));
+    const product = getShoppingProduct(this.state);
+    const destination = product ? PRODUCT_DISPLAYS[product].approach
+      : phase === "to-checkout" ? { x: -.94, z: -2.15 }
+        : phase === "leaving" ? { x: 0, z: -5.3 } : null;
+    const obstacles = this.customerColliders();
+    const route = destination ? findCustomerRoute({ x: this.customer.position.x, z: this.customer.position.z }, destination, obstacles) : [];
+    this.customerRouteBlocked = route === null;
+    this.route = route ?? [];
+    this.customerObstacleSignature = this.crateObstacleSignature();
+    if (this.customerRouteBlocked) this.callbacks.onStatus("顾客通道被货箱挡住了。先把箱子搬到安全卸货点，顾客会继续前往对应货架。");
     this.routeIndex = 0;
     this.arrivalDelay = 0;
     this.arrivedRevision = -1;
     if (phase === "checkout") this.customer.rotation.y = -Math.PI / 2;
+  }
+
+  private crateObstacleSignature(): string {
+    return this.state.crates.filter((crate) => this.occupiedCrates.has(crate.id) && !(this.state.held.kind === "crate" && this.state.held.crateId === crate.id))
+      .map((crate) => `${crate.id}:${crate.position.x}:${crate.position.z}`).join("|");
+  }
+
+  private customerColliders(): Collider[] {
+    const boxes = [...this.colliders];
+    for (const crate of this.state.crates) {
+      if (!this.occupiedCrates.has(crate.id) || this.state.held.kind === "crate" && this.state.held.crateId === crate.id) continue;
+      const size = crateDimensions(crate.productId);
+      boxes.push({ minX: crate.position.x - size.width / 2, maxX: crate.position.x + size.width / 2, minZ: crate.position.z - size.depth / 2, maxZ: crate.position.z + size.depth / 2 });
+    }
+    return boxes;
   }
 
   private createBasket(): TransformNode {
@@ -440,6 +479,7 @@ export class ShopWorld {
 
   private updateCustomer(dt: number): void {
     if (!this.active || !this.customer.isEnabled()) return;
+    if (this.customerRouteBlocked) { this.playCustomerAnimation(false); return; }
     const next = this.route[this.routeIndex];
     if (next) {
       const dx = next.x - this.customer.position.x;
@@ -465,8 +505,11 @@ export class ShopWorld {
       return;
     }
     this.playCustomerAnimation(false);
-    if (this.customerPhase === "to-milk") this.customer.rotation.y = 0;
-    if (this.customerPhase === "to-bread") this.customer.rotation.y = Math.PI / 2;
+    const shoppingProduct = getShoppingProduct(this.state);
+    if (shoppingProduct) {
+      const shelf = PRODUCT_DISPLAYS[shoppingProduct].slots[0]!;
+      this.customer.rotation.y = Math.atan2(shelf.x - this.customer.position.x, shelf.z - this.customer.position.z);
+    }
     if (this.customerPhase === "checkout" || this.customerPhase === "to-checkout") this.customer.rotation.y = -Math.PI / 2;
     if (["to-milk", "to-bread", "to-checkout", "leaving"].includes(this.customerPhase)) {
       this.arrivalDelay += dt;
@@ -525,7 +568,7 @@ export class ShopWorld {
     window.addEventListener("mouseup", () => { this.drag = null; }, options);
     window.addEventListener("mousemove", (event) => {
       if (this.inspectionProduct && this.drag) {
-        const root = this.inspection[this.inspectionProduct];
+        const root = this.inspection.get(this.inspectionProduct)!;
         root.rotation.y += (event.clientX - this.drag.x) * .011;
         root.rotation.x = Math.max(-.75, Math.min(.75, root.rotation.x + (event.clientY - this.drag.y) * .006));
         this.drag = { x: event.clientX, y: event.clientY };
@@ -583,7 +626,18 @@ export class ShopWorld {
 
   inspect(productId: ProductId | null): void {
     this.inspectionProduct = productId;
-    for (const [id, root] of Object.entries(this.inspection)) {
+    if (productId && !this.inspection.has(productId)) {
+      const visual = this.productVisuals.create(productId, `inspect-${productId}-visual`);
+      const dimensions = productDimensions(visual);
+      const pivot = new TransformNode(`inspect-${productId}`, this.scene);
+      pivot.parent = this.camera;
+      pivot.metadata = { dimensions, productId };
+      visual.parent = pivot; visual.position.y = -dimensions.height / 2;
+      this.setViewModel(pivot, true);
+      this.inspection.set(productId, pivot);
+      this.layoutInspection();
+    }
+    for (const [id, root] of this.inspection) {
       root.setEnabled(id === productId);
       if (id === productId) root.rotation.set(-.04, -.16, 0);
     }
@@ -592,10 +646,10 @@ export class ShopWorld {
 
   private layoutInspection(): void {
     const wide = this.canvas.clientWidth >= 760;
-    for (const id of ["milk", "bread"] as const) {
-      const root = this.inspection[id];
-      root.position.set(wide ? .115 : 0, wide ? (id === "milk" ? -.14 : -.06) : (id === "milk" ? .055 : .095), wide ? .64 : .74);
-      root.scaling.setAll(wide ? (id === "milk" ? 1.4 : 1.12) : (id === "milk" ? 1.1 : .94));
+    for (const root of this.inspection.values()) {
+      const dimensions = productDimensions(root);
+      root.position.set(wide ? .115 : 0, wide ? .015 : .115, wide ? .64 : .74);
+      root.scaling.setAll(fitProduct(dimensions, { width: wide ? .35 : .31, height: wide ? .35 : .30, depth: .30 }, 5));
     }
   }
 
@@ -644,9 +698,10 @@ export class ShopWorld {
       if (x > box.minX - radius && x < box.maxX + radius && z > box.minZ - radius && z < box.maxZ + radius) return false;
     }
     for (const crate of this.state.crates) {
+      if (!this.occupiedCrates.has(crate.id)) continue;
       if (this.state.held.kind === "crate" && this.state.held.crateId === crate.id) continue;
-      const halfWidth = crate.productId === "milk" ? .23 : .35;
-      if (Math.abs(x - crate.position.x) < halfWidth + radius && Math.abs(z - crate.position.z) < .20 + radius) return false;
+      const size = crateDimensions(crate.productId);
+      if (Math.abs(x - crate.position.x) < size.width / 2 + radius && Math.abs(z - crate.position.z) < size.depth / 2 + radius) return false;
     }
     if (this.street && this.truckPhase !== "away"
       && Math.abs(x - this.street.truck.position.x) < 2.45 + radius
@@ -681,8 +736,8 @@ export class ShopWorld {
       action = this.state.held.kind === "none" ? "抱起货箱" : "先放下手里的货物";
       inspectable = remaining > 0;
     } else if (data.kind === "shelf") {
-      label = data.productId === "milk" ? "Milk · 冷藏区" : "Bread · 面包架";
-      action = this.state.held.kind === "none" ? "先抱起对应货箱" : `摆放一${data.productId === "milk" ? "盒牛奶" : "袋面包"}`;
+      label = data.productId ? `${product?.nameEn} · ${PRODUCT_DISPLAYS[data.productId].shelfName}` : "商品货架";
+      action = this.state.held.kind === "none" ? "先抱起对应货箱" : `摆放一件${product?.nameZh ?? "商品"}`;
       inspectable = !!data.productId && countAt(this.state, data.productId, "shelf") > 0;
     } else if (data.kind === "item") {
       const item = this.state.items.find((entry) => entry.id === data.itemId);
@@ -697,7 +752,7 @@ export class ShopWorld {
     } else if (data.kind === "counter") {
       label = "Checkout · 收银台";
       if (this.state.customer.phase !== "checkout") action = "等待顾客带商品结账";
-      else action = this.state.scannedIds.length < 2 ? "扫描下一件商品" : "刷卡收款 · £4.00";
+      else action = this.state.scannedIds.length < getCustomerOrder(this.state).length ? "扫描下一件商品" : `刷卡收款 · £${(getCheckoutTotal(this.state) / 100).toFixed(2)}`;
       inspectable = false;
     } else if (data.kind === "open-sign") {
       label = "Open / Closed · 营业牌";
@@ -756,8 +811,8 @@ export class ShopWorld {
       if (!state.items.some((item) => item.location.kind === "crate" && item.location.crateId === crate.id)) {
         point = this.getNearestDrop() ?? SAFE_DROP_POINTS[2]!; title = "安全落箱点 · 按 G";
       } else {
-        point = crate.productId === "milk" ? { x: 0, z: 3.6 } : { x: 2.65, z: .3 };
-        title = crate.productId === "milk" ? "Milk 牛奶冰柜" : "Bread 面包架";
+        point = PRODUCT_DISPLAYS[crate.productId].approach;
+        title = `${PRODUCTS[crate.productId].nameEn} · ${PRODUCT_DISPLAYS[crate.productId].shelfName}`;
       }
     } else if (delivery.pendingUnits > 0) {
       if (this.truckPhase === "arriving") {
@@ -767,14 +822,13 @@ export class ShopWorld {
       point = { x: this.street.truck.position.x, z: this.street.truck.position.z + 1 };
       title = `门口送货车 · 按 E 签收 ${delivery.pendingUnits} 件`;
     } else if (state.customer.phase === "outside" || state.customer.phase === "complete") {
-      const productId = (["milk", "bread"] as ProductId[]).find((id) => countAt(state, id, "shelf") === 0);
+      const productId = PRODUCT_IDS.find((id) => countAt(state, id, "crate") > 0 && countAt(state, id, "shelf") === 0);
       if (productId) {
-        if (!state.items.some((item) => item.productId === productId && item.location.kind !== "sold")) {
-          this.callbacks.onGuide?.("按 B 进货 · 每份牛奶与面包 £2.30");
-          return;
-        }
         point = state.crates.find((crate) => crate.productId === productId)!.position;
         title = `${PRODUCTS[productId].nameZh}货箱 · 向下看`;
+      } else if (!canStartCustomer(state)) {
+        this.callbacks.onGuide?.("按 B 选择商品进货 · 签收后至少上架一种商品，再开门接客");
+        return;
       } else if (state.day.phase === "open") {
         this.callbacks.onGuide?.("货架已备好 · 下一位顾客即将进店");
         return;

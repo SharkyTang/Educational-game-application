@@ -89,6 +89,7 @@
 .s3-receipt-total strong { font-family: Georgia, "Times New Roman", serif; font-size: 22px; font-weight: 500; }
 .s3-receipt .s3-muted { font-size: 10px; }
 .s3-customer-actions { display: flex; flex-wrap: wrap; gap: 6px; margin: 9px 0 5px; }
+.s3-customer-order { margin-top: 7px !important; color: #657157; font-size: 10px; line-height: 1.6; }
 .s3-customer-actions .s3-secondary-button { min-height: 36px; padding: 6px 10px; font-size: 11px !important; gap: 5px; }
 #s3-customer-audio-status { margin-bottom: 10px; }
 .s3-business-nav { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 5px; margin-top: 8px; }
@@ -189,10 +190,45 @@
 .s3-venue-requirements strong { flex-shrink: 0; color: #6e705c; font-size: 11px; font-weight: 500; font-variant-numeric: tabular-nums; }
 .s3-venue-requirements .s3-requirement-complete strong { color: #3e6b45; }
 .s3-street-walk-note { margin-top: 12px !important; color: #6e7962; font-size: 10px; line-height: 1.8; }
-.s3-purchase-options { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; margin: 16px 0; }
-.s3-purchase-options button { min-height: 69px; padding: 9px 6px; border: 1px solid #cdd5bd; border-radius: 6px; color: #3a5b40; background: #f5f7ec; font-size: 16px; font-weight: 600; }
-.s3-purchase-options small { display: block; margin-top: 4px; font-size: 10px; font-weight: 400; }
-.s3-purchase-options button[aria-pressed="true"] { border: 2px solid #45684a; padding: 8px 5px; background: #e5edd8; }
+.s3-pause-supply { width: min(980px, calc(100vw - 32px)); }
+.s3-supply-filters { display: grid; grid-template-columns: minmax(0, 1fr) 145px; gap: 12px; margin-top: 16px; }
+.s3-supply-filters label { display: grid; gap: 5px; color: #718067; font-size: 10px; }
+.s3-supply-filters input,
+.s3-supply-filters select { width: 100%; min-height: 38px; padding: 8px 10px; border: 1px solid #bdc9b1; border-radius: 5px; color: #354d3a; background: #fffef6; font-size: 12px; }
+.s3-supply-list-tools { display: flex; align-items: center; gap: 12px; margin: 8px 0; }
+.s3-supply-list-tools > p { flex: 1; font-size: 10px; }
+.s3-supply-list-tools > label { display: inline-flex; align-items: center; gap: 4px; color: #617256; font-size: 10px; white-space: nowrap; }
+.s3-supply-list-tools input { accent-color: #426b45; }
+.s3-supply-list-tools .s3-text-button { flex-shrink: 0; min-height: 30px; font-size: 10px !important; }
+.s3-supply-catalog { max-height: min(36vh, 340px); min-height: 92px; overflow-y: auto; overscroll-behavior: contain; border: 1px solid #d8decb; border-radius: 7px; background: #fffdf5; scrollbar-color: #bbc6aa #f7f6ec; scrollbar-gutter: stable; }
+.s3-supply-catalog:focus-visible { outline: 3px solid #c79237; outline-offset: 3px; }
+.s3-supply-product { display: grid; grid-template-columns: 54px minmax(100px, 1fr) 70px 110px; align-items: center; gap: 10px; min-height: 84px; padding: 10px; border-bottom: 1px solid #e0e5d5; }
+.s3-supply-product:last-child { border-bottom: 0; }
+.s3-supply-product-selected { background: #eef3e4; }
+.s3-supply-product > img { display: block; width: 54px; height: 54px; object-fit: contain; border: 1px solid #e4e5d8; border-radius: 5px; background: #f5f3e7; }
+.s3-supply-product-info { min-width: 0; }
+.s3-supply-product-info > strong { display: block; font-size: 13px; font-weight: 650; }
+.s3-product-en { display: block; margin-top: 1px; color: #748064; font: 400 12px/1.3 Georgia, serif; overflow-wrap: anywhere; }
+.s3-supply-product-info > p { display: flex; flex-wrap: wrap; gap: 2px 9px; margin-top: 5px !important; color: #7c876f; font-size: 9px; }
+.s3-supply-product-prices { font-size: 10px; }
+.s3-supply-product-prices strong { color: #3b563d; font-size: 12px; font-weight: 650; font-variant-numeric: tabular-nums; }
+.s3-supply-product-prices small { display: block; margin-top: 4px; color: #85866f; font-size: 10px; }
+.s3-quantity-stepper { display: grid; grid-template-columns: 30px minmax(0, 1fr) 30px; overflow: hidden; border: 1px solid #b8c4a8; border-radius: 5px; background: #fffdf2; }
+.s3-quantity-stepper button { min-width: 0; min-height: 35px; padding: 0; border: 0; color: #45653e; background: #edf2e4; font-size: 17px; }
+.s3-quantity-stepper button:hover:not(:disabled) { background: #dce8ce; }
+.s3-quantity-stepper input { width: 100%; min-width: 0; padding: 3px 0; border: 0; border-right: 1px solid #d1d9c3; border-left: 1px solid #d1d9c3; border-radius: 0; color: #314c38; background: #fffef7; text-align: center; font-size: 13px; font-variant-numeric: tabular-nums; appearance: textfield; -moz-appearance: textfield; }
+.s3-quantity-stepper input::-webkit-inner-spin-button,
+.s3-quantity-stepper input::-webkit-outer-spin-button { margin: 0; -webkit-appearance: none; }
+.s3-quantity-stepper input[aria-invalid="true"] { color: #9b4736; background: #fff0e9; }
+.s3-supply-line-total { display: block; margin-top: 5px; color: #76846a; text-align: right; font-size: 9px; }
+.s3-supply-line-error { grid-column: 2 / -1; color: #8c503b; font-size: 10px; line-height: 1.6; }
+.s3-supply-empty { padding: 25px 18px; color: #718166; font-size: 12px; line-height: 1.8; text-align: center; }
+.s3-supply-checkout { margin-top: 16px; padding: 16px; border: 1px solid #c6d1b7; border-radius: 7px; background: #f2f5e8; }
+.s3-supply-summary { color: #3c5c3d; font-size: 14px; font-weight: 650; line-height: 1.6; }
+.s3-supply-account { margin: 11px 0 !important; }
+.s3-supply-checkout > .s3-primary-button { width: 100%; }
+.s3-supply-checkout .s3-inline-reason { min-height: 36px; font-size: 10px; }
+.s3-supply-capacity-note { margin-top: 10px !important; color: #7a836a; font-size: 9px; line-height: 1.7; }
 .s3-account-lines { margin: 15px 0; font-size: 12px; }
 .s3-account-lines > div { display: flex; justify-content: space-between; gap: 18px; padding: 8px 0; border-bottom: 1px solid #e2e5d6; }
 .s3-account-lines dt { color: #6f7c63; }
@@ -311,8 +347,6 @@
   .s3-pause-heading h2 { font-size: 20px; }
   .s3-pause-heading .s3-primary-button { min-height: 38px; padding: 8px 12px; font-size: 11px !important; }
   .s3-settings-grid { grid-template-columns: 1fr 128px; }
-  .s3-purchase-options { gap: 5px; }
-  .s3-purchase-options small { font-size: 9px; }
   .s3-management-tabs button { padding: 6px 4px; font-size: 11px; }
   .s3-management-tabs { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .s3-venue-cards { grid-template-columns: 1fr; }
@@ -323,6 +357,33 @@
   .s3-street-growth { padding: 12px; }
   .s3-street-growth-heading { align-items: flex-end; }
   .s3-street-growth-heading p { max-width: 150px; }
+}
+
+@media (min-width: 880px) {
+  #s3-panel-supply { display: grid; grid-template-columns: minmax(0, 1fr) 215px; column-gap: 20px; align-items: start; }
+  #s3-panel-supply > * { grid-column: 1; }
+  #s3-panel-supply > .s3-supply-checkout { grid-column: 2; grid-row: 1 / span 10; position: sticky; top: 0; margin-top: 0; }
+  #s3-panel-supply .s3-delivery-steps { margin: 12px 0 8px; }
+  #s3-panel-supply .s3-delivery-steps li { padding: 7px 5px; }
+}
+
+@media (max-width: 650px) {
+  .s3-supply-filters { grid-template-columns: minmax(0, 1fr) 105px; gap: 8px; }
+  .s3-supply-filters input,
+  .s3-supply-filters select { padding: 7px; font-size: 11px; }
+  .s3-supply-list-tools { flex-wrap: wrap; gap: 4px 12px; }
+  .s3-supply-list-tools > p { flex-basis: 100%; }
+  .s3-supply-list-tools .s3-text-button { margin-left: auto; }
+  .s3-supply-product { grid-template-columns: 43px minmax(0, 1fr) 101px; gap: 7px; padding: 9px; }
+  .s3-supply-product > img { grid-row: 1 / 3; width: 43px; height: 48px; }
+  .s3-supply-product-info { grid-column: 2; grid-row: 1; }
+  .s3-supply-product-info > strong { font-size: 12px; }
+  .s3-product-en { font-size: 11px; }
+  .s3-supply-product-prices { grid-column: 2; grid-row: 2; display: flex; flex-wrap: wrap; gap: 3px 8px; }
+  .s3-supply-product-prices small { margin: 0; font-size: 9px; }
+  .s3-supply-quantity { grid-column: 3; grid-row: 1 / 3; }
+  .s3-supply-line-error { grid-column: 1 / -1; }
+  .s3-supply-checkout { padding: 14px; }
 }
 
 /* In the narrow Codex side panel, keep the physical product above its word card. */

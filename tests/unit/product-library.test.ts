@@ -5,13 +5,13 @@ import { PRODUCT_IDS, createFirstDayState, validateSimState } from "../../src/si
 import { existsSync, readFileSync } from "node:fs";
 
 describe("reusable product catalogue", () => {
-  it("has 30 unique model definitions in six categories, without adding 28 unimplemented gameplay SKUs", () => {
+  it("uses the same 30 unique product identities in the model library and shop economy", () => {
     expect(PRODUCT_ASSET_IDS).toHaveLength(30);
     expect(new Set(PRODUCT_ASSET_IDS).size).toBe(30);
     expect(PRODUCT_CATEGORIES).toHaveLength(6);
-    expect(PRODUCT_ASSET_LIST.filter((entry) => entry.gameplay === "active").map((entry) => entry.id)).toEqual(["milk", "bread"]);
-    expect(PRODUCT_ASSET_LIST.filter((entry) => entry.gameplay === "library-only")).toHaveLength(28);
-    expect(PRODUCT_IDS).toEqual(["milk", "bread"]);
+    expect(PRODUCT_ASSET_LIST.filter((entry) => entry.gameplay === "active").map((entry) => entry.id)).toEqual(PRODUCT_IDS);
+    expect(PRODUCT_ASSET_LIST.filter((entry) => entry.gameplay === "library-only")).toHaveLength(0);
+    expect(PRODUCT_IDS).toEqual(PRODUCT_ASSET_IDS);
     expect(validateSimState(createFirstDayState())).toBe(true);
     for (const asset of PRODUCT_ASSET_LIST) {
       expect(asset.id).toMatch(/^[a-z]+(?:-[a-z]+)*$/);
@@ -55,13 +55,15 @@ describe("reusable product catalogue", () => {
         expect(asset.gameplay).toBe("active");
         expect(existsSync(`public${asset.audio.wordUrl}`)).toBe(true);
         expect(existsSync(`public${asset.audio.phraseUrl}`)).toBe(true);
-      } else expect(asset.gameplay).toBe("library-only");
+      } else expect(asset.gameplay).toBe("active");
     }
+    expect(PRODUCT_ASSET_LIST.filter((asset) => asset.audio)).toHaveLength(2);
     const manifest = JSON.parse(JSON.stringify(productLibraryManifest()));
     expect(manifest.products).toHaveLength(30);
     expect(manifest.units).toBe("metres");
     expect(manifest.origin).toBe("bottom-centre");
-    expect(manifest.gameplayNote).toContain("Only milk and bread");
+    expect(manifest.gameplayNote).toContain("All 30 products");
+    expect(manifest.gameplayNote).toContain("optional browser speech");
     expect(manifest.products.some((entry: Record<string, unknown>) => "pricePence" in entry)).toBe(false);
     // The library's routing branch must precede either save-owning game app.
     const source = readFileSync("src/main.ts", "utf8");

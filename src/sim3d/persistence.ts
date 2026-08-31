@@ -1,9 +1,11 @@
-import { createFirstDayState, migrateLegacySimState, migrateV4SimState, validateLegacySimState, validateSimState, validateV4SimState, type SimState } from "./domain";
+import { createFirstDayState, migrateLegacySimState, migrateV4SimState, migrateV5SimState, validateLegacySimState, validateSimState, validateV4SimState, validateV5SimState, type SimState } from "./domain";
 
 /** Deliberately separate from the older 2D storage namespace; never migrate/delete it. */
-export const SIM_STORAGE_KEY = "english-high-street:sim3d:v5";
+export const SIM_STORAGE_KEY = "english-high-street:sim3d:v6";
 export const SIM_BACKUP_KEY = `${SIM_STORAGE_KEY}:backup`;
 /** These old keys are read-only migration sources, never overwritten or removed. */
+export const SIM_V5_STORAGE_KEY = "english-high-street:sim3d:v5";
+export const SIM_V5_BACKUP_KEY = `${SIM_V5_STORAGE_KEY}:backup`;
 export const SIM_V4_STORAGE_KEY = "english-high-street:sim3d:v4";
 export const SIM_V4_BACKUP_KEY = `${SIM_V4_STORAGE_KEY}:backup`;
 /** Share the old writer lock so a still-open v4 page cannot mutate the migration source. */
@@ -18,7 +20,7 @@ export interface StorageLike {
 
 export interface SimLoadResult {
   state: SimState;
-  source: "primary" | "backup" | "v4" | "v4-backup" | "legacy" | "legacy-backup" | "new";
+  source: "primary" | "backup" | "v5" | "v5-backup" | "v4" | "v4-backup" | "legacy" | "legacy-backup" | "new";
   warning?: string;
 }
 
@@ -73,10 +75,19 @@ function parseV4Snapshot(raw: string | null): SimState | undefined {
   } catch { return undefined }
 }
 
-const PREVIOUS_KEYS = [SIM_V4_STORAGE_KEY, SIM_V4_BACKUP_KEY, SIM_LEGACY_STORAGE_KEY, SIM_LEGACY_BACKUP_KEY] as const;
+function parseV5Snapshot(raw: string | null): SimState | undefined {
+  if (raw === null) return undefined;
+  try {
+    const value: unknown = JSON.parse(raw);
+    return validateV5SimState(value) ? migrateV5SimState(value) : undefined;
+  } catch { return undefined }
+}
+
+const PREVIOUS_KEYS = [SIM_V5_STORAGE_KEY, SIM_V5_BACKUP_KEY, SIM_V4_STORAGE_KEY, SIM_V4_BACKUP_KEY, SIM_LEGACY_STORAGE_KEY, SIM_LEGACY_BACKUP_KEY] as const;
 type PreviousSnapshots = Record<(typeof PREVIOUS_KEYS)[number], string | null>;
 function readPreviousSnapshots(storage: StorageLike): PreviousSnapshots {
   return {
+    [SIM_V5_STORAGE_KEY]: storage.getItem(SIM_V5_STORAGE_KEY), [SIM_V5_BACKUP_KEY]: storage.getItem(SIM_V5_BACKUP_KEY),
     [SIM_V4_STORAGE_KEY]: storage.getItem(SIM_V4_STORAGE_KEY), [SIM_V4_BACKUP_KEY]: storage.getItem(SIM_V4_BACKUP_KEY),
     [SIM_LEGACY_STORAGE_KEY]: storage.getItem(SIM_LEGACY_STORAGE_KEY), [SIM_LEGACY_BACKUP_KEY]: storage.getItem(SIM_LEGACY_BACKUP_KEY),
   };
@@ -99,17 +110,24 @@ function loadSnapshot(primaryRaw: string | null, backupRaw: string | null, previ
     source: "backup",
     warning: "当前存档不可用，已恢复上一份有效快照；最近一次操作可能需要重做。",
   };
+  const v5 = parseV5Snapshot(previous[SIM_V5_STORAGE_KEY]);
+  const v5Backup = v5 ? undefined : parseV5Snapshot(previous[SIM_V5_BACKUP_KEY]);
+  if (v5 || v5Backup) return {
+    state: (v5 ?? v5Backup)!, source: v5 ? "v5" : "v5-backup",
+    warning: `${primaryRaw !== null || backupRaw !== null ? "当前自选进货存档不可恢复，已回到保留的 v5 进度；最近的进货与营业进度可能丢失。" : v5Backup ? "旧 v5 主存档不可用，已从旧备份迁移；最近一次操作可能需要重做。" : "已迁移原有小店配送进度。"}现金、已售商品、待收订单与购物流程均保留，不会重复扣款或发货；旧档未修改。`,
+  };
+  const newerProgressExists = primaryRaw !== null || backupRaw !== null || previous[SIM_V5_STORAGE_KEY] !== null || previous[SIM_V5_BACKUP_KEY] !== null;
   const v4 = parseV4Snapshot(previous[SIM_V4_STORAGE_KEY]);
   const v4Backup = v4 ? undefined : parseV4Snapshot(previous[SIM_V4_BACKUP_KEY]);
   if (v4 || v4Backup) return {
     state: (v4 ?? v4Backup)!, source: v4 ? "v4" : "v4-backup",
-    warning: `${primaryRaw !== null || backupRaw !== null ? "当前配送存档不可恢复，已回到保留的 v4 进度；最近的收货与营业进度可能丢失。" : v4Backup ? "旧 v4 主存档不可用，已从旧备份迁移；最近一次操作可能需要重做。" : "已迁移原有小店进度。"}已购货物保持原位，历史采购视为已收货，不会重复扣款或发货；旧档未修改。`,
+    warning: `${newerProgressExists ? "当前配送存档不可恢复，已回到保留的 v4 进度；最近的收货与营业进度可能丢失。" : v4Backup ? "旧 v4 主存档不可用，已从旧备份迁移；最近一次操作可能需要重做。" : "已迁移原有小店进度。"}已购货物保持原位，历史采购视为已收货，不会重复扣款或发货；旧档未修改。`,
   };
   const legacy = parseLegacySnapshot(previous[SIM_LEGACY_STORAGE_KEY]);
   const legacyBackup = legacy ? undefined : parseLegacySnapshot(previous[SIM_LEGACY_BACKUP_KEY]);
   if (legacy || legacyBackup) return {
     state: (legacy ?? legacyBackup)!, source: legacy ? "legacy" : "legacy-backup",
-    warning: `${primaryRaw !== null || backupRaw !== null || previous[SIM_V4_STORAGE_KEY] !== null || previous[SIM_V4_BACKUP_KEY] !== null ? "当前首日存档不可恢复，已回到保留的旧 3D 进度；之后的采购与营业进度可能丢失。" : legacyBackup ? "旧 3D 主存档不可用，已从旧备份迁移；最近一次操作可能需要重做。" : "已迁移旧 3D 试玩进度。"}货物、现金和交易均保留，旧档未修改；不会额外发放首日本金。`,
+    warning: `${newerProgressExists || previous[SIM_V4_STORAGE_KEY] !== null || previous[SIM_V4_BACKUP_KEY] !== null ? "当前首日存档不可恢复，已回到保留的旧 3D 进度；之后的采购与营业进度可能丢失。" : legacyBackup ? "旧 3D 主存档不可用，已从旧备份迁移；最近一次操作可能需要重做。" : "已迁移旧 3D 试玩进度。"}货物、现金和交易均保留，旧档未修改；不会额外发放首日本金。`,
   };
   return {
     state: createFirstDayState(),
@@ -127,6 +145,7 @@ export function parseImportedSimState(raw: string): SimState {
   try { value = JSON.parse(raw) }
   catch { throw new Error("文件不是可读取的 JSON，当前进度未改变。") }
   if (validateSimState(value)) return value;
+  if (validateV5SimState(value)) return migrateV5SimState(value);
   if (validateV4SimState(value)) return migrateV4SimState(value);
   if (validateLegacySimState(value)) return migrateLegacySimState(value);
   throw new Error("存档的版本、库存或金额校验未通过，当前进度未改变。旧版 2D 存档不能直接导入此小样。");
@@ -202,7 +221,7 @@ export class SimSaveSession {
     const previous = readPreviousSnapshots(this.storage);
     const result = loadSnapshot(raw, this.storage.getItem(SIM_BACKUP_KEY), previous);
     this.expectedRaw = raw;
-    this.expectedMigrationSources = ["v4", "v4-backup", "legacy", "legacy-backup"].includes(result.source) ? previous : null;
+    this.expectedMigrationSources = ["v5", "v5-backup", "v4", "v4-backup", "legacy", "legacy-backup"].includes(result.source) ? previous : null;
     this.loaded = true;
     return result;
   }

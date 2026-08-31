@@ -1,10 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
-import { createFirstDayState, createInitialSimState, getDeliverySummary, reduceSim, type SimState } from "../../src/sim3d/domain";
+import { createFirstDayState, createInitialSimState, getDeliverySummary, PRODUCTS, reduceSim, type ProductId, type SimState } from "../../src/sim3d/domain";
 import type { InteractionTarget } from "../../src/sim3d/world";
 
 // Pure UI decisions do not require a WebGL engine or a browser document.
 vi.mock("../../src/sim3d/world", () => ({ ShopWorld: class {} }));
-import { commandForInteraction, inspectableProduct, interactionInReach } from "../../src/sim3d/App3D";
+import { commandForInteraction, inspectableProduct, interactionInReach, parsePurchaseQuantities } from "../../src/sim3d/App3D";
 
 function target(overrides: Partial<InteractionTarget> = {}): InteractionTarget {
   return { id: "milk-crate", kind: "crate", crateId: "milk-crate", productId: "milk", label: "牛奶货箱", action: "抱起货箱", inspectable: true, distance: 1.3, ...overrides };
@@ -135,5 +135,43 @@ describe("3D accessible interaction decisions", () => {
     expect(getDeliverySummary(state).pendingUnits).toBe(2);
     expect(state.transactions).toHaveLength(3);
     expect(commandForInteraction(state, target({ kind: "open-sign", inspectable: false }))).toEqual({ management: "day" });
+  });
+});
+
+describe("manually selected procurement quantities", () => {
+  it("never fills an empty cart or converts zero into a default purchase", () => {
+    expect(parsePurchaseQuantities(new Map())).toEqual({ lines: [], invalidProductIds: [] });
+    expect(parsePurchaseQuantities(new Map([["milk", "0"], ["bread", "0"]]))).toEqual({ lines: [], invalidProductIds: [] });
+  });
+
+  it("keeps independently chosen product amounts and does not add milk or bread", () => {
+    expect(parsePurchaseQuantities(new Map<ProductId, string>([["soap", "1"], ["apple", "2"]]))).toEqual({
+      lines: [{ productId: "apple", quantity: 2 }, { productId: "soap", quantity: 1 }], invalidProductIds: [],
+    });
+  });
+
+  it.each(["", "-1", "1.5", "NaN", "Infinity", "9", "abc"])("flags invalid quantity %s even with another valid selection", (value) => {
+    const selected = parsePurchaseQuantities(new Map<ProductId, string>([["milk", "1"], ["apple", value]]));
+    expect(selected.invalidProductIds).toEqual(["apple"]);
+    expect(selected.error).toContain("苹果");
+    expect(selected.error).toContain("0–8");
+    expect(selected.lines).toEqual([{ productId: "milk", quantity: 1 }]);
+  });
+
+  it("scans and pays for a single newly integrated product without assuming a second item", () => {
+    let state = reduceSim(createFirstDayState(), { type: "PURCHASE_STOCK", orderId: "one-soap", lines: [{ productId: "soap", quantity: 1 }] }).state;
+    state = reduceSim(state, { type: "RECEIVE_DELIVERY" }).state;
+    const item = state.items.find((entry) => entry.productId === "soap")!;
+    state = reduceSim(state, { type: "TAKE_ITEM", itemId: item.id }).state;
+    expect(inspectableProduct(state, null)).toBe("soap");
+    state = reduceSim(state, { type: "STOCK", productId: "soap", slot: 0 }).state;
+    state = reduceSim(state, { type: "OPEN_STORE" }).state;
+    for (let stop = 0; stop < 3 && state.customer.phase !== "checkout"; stop += 1) state = reduceSim(state, { type: "CUSTOMER_ADVANCE" }).state;
+    const counter = target({ id: "counter", kind: "counter", inspectable: false });
+    expect(commandForInteraction(state, counter).command).toEqual({ type: "SCAN", itemId: item.id });
+    state = reduceSim(state, commandForInteraction(state, counter).command!).state;
+    expect(commandForInteraction(state, counter).command).toEqual({ type: "PAY", success: true });
+    state = reduceSim(state, commandForInteraction(state, counter).command!).state;
+    expect(state.transactions[0]?.amountPence).toBe(PRODUCTS.soap.pricePence);
   });
 });

@@ -149,4 +149,17 @@ describe("3D shop asset contracts", () => {
     setShopSignState(scene, true);
     expect(inward.metadata.displayState).toBe("open");
   });
+
+  it("shows the amount on the card reader after a one-product order is fully scanned", () => {
+    createShop(scene);
+    setCheckoutDisplay(scene, { scanned: 1, itemCount: 1, totalPence: 120, paid: false });
+    const reader = scene.getMeshByName("reader-screen")!;
+    const texture = (reader.material as PBRMaterial).albedoTexture as DynamicTexture;
+    const drawText = texture.getContext().fillText;
+    expect(drawText).toHaveBeenCalledWith("£1.20", expect.any(Number), expect.any(Number), expect.any(Number));
+    expect(drawText).toHaveBeenCalledWith("Tap to pay", expect.any(Number), expect.any(Number), expect.any(Number));
+    const screen = scene.getMeshByName("pos-screen")!;
+    const tillTexture = (screen.material as PBRMaterial).albedoTexture as DynamicTexture;
+    expect(tillTexture.getContext().fillText).toHaveBeenCalledWith("1 / 1 items scanned", expect.any(Number), expect.any(Number), expect.any(Number));
+  });
 });

@@ -14,7 +14,7 @@ function command(state: SimState, action: SimCommand): SimState {
 }
 
 function stockedFixture(): SimState {
-  let state = command(createFirstDayState(), { type: "PURCHASE_STOCK", orderId: "e2e-first-delivery", pairs: 3 });
+  let state = command(createFirstDayState(), { type: "PURCHASE_STOCK", orderId: "e2e-first-delivery", lines: [{ productId: "milk", quantity: 3 }, { productId: "bread", quantity: 3 }] });
   state = command(state, { type: "RECEIVE_DELIVERY" });
   for (const productId of ["milk", "bread"] as const) {
     state = command(state, { type: "PICK_CRATE", crateId: `${productId}-crate` });
@@ -85,11 +85,16 @@ test("3D first day: procurement quotes, insufficient funds and upgrades are reac
   await startFresh(page);
   await page.keyboard.press("b");
   await expect(page.locator("#s3-panel-supply")).toBeVisible();
-  await page.locator("#s3-buy-six").click();
+  await expect(page.locator("#s3-purchase")).toBeDisabled();
+  await expect(page.locator("#s3-quantity-milk")).toHaveValue("0");
+  await expect(page.locator("#s3-quantity-bread")).toHaveValue("0");
+  await page.locator("#s3-quantity-milk").fill("6");
+  await page.locator("#s3-quantity-bread").fill("6");
   await expect(page.locator("#s3-supply-total")).toHaveText("−£13.80");
   await expect(page.locator("#s3-supply-error")).toContainText("资金不足");
   await expect(page.locator("#s3-purchase")).toBeDisabled();
-  await page.locator("#s3-buy-three").click();
+  await page.locator("#s3-quantity-milk").fill("3");
+  await page.locator("#s3-quantity-bread").fill("3");
   await expect(page.locator("#s3-supply-total")).toHaveText("−£6.90");
   await expect(page.locator("#s3-supply-after")).toHaveText("£5.10");
   await page.locator("#s3-purchase").click();
@@ -115,7 +120,7 @@ test("3D daily delivery: paid goods survive reload, require the real van and are
   test.setTimeout(100_000);
   const errors = monitorRuntime(page);
   await startFresh(page);
-  let pending = command(createFirstDayState(), { type: "PURCHASE_STOCK", orderId: "street-delivery", pairs: 3 });
+  let pending = command(createFirstDayState(), { type: "PURCHASE_STOCK", orderId: "street-delivery", lines: [{ productId: "milk", quantity: 3 }, { productId: "bread", quantity: 3 }] });
   pending = command(pending, { type: "SAVE_POSE", pose: { x: 3, z: -6.9, yaw: Math.PI, pitch: .06 } });
   await importFixture(page, pending);
   await expect(page.locator("#s3-cash")).toHaveText("£5.10");
@@ -128,13 +133,15 @@ test("3D daily delivery: paid goods survive reload, require the real van and are
   await expect(page.locator("#s3-target-action")).toContainText("查看今日进货单");
   await expect(page.locator("#s3-cash")).toHaveText("£5.10");
   await expect(page.locator("#s3-sold")).toContainText("库存 6 件");
-  await expect(page.locator("#s3-milk-stock")).toHaveText("牛奶 0 / 4");
-  await expect(page.locator("#s3-bread-stock")).toHaveText("面包 0 / 4");
+  await expect(page.locator("#s3-shelf-stock")).toHaveText("货架 0 种 · 0 件");
+  await expect(page.locator("#s3-crate-stock")).toHaveText("箱内 6 件");
   // The same physical van opens the order form after receipt, never duplicating the previous delivery.
   await page.keyboard.press("e");
   await expect(page.locator("#s3-panel-supply")).toBeVisible();
-  await expect(page.locator("#s3-supply-summary")).toContainText("牛奶 3 件");
-  await expect(page.locator("#s3-supply-summary")).toContainText("面包 3 件");
+  await expect(page.locator("#s3-supply-inventory-milk")).toHaveText("现货 3 · 架上 0");
+  await expect(page.locator("#s3-supply-inventory-bread")).toHaveText("现货 3 · 架上 0");
+  await expect(page.locator("#s3-quantity-milk")).toHaveValue("0");
+  await expect(page.locator("#s3-quantity-bread")).toHaveValue("0");
   await expect(page.locator("#s3-cash")).toHaveText("£5.10");
   await page.locator("#s3-resume").click();
   await page.reload();
@@ -232,8 +239,7 @@ test("3D first day: a real arriving customer speaks locally, supports replay and
   await expect(page.locator("#s3-word-audio")).toHaveAttribute("src", thanks.src);
   await page.keyboard.press("e");
   await expect(page.locator("#s3-cash")).toHaveText("£9.10");
-  await expect(page.locator("#s3-milk-stock")).toHaveText("牛奶 2 / 4");
-  await expect(page.locator("#s3-bread-stock")).toHaveText("面包 2 / 4");
+  await expect(page.locator("#s3-shelf-stock")).toHaveText("货架 2 种 · 4 件");
   expect(errors).toEqual([]);
 });
 
@@ -341,8 +347,7 @@ test("3D first day: a reducer-completed day settles, expands for £8 and persist
   await expect(page.locator("#s3-start-capital")).toHaveText("£9.10");
   await page.locator("#s3-start-button").click();
   await expect(page.locator("#s3-sold")).toHaveText("今日 0 / 3 单 · 库存 0 件");
-  await expect(page.locator("#s3-milk-stock")).toHaveText("牛奶 0 / 8");
-  await expect(page.locator("#s3-bread-stock")).toHaveText("面包 0 / 8");
+  await expect(page.locator("#s3-shelf-stock")).toHaveText("货架 0 种 · 0 件");
   await page.keyboard.press("u");
   await expect(page.locator("#s3-upgrade")).toBeDisabled();
   await expect(page.locator("#s3-upgrade")).toContainText("已扩容");

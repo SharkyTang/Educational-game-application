@@ -73,7 +73,7 @@ describe("first-day paired purchasing and conserved goods", () => {
   it("opens with £12 capital, two empty reusable crates and no free merchandise", () => {
     const state = createFirstDayState();
     expect(validateSimState(state)).toBe(true);
-    expect(state.schemaVersion).toBe(5);
+    expect(state.schemaVersion).toBe(6);
     expect(state.cashPence).toBe(INITIAL_CAPITAL_PENCE);
     expect(state.items).toEqual([]);
     expect(state.crates).toHaveLength(2);
@@ -93,13 +93,15 @@ describe("first-day paired purchasing and conserved goods", () => {
     expect(new Set(state.items.map((item) => item.id)).size).toBe(6);
     expect(state.purchases).toEqual([{
       id: "opening-delivery", dayNumber: 1, pairs: 3, amountPence: 690, receivedDay: 1,
+      lines: [{ productId: "milk", quantity: 3 }, { productId: "bread", quantity: 3 }],
       itemIds: ["milk-purchase-opening-delivery-1", "milk-purchase-opening-delivery-2", "milk-purchase-opening-delivery-3",
         "bread-purchase-opening-delivery-1", "bread-purchase-opening-delivery-2", "bread-purchase-opening-delivery-3"],
     }]);
     for (const id of ["milk", "bread"] as const) expect(countAt(state, id, "crate")).toBe(3);
     expect(original.cashPence).toBe(1200);
     expect(original.items).toEqual([]);
-    expect(getPurchaseOffer(original, 3)).toEqual({ pairs: 3, costPence: 690, allowed: true });
+    expect(getPurchaseOffer(original, 3)).toEqual({ pairs: 3, costPence: 690, allowed: true, unitCount: 6,
+      lines: [{ productId: "milk", quantity: 3 }, { productId: "bread", quantity: 3 }] });
     expect(getPurchaseOffer(original, 6)).toMatchObject({ allowed: false, costPence: 1380 });
   });
 
@@ -146,7 +148,7 @@ describe("first-day paired purchasing and conserved goods", () => {
     state = act(state, { type: "DROP_HELD", position: state.crates[1]!.position });
     const balance = state.cashPence;
     state = act(state, { type: "RECEIVE_DELIVERY" });
-    expect(state.crates.map((crate) => crate.position)).toEqual(DELIVERY_DROP_POINTS);
+    expect(state.crates.map((crate) => crate.position)).toEqual(DELIVERY_DROP_POINTS.slice(0, 2));
     expect(countAt(state, "bread", "crate")).toBe(3);
     expect(state.cashPence).toBe(balance);
   });
@@ -240,7 +242,7 @@ describe("a complete business day and continued operation", () => {
     state = act(state, { type: "START_NEXT_DAY" });
     expect(state.cashPence).toBe(1710);
     expect(state.day).toMatchObject({ number: 2, phase: "preparing", openingCashPence: 1710, transactionStart: 3, purchaseStart: 1 });
-    expect(state.customer).toEqual({ number: 4, phase: "outside" });
+    expect(state.customer).toEqual({ number: 4, phase: "outside", shoppingList: [] });
     expect(getDaySummary(state).revenuePence).toBe(0);
     expect(getDaySummary(state).procurementPence).toBe(0);
     expect(reduceSim(state, { type: "START_NEXT_DAY" }).state).toBe(state);
@@ -321,7 +323,7 @@ describe("doorstep delivery ownership and receipt", () => {
     const received = act(pending, { type: "RECEIVE_DELIVERY" });
     expect(received.cashPence).toBe(pending.cashPence);
     expect(received.items.map((item) => item.id)).toEqual(pending.items.map((item) => item.id));
-    expect(received.crates.map((crate) => crate.position)).toEqual(DELIVERY_DROP_POINTS);
+    expect(received.crates.map((crate) => crate.position)).toEqual(DELIVERY_DROP_POINTS.slice(0, 2));
     expect(getDeliverySummary(received)).toMatchObject({ pendingOrders: 0, pendingUnits: 0, receivedToday: 1, canReceive: false });
     expect(reduceSim(received, { type: "RECEIVE_DELIVERY" }).state).toBe(received);
     expect(reduceSim(received, { type: "PURCHASE_STOCK", orderId: "doorstep", pairs: 3 }).state).toBe(received);
