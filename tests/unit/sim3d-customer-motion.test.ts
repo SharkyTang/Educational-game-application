@@ -252,18 +252,18 @@ describe("customer phase stops and single arrival notifications", () => {
 });
 
 describe("real render-loop elapsed-time accounting", () => {
-  it("gives NPCs 100 ms at 10 fps in substeps, while player and truck keep their 50 ms cap", () => {
+  it("gives NPCs and the player 100 ms at 10 fps in substeps, while the truck keeps its 50 ms cap", () => {
     const { world, frame, movePlayer, updateTruck } = createMotionWorld();
     const updateCustomer = vi.spyOn(world, "updateCustomer");
     frame(100);
     expect(updateCustomer).toHaveBeenCalledTimes(2);
     expect(updateCustomer.mock.calls.map(([dt]) => dt)).toEqual([.05, .05]);
     expect(world.customer.position.x).toBeCloseTo(CUSTOMER_WALK_SPEED * .1, 8);
-    expect(movePlayer).toHaveBeenCalledExactlyOnceWith(.05);
+    expect(movePlayer.mock.calls.map(([dt]) => dt)).toEqual([.05, .05]);
     expect(updateTruck).toHaveBeenCalledExactlyOnceWith(.05);
   });
 
-  it("caps a multi-second frame at 250 ms for NPCs, never passing more than 50 ms to one movement step", () => {
+  it("caps a multi-second frame at 250 ms for NPCs and the player, never passing more than 50 ms to one movement step", () => {
     const { world, frame, movePlayer, updateTruck } = createMotionWorld();
     const updateCustomer = vi.spyOn(world, "updateCustomer");
     frame(5000);
@@ -272,11 +272,11 @@ describe("real render-loop elapsed-time accounting", () => {
     expect(steps.every((dt) => dt > 0 && dt <= .05)).toBe(true);
     expect(steps.reduce((sum, dt) => sum + dt, 0)).toBeCloseTo(.25, 10);
     expect(world.customer.position.x).toBeCloseTo(CUSTOMER_WALK_SPEED * .25, 8);
-    expect(movePlayer).toHaveBeenCalledExactlyOnceWith(.05);
+    expect(movePlayer.mock.calls.map(([dt]) => dt)).toEqual([.05, .05, .05, .05, .05]);
     expect(updateTruck).toHaveBeenCalledExactlyOnceWith(.05);
   });
 
-  it("accumulates elapsed frame time for the 100 ms onFrame cadence, not the capped player timestep", () => {
+  it("accumulates elapsed frame time for the 100 ms onFrame cadence, not an individual physics substep", () => {
     const { world, frame, onFrame } = createMotionWorld();
     frame(75);
     expect(onFrame).not.toHaveBeenCalled();

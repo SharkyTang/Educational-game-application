@@ -7,6 +7,7 @@ import {
 import { CustomerActors } from "./customerActors";
 import { CUSTOMER_EXIT_STOP_SECONDS, CUSTOMER_STOP_SECONDS, CUSTOMER_WALK_SPEED } from "./customerSelection";
 import { PointerAccess, type PointerMode } from "./pointerAccess";
+import { playerMovementSpeed } from "./playerMovement";
 import { createCrate, createPlayerHands, createShop, setCheckoutDisplay, setShelfCapacity, setShopSignState } from "./assets";
 import { createCatalogFixtures, createReceivingPads } from "./productFixtures";
 import { basketPlacement, checkoutPlacement, crateDimensions, cratePlacement, findCustomerRoute, fitProduct, PRODUCT_DISPLAYS } from "./productLayout";
@@ -52,6 +53,7 @@ const INTERACTION_RANGE = 2.6;
 const KEY_CODES = new Set([
   "KeyW", "KeyA", "KeyS", "KeyD", "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight",
   "KeyI", "KeyJ", "KeyK", "KeyL", "KeyE", "KeyF", "KeyG", "Escape",
+  "ShiftLeft", "ShiftRight",
 ]);
 
 /** Rendering and embodied input only; inventory and money live in the pure reducer. */
@@ -535,11 +537,20 @@ export class ShopWorld {
       else if (event.code === "KeyG") this.callbacks.onDrop();
       else {
         this.keys.add(event.code);
+        // After a pause/Tab release, a fresh direction can still use a Shift
+        // that is physically held; never restore a direction automatically.
+        if (!event.shiftKey) this.keys.delete("Shift");
+        else if (!this.keys.has("ShiftLeft") && !this.keys.has("ShiftRight")) this.keys.add("Shift");
         // A short key tap has a real, small movement; holding continues smoothly by frame time.
-        this.movePlayer(.045);
+        // A modifier changes speed only: pressing Shift must not add an extra step.
+        if (event.code !== "ShiftLeft" && event.code !== "ShiftRight") this.movePlayer(.045);
       }
     }, options);
-    window.addEventListener("keyup", (event) => this.keys.delete(event.code), options);
+    window.addEventListener("keyup", (event) => {
+      this.keys.delete(event.code);
+      if (!event.shiftKey) this.keys.delete("Shift");
+      else if (this.active && !this.keys.has("ShiftLeft") && !this.keys.has("ShiftRight")) this.keys.add("Shift");
+    }, options);
     window.addEventListener("blur", () => {
       this.keys.clear(); this.drag = null;
       if (this.active) this.callbacks.onPause();
@@ -717,7 +728,7 @@ export class ShopWorld {
     const side = down("KeyD", "ArrowRight") - down("KeyA", "ArrowLeft");
     if (!forward && !side) return;
     const length = Math.hypot(forward, side);
-    const speed = this.state.held.kind === "crate" ? 1.45 : 1.85;
+    const speed = playerMovementSpeed(this.keys, this.state.held.kind === "crate");
     const yaw = this.camera.rotation.y;
     const dx = (Math.sin(yaw) * forward + Math.cos(yaw) * side) / length * speed * dt;
     const dz = (Math.cos(yaw) * forward - Math.sin(yaw) * side) / length * speed * dt;
@@ -852,7 +863,10 @@ export class ShopWorld {
     this.viewClock += dt;
     this.poseClock += frameSeconds;
     if (this.active) {
-      this.movePlayer(dt);
+      // Retain real-time player speed at low FPS, checking collisions at each
+      // small step so sprinting cannot jump through counters, walls or crates.
+      const playerSteps = Math.ceil(frameSeconds / .05);
+      for (let step = 0; step < playerSteps; step += 1) this.movePlayer(frameSeconds / playerSteps);
       this.updateTruck(dt);
       // Keep NPC metres/second at low FPS, with bounded steps for route changes
       // and player clearance. A stalled/background frame cannot skip the shop.

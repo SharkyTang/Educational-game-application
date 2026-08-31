@@ -268,7 +268,7 @@ export class App3D {
   private renderShell(): void {
     this.root.innerHTML = `
       <main class="sim3d-app" aria-label="英语商业街 3D 小店">
-        <canvas id="s3-canvas" class="s3-canvas" tabindex="0" aria-label="第一人称小店与商业街：WASD 移动，鼠标观察，E 互动与签收，F 近看商品，G 放下货箱，M 商业街，Esc 暂停"></canvas>
+        <canvas id="s3-canvas" class="s3-canvas" tabindex="0" aria-label="第一人称小店与商业街：WASD 移动，按住 Shift 加速，鼠标观察，E 互动与签收，F 近看商品，G 放下货箱，M 商业街，Esc 暂停"></canvas>
         <audio id="s3-word-audio" preload="none" hidden></audio>
         <div id="s3-hud" class="s3-hud" hidden>
           <div class="s3-top-left">
@@ -339,7 +339,7 @@ export class App3D {
             <p id="s3-loading" class="s3-loading" role="status">正在载入小店…</p>
             <p id="s3-load-detail" class="s3-error-detail" hidden></p>
             <button id="s3-retry" class="s3-secondary-button" type="button" hidden>重新加载小店</button>
-            <p class="s3-start-controls"><kbd>W A S D</kbd> 走动 · <kbd>E</kbd> 互动 / 签收<br><kbd>Tab</kbd> 释放鼠标 · <kbd>B</kbd> 进货 · <kbd>M</kbd> 商业街</p>
+            <p class="s3-start-controls"><kbd>W A S D</kbd> 走动 · <kbd>Shift</kbd> 按住加速 · <kbd>E</kbd> 互动 / 签收<br><kbd>Tab</kbd> 释放鼠标 · <kbd>B</kbd> 进货 · <kbd>M</kbd> 商业街</p>
           </div>
           <p class="s3-start-footer">第一人称街角经营 · 本地语音与存档 · 无需登录或开麦</p>
         </section>
@@ -426,7 +426,7 @@ export class App3D {
               </section>`).join("")}
             <p class="s3-street-walk-note">返回场景，沿店门前的人行道走近店铺门牌，按 E 也能查看这家店的条件。当前版本尚未开放这些店铺的内部经营。</p>
           </section>
-          <details class="s3-pause-section"><summary>看看怎么操作</summary><dl class="s3-controls-list"><div><dt>走动 / 观察</dt><dd><kbd>W A S D</kbd> / 鼠标</dd></div><div><dt>签收、拿箱、上架、扫描、收款</dt><dd><kbd>E</kbd></dd></div><div><dt>近看商品 / 返回</dt><dd><kbd>F</kbd></dd></div><div><dt>安全放下货箱 / 放回单品</dt><dd><kbd>G</kbd></dd></div><div><dt>切换可点击鼠标 / 转头</dt><dd><kbd>Tab</kbd></dd></div><div><dt>重听顾客</dt><dd><kbd>R</kbd></dd></div><div><dt>进货 / 普通扩容 / 商业街</dt><dd><kbd>B</kbd> / <kbd>U</kbd> / <kbd>M</kbd></dd></div><div><dt>暂停与管理</dt><dd><kbd>Esc</kbd></dd></div><div><dt>视角备用按键</dt><dd><kbd>I J K L</kbd></dd></div></dl><p class="s3-muted">先看向物品并走近，再按键操作。也可以释放鼠标后点击底部操作按钮；按钮不会隔空签收、拿货或上架。浏览器不允许锁定鼠标时，可按住画面左键拖动视角。</p></details>
+          <details class="s3-pause-section"><summary>看看怎么操作</summary><dl class="s3-controls-list"><div><dt>走动 / 观察</dt><dd><kbd>W A S D</kbd> / 鼠标</dd></div><div><dt>按住加速 / 松开恢复</dt><dd><kbd>Shift</kbd>（左右均可）</dd></div><div><dt>签收、拿箱、上架、扫描、收款</dt><dd><kbd>E</kbd></dd></div><div><dt>近看商品 / 返回</dt><dd><kbd>F</kbd></dd></div><div><dt>安全放下货箱 / 放回单品</dt><dd><kbd>G</kbd></dd></div><div><dt>切换可点击鼠标 / 转头</dt><dd><kbd>Tab</kbd></dd></div><div><dt>重听顾客</dt><dd><kbd>R</kbd></dd></div><div><dt>进货 / 普通扩容 / 商业街</dt><dd><kbd>B</kbd> / <kbd>U</kbd> / <kbd>M</kbd></dd></div><div><dt>暂停与管理</dt><dd><kbd>Esc</kbd></dd></div><div><dt>视角备用按键</dt><dd><kbd>I J K L</kbd></dd></div></dl><p class="s3-muted">先看向物品并走近，再按键操作。也可以释放鼠标后点击底部操作按钮；按钮不会隔空签收、拿货或上架。浏览器不允许锁定鼠标时，可按住画面左键拖动视角。</p></details>
           <details class="s3-pause-section"><summary>画面与操作</summary><div class="s3-settings-grid">
             <label for="s3-sensitivity">鼠标灵敏度 <output id="s3-sensitivity-value">1.0</output></label><input id="s3-sensitivity" type="range" min="0.3" max="2" step="0.1" value="1">
             <label for="s3-quality">画质</label><select id="s3-quality"><option value="standard">标准 · 优先细节</option><option value="low">流畅 · 降低渲染负担</option></select>
@@ -1099,7 +1099,7 @@ export class App3D {
     const playing = this.mode === "playing";
     this.el("s3-capture").hidden = !playing || this.pointerMode === "locked" || this.dragLookFallback;
     this.el("s3-drag-hint").hidden = !playing;
-    this.text("s3-drag-hint", this.pointerMode === "locked" ? "Tab 释放鼠标 · R 重听 · B 进货 · M 商业街" : "鼠标可点击 · 按住画面拖动观察 · M 商业街");
+    this.text("s3-drag-hint", this.pointerMode === "locked" ? "Tab 释放鼠标 · Shift 按住加速 · R 重听 · B 进货 · M 商业街" : "鼠标可点击 · 按住画面拖动观察 · Shift 按住加速 · M 商业街");
   }
 
   private enterReadOnly(message: string): void {
