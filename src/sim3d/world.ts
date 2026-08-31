@@ -772,7 +772,8 @@ export class ShopWorld {
     } else if (data.kind === "counter") {
       label = "Checkout · 收银台";
       if (this.state.customer.phase !== "checkout") action = "等待顾客带商品结账";
-      else action = this.state.scannedIds.length < getCustomerOrder(this.state).length ? "扫描下一件商品" : `刷卡收款 · £${(getCheckoutTotal(this.state) / 100).toFixed(2)}`;
+      else action = this.state.scannedIds.length < getCustomerOrder(this.state).length ? "扫描下一件商品"
+        : `${this.state.payment?.method === "cash" ? this.state.payment.received ? "现金 · 继续找零" : "现金收款" : "刷卡收款"} · £${(getCheckoutTotal(this.state) / 100).toFixed(2)}`;
       inspectable = false;
     } else if (data.kind === "open-sign") {
       label = "Open / Closed · 营业牌";

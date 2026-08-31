@@ -1,6 +1,11 @@
 /** First-person shop inventory and economy, separate from the legacy 2D game. */
 import { PRODUCTS, PRODUCT_IDS, isProductId, type CrateId, type ProductId } from "./products";
+import {
+  MAX_CHANGE_PIECES, cashChangeDuePence, cashPaymentCanConfirm, createPaymentForVisit,
+  isCashDenomination, selectedChangeTotalPence, validatePaymentState, type PaymentMethod, type PaymentState,
+} from "./cashPayment";
 export { PRODUCTS, PRODUCT_IDS, isProductId, type CrateId, type ProductId, type ProductDefinition } from "./products";
+export type { PaymentMethod, PaymentState } from "./cashPayment";
 const LEGACY_PRODUCT_IDS = ["milk", "bread"] as const;
 const isLegacyProductId = (value: unknown): value is (typeof LEGACY_PRODUCT_IDS)[number] => value === "milk" || value === "bread";
 
@@ -64,11 +69,16 @@ export type HeldState =
   | { kind: "crate"; crateId: CrateId }
   | { kind: "item"; itemId: string; returnTo: ReturnLocation };
 export type CustomerPhase = "outside" | "to-milk" | "to-bread" | "to-checkout" | "checkout" | "leaving" | "complete";
-export interface SimTransaction {
+export interface SimTransactionV7 {
   id: string;
   customerNumber: number;
   itemIds: string[];
   amountPence: number;
+}
+export interface SimTransaction extends SimTransactionV7 {
+  paymentMethod: PaymentMethod;
+  tenderedPence: number;
+  changePence: number;
 }
 interface SimWorldState {
   revision: number;
@@ -79,7 +89,7 @@ interface SimWorldState {
   inspectedProducts: ProductId[];
   customer: { phase: CustomerPhase; number: number };
   scannedIds: string[];
-  transactions: SimTransaction[];
+  transactions: SimTransactionV7[];
   cashPence: number;
   upgraded: boolean;
   playerPose: PlayerPose;
@@ -162,7 +172,7 @@ export interface SimRecyclingRecord {
   amountPence: number;
 }
 interface SimEconomyState extends SimWorldState {
-  /** Presentation-only random seed; absent in older v4 saves, which remain valid. */
+  /** Stable visit seed for appearance, speech and payment; absent in older saves. */
   customerSeed?: number;
   /** Only these two fixed, auditable opening balances are accepted. */
   openingKind: "first-day" | "legacy-s0";
@@ -177,13 +187,19 @@ export interface SimStateV6 extends SimEconomyState {
   purchases: SimPurchase[];
   customer: { phase: CustomerPhase; number: number; shoppingList: ProductId[] };
 }
-export interface SimState extends Omit<SimStateV6, "schemaVersion" | "settlements"> {
+export interface SimStateV7 extends Omit<SimStateV6, "schemaVersion" | "settlements"> {
   schemaVersion: 7;
   recyclingBatches: SimRecyclingBatch[];
   recyclingRecords: SimRecyclingRecord[];
   settlements: SimSettlement[];
 }
-type EconomySnapshot = SimState | SimStateV4 | SimStateV5 | SimStateV6;
+export interface SimState extends Omit<SimStateV7, "schemaVersion" | "transactions"> {
+  schemaVersion: 8;
+  /** Null outside an active unpaid visit; cash remains tentative until confirmation. */
+  payment: PaymentState | null;
+  transactions: SimTransaction[];
+}
+type EconomySnapshot = SimState | SimStateV4 | SimStateV5 | SimStateV6 | SimStateV7;
 export interface RecyclingOffer { allowed: boolean; rewardPence: number; reason?: string }
 export interface RecyclingSummary { recycledToday: number; incomeTodayPence: number }
 export interface DeliverySummary {
@@ -215,6 +231,11 @@ export type SimCommand =
   | { type: "CUSTOMER_ADVANCE" }
   | { type: "SCAN"; itemId: string }
   | { type: "PAY"; success: boolean }
+  | { type: "RECEIVE_CASH" }
+  | { type: "ADD_CHANGE"; denominationPence: number }
+  | { type: "REMOVE_CHANGE"; index: number }
+  | { type: "CLEAR_CHANGE" }
+  | { type: "CONFIRM_CASH" }
   | { type: "NEXT_CUSTOMER" }
   | { type: "CANCEL_CUSTOMER" }
   | { type: "BUY_UPGRADE" }
@@ -276,9 +297,23 @@ export function createInitialSimState(): SimState {
 export function createFirstDayState(): SimState {
   const world = createLegacyInitialState();
   return {
-    ...world, schemaVersion: 7, items: [], cashPence: INITIAL_CAPITAL_PENCE,
+    ...world, schemaVersion: 8, items: [], cashPence: INITIAL_CAPITAL_PENCE, payment: null, transactions: [],
     customer: { ...world.customer, shoppingList: [] },
     openingKind: "first-day", day: firstDay("first-day"), purchases: [], upgradeDay: null, settlements: [], recyclingBatches: [], recyclingRecords: [],
+  };
+}
+
+function activeCustomerPhase(phase: string): boolean {
+  return ["to-milk", "to-bread", "to-checkout", "checkout"].includes(phase);
+}
+
+/** Old versions only implemented card. Never reroll an already-present old visitor. */
+function migrateCardPayments(previous: Pick<SimWorldState, "customer" | "transactions">): Pick<SimState, "payment" | "transactions"> {
+  return {
+    payment: activeCustomerPhase(previous.customer.phase) ? { method: "card" } : null,
+    transactions: previous.transactions.map(({ id, customerNumber, itemIds, amountPence }) => ({
+      id, customerNumber, itemIds: [...itemIds], amountPence, paymentMethod: "card", tenderedPence: amountPence, changePence: 0,
+    })),
   };
 }
 
@@ -289,7 +324,7 @@ export function migrateLegacySimState(value: unknown): SimState {
   const day = firstDay("legacy-s0");
   day.phase = legacy.customer.phase === "outside" ? "preparing" : "open";
   const migrated: SimState = {
-    ...legacy, schemaVersion: 7, openingKind: "legacy-s0", day,
+    ...legacy, ...migrateCardPayments(legacy), schemaVersion: 8, openingKind: "legacy-s0", day,
     customer: { ...legacy.customer, shoppingList: legacy.customer.phase === "outside" ? [] : [...LEGACY_PRODUCT_IDS] },
     purchases: [], upgradeDay: legacy.upgraded ? 1 : null, settlements: [], recyclingBatches: [], recyclingRecords: [],
   };
@@ -302,7 +337,7 @@ export function migrateV4SimState(value: unknown): SimState {
   if (!validateV4SimState(value)) throw new Error("旧版 v4 存档校验失败，不能迁移这份库存或金额。");
   const previous = structuredClone(value);
   const migrated: SimState = {
-    ...previous, schemaVersion: 7, recyclingBatches: [], recyclingRecords: [],
+    ...previous, ...migrateCardPayments(previous), schemaVersion: 8, recyclingBatches: [], recyclingRecords: [],
     settlements: previous.settlements.map((record) => ({ ...record, recycledCrates: 0, recyclingIncomePence: 0 })),
     customer: { ...previous.customer, shoppingList: previous.customer.phase === "outside" ? [] : [...LEGACY_PRODUCT_IDS] },
     purchases: previous.purchases.map((purchase) => ({ ...purchase, lines: pairLines(purchase.pairs), receivedDay: purchase.dayNumber })),
@@ -317,7 +352,7 @@ export function migrateV5SimState(value: unknown): SimState {
   if (!validateV5SimState(value)) throw new Error("旧版 v5 存档校验失败，不能迁移这份库存或金额。");
   const previous = structuredClone(value);
   const migrated: SimState = {
-    ...previous, schemaVersion: 7, recyclingBatches: [], recyclingRecords: [],
+    ...previous, ...migrateCardPayments(previous), schemaVersion: 8, recyclingBatches: [], recyclingRecords: [],
     settlements: previous.settlements.map((record) => ({ ...record, recycledCrates: 0, recyclingIncomePence: 0 })),
     customer: { ...previous.customer, shoppingList: previous.customer.phase === "outside" ? [] : [...LEGACY_PRODUCT_IDS] },
     purchases: previous.purchases.map((purchase) => ({ ...purchase, lines: pairLines(purchase.pairs) })),
@@ -332,11 +367,20 @@ export function migrateV6SimState(value: unknown): SimState {
   if (!validateV6SimState(value)) throw new Error("旧版 v6 存档校验失败，不能迁移这份库存或金额。");
   const previous = structuredClone(value);
   const migrated: SimState = {
-    ...previous, schemaVersion: 7, recyclingBatches: [], recyclingRecords: [],
+    ...previous, ...migrateCardPayments(previous), schemaVersion: 8, recyclingBatches: [], recyclingRecords: [],
     settlements: previous.settlements.map((record) => ({ ...record, recycledCrates: 0, recyclingIncomePence: 0 })),
   };
   recordReceivedCrateBatches(migrated, migrated.purchases.filter((purchase) => purchase.receivedDay !== null));
   if (!validateSimState(migrated)) throw new Error("旧版 v6 存档迁移校验失败，原始存档未改变。");
+  return migrated;
+}
+
+/** v7 recycling batches, paid sources and rewards remain untouched by payment migration. */
+export function migrateV7SimState(value: unknown): SimState {
+  if (!validateV7SimState(value)) throw new Error("旧版 v7 存档校验失败，不能迁移这份库存或金额。");
+  const previous = structuredClone(value);
+  const migrated: SimState = { ...previous, ...migrateCardPayments(previous), schemaVersion: 8 };
+  if (!validateSimState(migrated)) throw new Error("旧版 v7 存档迁移校验失败，原始存档未改变。");
   return migrated;
 }
 
@@ -525,7 +569,7 @@ function summaryForRange(
   const revenuePence = transactions.reduce((total, transaction) => total + transaction.amountPence, 0);
   const procurementPence = purchases.reduce((total, purchase) => total + purchase.amountPence, 0);
   const upgradeSpendPence = state.upgradeDay === day.number ? UPGRADE_COST_PENCE : 0;
-  const recycling = state.schemaVersion === 7 ? state.recyclingRecords.filter((record) => record.dayNumber === day.number) : [];
+  const recycling = state.schemaVersion === 7 || state.schemaVersion === 8 ? state.recyclingRecords.filter((record) => record.dayNumber === day.number) : [];
   const recyclingIncomePence = recycling.reduce((sum, record) => sum + record.amountPence, 0);
   return {
     dayNumber: day.number, paidCustomers: transactions.length, targetCustomers: DAY_CUSTOMER_TARGET,
@@ -595,8 +639,13 @@ export function getObjective(state: SimState): string {
   if (shoppingProduct) return countAt(state, shoppingProduct, "shelf") ? `顾客正在挑选${PRODUCTS[shoppingProduct].nameZh}。`
     : `${PRODUCTS[shoppingProduct].nameZh}货位暂时空了，请按这位顾客原有清单补货；购物清单不会随补货改变。`;
   if (state.customer.phase === "to-checkout") return "顾客正在前往收银台，你也可以准备收银。";
-  if (state.customer.phase === "checkout") return state.scannedIds.length < state.customer.shoppingList.length
-    ? `扫描台面上的 ${state.customer.shoppingList.length} 件商品。` : "商品已扫描，启用刷卡机完成收款。";
+  if (state.customer.phase === "checkout") {
+    if (state.scannedIds.length < state.customer.shoppingList.length) return `扫描台面上的 ${state.customer.shoppingList.length} 件商品。`;
+    if (state.payment?.method === "cash") return state.payment.received
+      ? "现金已暂收，请在收银抽屉配好找零后确认；完成前资金和商品均不入账。"
+      : "商品已扫描，这位顾客用现金付款；打开收银抽屉接收现金。";
+    return "商品已扫描，启用刷卡机完成收款。";
+  }
   if (state.customer.phase === "leaving") return "顾客正在离店，可以整理货架或补货。";
   if (!unsoldItems(state).length) return "库存已经售完，打开经营面板自主选择商品和数量订购，签收后继续补货。";
   if (!state.upgraded && state.cashPence >= UPGRADE_COST_PENCE) return "资金已足够，按 U 可查看 £8 普通容量升级，也可以留钱进货。";
@@ -633,6 +682,26 @@ export function reduceSim(state: SimState, command: SimCommand): SimResult {
     next.revision += 1;
     if (!validateSimState(next)) throw new Error(`3D inventory/economy invariant failed after ${command.type}`);
     return { state: next, changed: true, ...(message ? { message } : {}) };
+  };
+  const checkoutItems = (): SimItem[] => next.items.filter((item) => item.location.kind === "checkout");
+  const allScanned = (): boolean => {
+    const items = checkoutItems();
+    return items.length > 0 && items.every((item) => next.scannedIds.includes(item.id));
+  };
+  const commitPayment = (paymentMethod: PaymentMethod, tenderedPence: number, changePence: number): SimResult => {
+    const transactionId = `sale-${next.customer.number}`;
+    if (next.transactions.some((transaction) => transaction.id === transactionId)) return reject("这笔交易已经收款。");
+    const items = checkoutItems();
+    const amountPence = getCheckoutTotal(next);
+    next.transactions.push({ id: transactionId, customerNumber: next.customer.number, itemIds: items.map((item) => item.id),
+      amountPence, paymentMethod, tenderedPence, changePence });
+    // This is the unified business balance, not a physical drawer balance.
+    next.cashPence += amountPence;
+    for (const item of items) item.location = { kind: "sold", transactionId };
+    next.scannedIds = [];
+    next.payment = null;
+    next.customer.phase = "leaving";
+    return finish(`收款成功 +£${(amountPence / 100).toFixed(2)}`);
   };
 
   switch (command.type) {
@@ -723,6 +792,8 @@ export function reduceSim(state: SimState, command: SimCommand): SimResult {
       if (!next.items.some((item) => item.location.kind === "shelf")) return reject("先选择商品进货，并给货架补上至少一件商品。");
       if (command.type === "NEXT_CUSTOMER") next.customer.number += 1;
       next.customer.shoppingList = chooseCustomerOrder(next);
+      next.payment = createPaymentForVisit({ customerSeed: next.customerSeed, customerNumber: next.customer.number,
+        amountPence: next.customer.shoppingList.reduce((sum, productId) => sum + PRODUCTS[productId].pricePence, 0) });
       next.day.phase = "open";
       next.customer.phase = "to-milk";
       return finish("营业开始，一位邻居走进了小店。");
@@ -740,9 +811,10 @@ export function reduceSim(state: SimState, command: SimCommand): SimResult {
       if (next.customer.phase === "to-checkout") {
         for (const item of next.items) if (item.location.kind === "basket") item.location = { kind: "checkout" };
         next.customer.phase = "checkout";
-        return finish("顾客已到收银台，正准备刷卡付款。R 可重听，E 扫描商品。");
+        return finish(`顾客已到收银台，正准备${next.payment?.method === "cash" ? "现金" : "刷卡"}付款。R 可重听，E 扫描商品。`);
       }
       if (next.customer.phase === "leaving") {
+        next.payment = null;
         next.customer.phase = "complete";
         return finish("顾客已离店。");
       }
@@ -758,29 +830,61 @@ export function reduceSim(state: SimState, command: SimCommand): SimResult {
     }
     case "PAY": {
       if (next.customer.phase !== "checkout") return reject("当前没有等待付款的交易。");
-      const items = next.items.filter((item) => item.location.kind === "checkout");
-      if (items.length === 0 || items.some((item) => !next.scannedIds.includes(item.id))) return reject("请先扫描全部商品，再收款。");
-      if (!command.success) return reject("付款未成功，商品和金额均未改变，可以重试或取消。");
-      const transactionId = `sale-${next.customer.number}`;
-      if (next.transactions.some((transaction) => transaction.id === transactionId)) return reject("这笔交易已经收款。");
+      if (next.payment?.method !== "card") return reject("这位顾客用现金付款，请接收现金并完成找零，不能使用刷卡收款。");
+      if (!allScanned()) return reject("请先扫描全部商品，再收款。");
+      if (command.success !== true) return reject("付款未成功，商品和金额均未改变，可以重试或取消。");
+      return commitPayment("card", getCheckoutTotal(next), 0);
+    }
+    case "RECEIVE_CASH": {
+      if (next.customer.phase !== "checkout" || next.payment?.method !== "cash") return reject("当前没有等待现金付款的顾客。");
+      if (!allScanned()) return reject("请先扫描全部商品，再接收现金。");
+      if (next.payment.received) return reject("这笔现金已经暂收，不会重复收钱。");
+      next.payment.received = true;
+      return finish(`已暂收 £${(next.payment.tenderedPence / 100).toFixed(2)}，请确认找零；资金尚未入账。`);
+    }
+    case "ADD_CHANGE":
+    case "REMOVE_CHANGE":
+    case "CLEAR_CHANGE": {
+      if (next.customer.phase !== "checkout" || next.payment?.method !== "cash" || !next.payment.received || !allScanned()) {
+        return reject("请先扫描全部商品并接收这位顾客的现金，再选择找零。");
+      }
+      if (command.type === "ADD_CHANGE") {
+        if (!isCashDenomination(command.denominationPence)) return reject("请选择有效的英镑纸币或硬币面额。");
+        if (next.payment.selectedChange.length >= MAX_CHANGE_PIECES) return reject(`一次最多选择 ${MAX_CHANGE_PIECES} 枚零钱，请先移除或清空部分选择。`);
+        next.payment.selectedChange.push(command.denominationPence);
+      } else if (command.type === "REMOVE_CHANGE") {
+        if (!isInteger(command.index) || command.index < 0 || command.index >= next.payment.selectedChange.length) return reject("这枚零钱不在当前选择中。");
+        next.payment.selectedChange.splice(command.index, 1);
+      } else {
+        if (!next.payment.selectedChange.length) return reject("当前没有需要清空的找零。");
+        next.payment.selectedChange = [];
+      }
+      return finish(`已选找零 £${(selectedChangeTotalPence(next.payment.selectedChange) / 100).toFixed(2)}，确认前不会扣款。`);
+    }
+    case "CONFIRM_CASH": {
+      if (next.customer.phase !== "checkout" || next.payment?.method !== "cash") return reject("当前没有等待现金付款的交易。");
+      if (!allScanned()) return reject("请先扫描全部商品，再收款。");
+      if (!next.payment.received) return reject("请先接收顾客交来的现金。");
       const amountPence = getCheckoutTotal(next);
-      next.transactions.push({ id: transactionId, customerNumber: next.customer.number, itemIds: items.map((item) => item.id), amountPence });
-      next.cashPence += amountPence;
-      for (const item of items) item.location = { kind: "sold", transactionId };
-      next.scannedIds = [];
-      next.customer.phase = "leaving";
-      return finish(`收款成功 +£${(amountPence / 100).toFixed(2)}`);
+      const changePence = cashChangeDuePence(next.payment, amountPence);
+      if (!cashPaymentCanConfirm(next.payment, amountPence)) {
+        const selected = selectedChangeTotalPence(next.payment.selectedChange);
+        return reject(`找零${selected > changePence ? "多了" : "还不够"}，请重新核对；本单尚未完成，资金和商品未改变。`);
+      }
+      return commitPayment("cash", next.payment.tenderedPence, changePence);
     }
     case "CANCEL_CUSTOMER": {
       if (["outside", "leaving", "complete"].includes(next.customer.phase)) return reject("当前没有可以取消的购物流程。");
+      const returnCash = next.payment?.method === "cash" && next.payment.received;
       for (const item of next.items) {
         if ((item.location.kind === "basket" || item.location.kind === "checkout") && !returnUnpaidItem(next, item)) {
           return reject("暂时没有安全空位归还商品，请先搬开或回收空箱；本单和商品保持不变。");
         }
       }
       next.scannedIds = [];
+      next.payment = null;
       next.customer.phase = "leaving";
-      return finish("本单已取消，未付款的商品已归还，资金未改变。");
+      return finish(returnCash ? "本单已取消，商品已归还，暂收现金已退回，资金未改变。" : "本单已取消，未付款的商品已归还，资金未改变。");
     }
     case "BUY_UPGRADE": {
       if (next.upgraded) return reject("货架容量已经升级过了。");
@@ -841,6 +945,7 @@ export function reduceSim(state: SimState, command: SimCommand): SimResult {
         openingCashPence: next.cashPence, openingInventoryValuePence: inventoryValue(stock), openingStockUnits: stock.length,
       };
       next.customer = { phase: "outside", number: next.customer.number + 1, shoppingList: [] };
+      next.payment = null;
       return finish(`第 ${next.day.number} 天开始。资金、剩余商品和货架扩容全部保留，不会追加免费本金。`);
     }
     case "SAVE_POSE": {
@@ -867,7 +972,7 @@ export function canUnlockAdvancedUpgrade(input: {
     && input.requiredTaskIds.every((id) => id.length > 0 && input.completedIndependentTaskIds.includes(id));
 }
 
-function validPose(value: unknown, version: 3 | 4 | 5 | 6 | 7): value is PlayerPose {
+function validPose(value: unknown, version: 3 | 4 | 5 | 6 | 7 | 8): value is PlayerPose {
   return isRecord(value) && isFiniteNumber(value.x) && isFiniteNumber(value.z) && isFiniteNumber(value.yaw) && isFiniteNumber(value.pitch)
     && (version >= 5 ? isWalkablePosition({ x: value.x, z: value.z })
       : value.x >= INDOOR_BOUNDS.minX && value.x <= INDOOR_BOUNDS.maxX && value.z >= INDOOR_BOUNDS.minZ && value.z <= INDOOR_BOUNDS.maxZ)
@@ -881,12 +986,12 @@ function validReturnLocation(value: unknown, productId: ProductId, capacity: num
 }
 
 /** Shared physical ownership checks; S0 additionally requires its fixed eight-unit grant. */
-function validateWorldState(value: unknown, version: 3 | 4 | 5 | 6 | 7): value is EconomySnapshot | LegacySimState {
+function validateWorldState(value: unknown, version: 3 | 4 | 5 | 6 | 7 | 8): value is EconomySnapshot | LegacySimState {
   const legacy = version === 3;
   const knownProduct = (input: unknown): input is ProductId => version >= 6 ? isProductId(input) : isLegacyProductId(input);
   if (!isRecord(value) || value.schemaVersion !== version || !isInteger(value.revision) || value.revision < 0
     || typeof value.upgraded !== "boolean" || !isInteger(value.cashPence) || value.cashPence < 0 || !validPose(value.playerPose, version)) return false;
-  if (!Array.isArray(value.crates) || (version >= 6 ? value.crates.length < (version === 7 ? 0 : 2) || value.crates.length > PRODUCT_IDS.length : value.crates.length !== 2)
+  if (!Array.isArray(value.crates) || (version >= 6 ? value.crates.length < (version >= 7 ? 0 : 2) || value.crates.length > PRODUCT_IDS.length : value.crates.length !== 2)
     || !Array.isArray(value.items) || (legacy && value.items.length !== 8)
     || !Array.isArray(value.transactions) || (legacy && value.transactions.length > 4) || !Array.isArray(value.scannedIds)
     || !Array.isArray(value.inspectedProducts) || value.inspectedProducts.some((id) => !knownProduct(id))
@@ -963,6 +1068,15 @@ function validateWorldState(value: unknown, version: 3 | 4 | 5 | 6 | 7): value i
   } else if (basket.length !== 0 || checkout.length !== 0) return false;
   if (value.scannedIds.some((id) => typeof id !== "string" || !checkout.some((item) => item.id === id))
     || new Set(value.scannedIds).size !== value.scannedIds.length) return false;
+  if (version === 8) {
+    if (activeCustomerPhase(value.customer.phase)) {
+      const amountPence = shoppingList.reduce((sum, productId) => sum + PRODUCTS[productId].pricePence, 0);
+      if (!validatePaymentState(value.payment, amountPence)) return false;
+      const scannedIds = value.scannedIds;
+      if (value.payment.method === "cash" && value.payment.received
+        && (value.customer.phase !== "checkout" || checkout.some((item) => !scannedIds.includes(item.id)))) return false;
+    } else if (value.payment !== null) return false;
+  }
   const transactionIds = new Set<string>();
   const soldIds = new Set<string>();
   let grossPence = 0;
@@ -986,6 +1100,15 @@ function validateWorldState(value: unknown, version: 3 | 4 | 5 | 6 | 7): value i
       : !LEGACY_PRODUCT_IDS.every((productId) => goods.some((item) => item.productId === productId)))
       || transaction.amountPence !== goods.reduce((sum, item) => sum + PRODUCTS[item.productId].pricePence, 0)) return false;
     if (version >= 6 && transaction.customerNumber === value.customer.number && !matchesOrder(goods)) return false;
+    if (version === 8) {
+      if ((transaction.paymentMethod !== "card" && transaction.paymentMethod !== "cash")
+        || !isInteger(transaction.tenderedPence) || !isInteger(transaction.changePence)
+        || transaction.changePence < 0 || transaction.tenderedPence < transaction.amountPence
+        || transaction.changePence !== transaction.tenderedPence - transaction.amountPence) return false;
+      if (transaction.paymentMethod === "card") {
+        if (transaction.tenderedPence !== transaction.amountPence || transaction.changePence !== 0) return false;
+      } else if (!validatePaymentState({ method: "cash", tenderedPence: transaction.tenderedPence, received: true, selectedChange: [] }, transaction.amountPence)) return false;
+    }
     transactionIds.add(transaction.id);
     grossPence += transaction.amountPence;
     previousCustomerNumber = transaction.customerNumber;
@@ -1006,7 +1129,7 @@ const SUMMARY_FIELDS = [
 const RECYCLING_SUMMARY_FIELDS = ["recycledCrates", "recyclingIncomePence"] as const;
 
 /** The ledger proves each item source, purchase quantity, paid sale, daily carry and cash balance. */
-function validateEconomyState(value: unknown, version: 4 | 5 | 6 | 7): value is EconomySnapshot {
+function validateEconomyState(value: unknown, version: 4 | 5 | 6 | 7 | 8): value is EconomySnapshot {
   if (!validateWorldState(value, version) || value.schemaVersion === 3) return false;
   if (value.customerSeed !== undefined && (!isInteger(value.customerSeed) || value.customerSeed < 0 || value.customerSeed > 0xffffffff)) return false;
   if (value.openingKind !== "first-day" && value.openingKind !== "legacy-s0") return false;
@@ -1074,7 +1197,7 @@ function validateEconomyState(value: unknown, version: 4 | 5 | 6 | 7): value is 
   if (sourceIds.size !== value.items.length || value.items.some((item) => !sourceIds.has(item.id))) return false;
   if (version === 6 && (value.crates.length !== expectedCrateIds.size || value.crates.some((crate) => !expectedCrateIds.has(crate.id)))) return false;
   let recyclingIncomePence = 0;
-  if (value.schemaVersion === 7) {
+  if (value.schemaVersion === 7 || value.schemaVersion === 8) {
     if (!Array.isArray(value.recyclingRecords) || !Array.isArray(value.recyclingBatches)) return false;
     const sourceBatches = new Map<string, string>();
     const batchById = new Map<string, SimRecyclingBatch>();
@@ -1171,7 +1294,7 @@ function validateEconomyState(value: unknown, version: 4 | 5 | 6 | 7): value is 
     const maxPaid = value.openingKind === "legacy-s0" && number === 1 ? 4 : DAY_CUSTOMER_TARGET;
     if (summary.paidCustomers < DAY_CUSTOMER_TARGET || summary.paidCustomers > maxPaid
       || SUMMARY_FIELDS.some((field) => !isInteger(record[field]) || record[field] !== summary[field])
-      || (value.schemaVersion === 7 && RECYCLING_SUMMARY_FIELDS.some((field) => !isInteger(record[field]) || record[field] !== summary[field]))
+      || ((value.schemaVersion === 7 || value.schemaVersion === 8) && RECYCLING_SUMMARY_FIELDS.some((field) => !isInteger(record[field]) || record[field] !== summary[field]))
       || summary.closingCashPence < 0 || summary.remainingStockUnits < 0 || summary.remainingInventoryValuePence < 0) return false;
     if (value.purchases.slice(purchaseStart, record.purchaseEnd).some((purchase) => purchase.dayNumber !== number)) return false;
     if (value.transactions.slice(transactionStart, record.transactionEnd)
@@ -1215,6 +1338,10 @@ export function validateV6SimState(value: unknown): value is SimStateV6 {
   return validateEconomyState(value, 6) && value.schemaVersion === 6;
 }
 
-export function validateSimState(value: unknown): value is SimState {
+export function validateV7SimState(value: unknown): value is SimStateV7 {
   return validateEconomyState(value, 7) && value.schemaVersion === 7;
+}
+
+export function validateSimState(value: unknown): value is SimState {
+  return validateEconomyState(value, 8) && value.schemaVersion === 8;
 }

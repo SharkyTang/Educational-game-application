@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { createFirstDayState, createInitialSimState, getDeliverySummary, PRODUCTS, reduceSim, type ProductId, type SimState } from "../../src/sim3d/domain";
 import type { InteractionTarget } from "../../src/sim3d/world";
+import { payScannedCheckout } from "../helpers/sim3dPayment";
 
 // Pure UI decisions do not require a WebGL engine or a browser document.
 vi.mock("../../src/sim3d/world", () => ({ ShopWorld: class {} }));
@@ -70,6 +71,23 @@ describe("3D accessible interaction decisions", () => {
     state = reduceSim(state, pay).state;
     expect(commandForInteraction(state, counter).command).toBeUndefined();
     expect(state.cashPence).toBe(400);
+  });
+
+  it("routes a scanned cash customer to the cash register, never the old PAY shortcut", () => {
+    let state: SimState = { ...checkoutState(), payment: { method: "cash", tenderedPence: 500, received: false, selectedChange: [] } };
+    const counter = target({ id: "counter", kind: "counter", inspectable: false });
+    for (let index = 0; index < 2; index += 1) {
+      const decision = commandForInteraction(state, counter);
+      expect(decision.cashRegister).toBeUndefined();
+      expect(decision.command?.type).toBe("SCAN");
+      state = reduceSim(state, decision.command!).state;
+    }
+    expect(commandForInteraction(state, counter)).toEqual({ cashRegister: true });
+    expect(commandForInteraction(state, { ...counter, distance: 3 }).cashRegister).toBeUndefined();
+    expect(commandForInteraction(state, null).cashRegister).toBeUndefined();
+    state = reduceSim(state, { type: "RECEIVE_CASH" }).state;
+    expect(commandForInteraction(state, counter)).toEqual({ cashRegister: true });
+    expect(state.cashPence).toBe(0);
   });
 
   it("distinguishes a checkout item from an item available for pickup", () => {
@@ -157,7 +175,7 @@ describe("3D accessible interaction decisions", () => {
       state = reduceSim(state, { type: guest === 0 ? "OPEN_STORE" : "NEXT_CUSTOMER" }).state;
       for (let stop = 0; stop < 3; stop += 1) state = reduceSim(state, { type: "CUSTOMER_ADVANCE" }).state;
       for (const item of state.items.filter((entry) => entry.location.kind === "checkout")) state = reduceSim(state, { type: "SCAN", itemId: item.id }).state;
-      state = reduceSim(state, { type: "PAY", success: true }).state;
+      state = payScannedCheckout(state);
       state = reduceSim(state, { type: "CUSTOMER_ADVANCE" }).state;
     }
     state = reduceSim(state, { type: "PURCHASE_STOCK", orderId: "end-of-day-delivery", pairs: 1 }).state;

@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { payScannedCheckout } from "../helpers/sim3dPayment";
 import {
   PRODUCTS,
   SAFE_DROP_POINTS,
@@ -52,7 +53,7 @@ function completeSale(state = stockAll()): SimState {
   for (const item of state.items.filter((candidate) => candidate.location.kind === "checkout")) {
     state = act(state, { type: "SCAN", itemId: item.id });
   }
-  state = act(state, { type: "PAY", success: true });
+  state = payScannedCheckout(state);
   return act(state, { type: "CUSTOMER_ADVANCE" });
 }
 
@@ -250,7 +251,8 @@ describe("3D customer, scanning and transactional payment", () => {
     expect(reduceSim(state, { type: "PAY", success: false }).state).toBe(beforePay);
     state = act(state, { type: "PAY", success: true });
     expect(state.cashPence).toBe(400);
-    expect(state.transactions).toEqual([{ id: "sale-1", customerNumber: 1, itemIds: ["milk-1", "bread-1"], amountPence: 400 }]);
+    expect(state.transactions).toEqual([{ id: "sale-1", customerNumber: 1, itemIds: ["milk-1", "bread-1"], amountPence: 400,
+      paymentMethod: "card", tenderedPence: 400, changePence: 0 }]);
     expect(state.scannedIds).toEqual([]);
     expect(getCheckoutTotal(state)).toBe(0);
     expect(reduceSim(state, { type: "PAY", success: true }).state).toBe(state);

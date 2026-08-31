@@ -34,6 +34,17 @@
       { "id": "thanks-been-helpful", "text": "Thank you, you've been very helpful!", "zh": "谢谢，你帮了我大忙！" },
       { "id": "thanks-have-a-good-one", "text": "Thanks! Have a good one!", "zh": "谢谢！祝你今天愉快！" },
       { "id": "thanks-thats-great", "text": "That's great, thank you!", "zh": "太好了，谢谢你！" }
+    ],
+    "checkoutCash": [
+      { "id": "checkout-cash-can-i-pay", "text": "Can I pay in cash, please?", "zh": "请问可以付现金吗？" },
+      { "id": "checkout-cash-please", "text": "Cash, please.", "zh": "我用现金付，谢谢。" },
+      { "id": "checkout-cash-ill-pay", "text": "I'll pay in cash, please.", "zh": "我想付现金，谢谢。" },
+      { "id": "checkout-cash-id-like-to-pay", "text": "I'd like to pay in cash, please.", "zh": "我想用现金付款，谢谢。" }
+    ],
+    "tenderCash": [
+      { "id": "tender-cash-five-pounds", "text": "Here's five pounds.", "zh": "给你五英镑。" },
+      { "id": "tender-cash-ten-pounds", "text": "Here's ten pounds.", "zh": "给你十英镑。" },
+      { "id": "tender-cash-exact-amount", "text": "I have the exact amount.", "zh": "我有正好的钱。" }
     ]
   }
 }

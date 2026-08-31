@@ -24,7 +24,7 @@ from piper import PiperVoice, SynthesisConfig
 
 ROOT = Path(__file__).resolve().parents[1]
 CORPUS = ROOT / "src/sim3d/customerCorpus.json"
-SCENES = ("greeting", "checkout", "thanks")
+SCENES = ("greeting", "checkout", "thanks", "checkoutCash", "tenderCash")
 SAMPLE_RATE = 22050
 SEED = 31
 SENTENCE_PAUSE_SECONDS = 0.18
@@ -76,7 +76,7 @@ def read_phrases() -> tuple[dict, list[dict[str, str]]]:
     """JSON is canonical for captions and synthesis; no second text list."""
     corpus = json.loads(CORPUS.read_text(encoding="utf-8"))
     if corpus.get("version") != 1 or set(corpus.get("scenes", {})) != set(SCENES):
-        raise ValueError("Expected corpus v1 with greeting, checkout and thanks scenes.")
+        raise ValueError(f"Expected corpus v1 with exactly these scenes: {', '.join(SCENES)}.")
     phrases = []
     ids: set[str] = set()
     texts: set[str] = set()
@@ -171,10 +171,45 @@ def synthesize(voice: PiperVoice, phrase: dict, spec: dict) -> tuple[bytes, dict
     }
 
 
+def reusable_clips(output: Path, phrases: list[dict[str, str]]) -> dict[tuple[str, str], dict]:
+    """Preserve reviewed clips byte-for-byte; refuse stale text or changed files."""
+    source = json.loads((output / "customer-phrase-manifest.json").read_text(encoding="utf-8"))
+    if (source.get("version") != 1 or source.get("corpusVersion") != 1
+            or source.get("voices") != list(VOICE_SPECS) or source.get("seed") != SEED
+            or source.get("sentencePauseSeconds") != SENTENCE_PAUSE_SECONDS
+            or source.get("piperVersion") != importlib.metadata.version("piper-tts")
+            or source.get("onnxruntimeVersion") != ort.__version__ or source.get("numpyVersion") != np.__version__):
+        raise ValueError("Existing voice/authoring settings differ; explicitly review a full regeneration.")
+    entries = {phrase["id"]: phrase for phrase in phrases}
+    voices = {spec["id"] for spec in VOICE_SPECS}
+    records = {}
+    for record in source.get("clips", []):
+        voice_id, phrase_id = record.get("voiceId"), record.get("id")
+        phrase = entries.get(phrase_id)
+        key = (voice_id, phrase_id)
+        if voice_id not in voices or phrase is None or key in records:
+            raise ValueError("Existing manifest contains unknown, retired or duplicate clips; review it first.")
+        if any(record.get(field) != phrase[field] for field in ("id", "scene", "text")):
+            raise ValueError(f"Existing captions changed for {voice_id}/{phrase_id}; review regeneration first.")
+        expected_file = f"customers/{voice_id}/{phrase_id}.wav"
+        if record.get("file") != expected_file or record.get("src") != f"/assets/sim3d/audio/{expected_file}":
+            raise ValueError(f"Unexpected existing clip path: {voice_id}/{phrase_id}")
+        data = (output / expected_file).read_bytes()
+        if len(data) != record.get("bytes") or sha256(data) != record.get("sha256"):
+            raise ValueError(f"Existing clip differs from its reviewed hash: {expected_file}")
+        # Translation-only edits do not change what the existing English clip says.
+        records[key] = {**record, "zh": phrase["zh"]}
+    if not records or source.get("totalBytes") != sum(record["bytes"] for record in records.values()):
+        raise ValueError("Existing manifest has no clips or its total bytes do not match.")
+    return records
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--models", type=Path, default=ROOT / "tmp/piper-models")
     parser.add_argument("--output", type=Path, default=ROOT / "public/assets/sim3d/audio")
+    parser.add_argument("--reuse-existing", action="store_true",
+                        help="Verify and preserve existing manifested clips; synthesize only new phrases.")
     args = parser.parse_args()
     corpus, phrases = read_phrases()
     if importlib.metadata.version("piper-tts") != "1.7.0":
@@ -192,22 +227,30 @@ def main() -> None:
             raise ValueError("The reviewed male speaker identity no longer matches the model.")
         models.append((spec, model, config))
 
+    existing = reusable_clips(args.output, phrases) if args.reuse_existing else {}
     # Generate and validate the entire batch before touching published clips.
     # Only customers/ and customer-phrase-manifest.json are ever written.
     results = []
     payloads = []
     total_bytes = 0
     for spec, model, config in models:
-        ort.set_seed(SEED)
-        voice = PiperVoice.load(model, config_path=config, use_cuda=False)
+        voice = None
         for phrase in phrases:
-            data, record = synthesize(voice, phrase, spec)
+            record = existing.get((spec["id"], phrase["id"]))
+            if record is None:
+                if voice is None:
+                    ort.set_seed(SEED)
+                    voice = PiperVoice.load(model, config_path=config, use_cuda=False)
+                data, record = synthesize(voice, phrase, spec)
+                payloads.append((record["file"], data))
+                action = "Generated"
+            else:
+                action = "Reused"
             results.append(record)
-            payloads.append(data)
-            total_bytes += len(data)
+            total_bytes += record["bytes"]
             if total_bytes >= AUDIO_BUDGET_BYTES:
                 raise ValueError("Customer speech exceeded the 8 MB download budget; review the corpus/settings.")
-            print(f"{record['file']}: {record['durationSeconds']:.3f}s, {record['bytes']} bytes", flush=True)
+            print(f"{action} {record['file']}: {record['durationSeconds']:.3f}s, {record['bytes']} bytes", flush=True)
     manifest = {
         "version": 1,
         "generatedBy": "scripts/generate-customer-speech.py",
@@ -225,14 +268,14 @@ def main() -> None:
         "clips": results,
     }
     args.output.mkdir(parents=True, exist_ok=True)
-    for data, record in zip(payloads, results):
-        path = args.output / record["file"]
+    for file, data in payloads:
+        path = args.output / file
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes(data)
     (args.output / "customer-phrase-manifest.json").write_text(
         json.dumps(manifest, indent=2, ensure_ascii=False) + "\n", encoding="utf-8",
     )
-    print(f"Total: {len(phrases)} phrases, {len(results)} clips, {total_bytes:,} bytes. Legacy audio unchanged.")
+    print(f"Total: {len(phrases)} phrases, {len(results)} clips ({len(payloads)} new), {total_bytes:,} bytes. Legacy audio unchanged.")
 
 
 if __name__ == "__main__":

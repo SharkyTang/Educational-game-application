@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { payScannedCheckout, preCashTransactions } from "../helpers/sim3dPayment";
 import {
   RECYCLING_REWARD_PENCE, createFirstDayState, getDaySummary, getDeliverySummary, getRecyclingSummary,
   migrateV6SimState, reduceSim, validateSimState, validateV6SimState,
@@ -54,7 +55,7 @@ function settledDay(): SimState {
     for (const item of state.items.filter((entry) => entry.location.kind === "checkout")) {
       state = act(state, { type: "SCAN", itemId: item.id });
     }
-    state = act(state, { type: "PAY", success: true });
+    state = payScannedCheckout(state);
     state = act(state, { type: "CUSTOMER_ADVANCE" });
   }
   return act(state, { type: "SETTLE_DAY" });
@@ -63,9 +64,10 @@ function settledDay(): SimState {
 /** A genuine v6 file has neither recycling ledger nor the two new day-summary fields. */
 function v6Snapshot(state = heldEmptyCrate()): SimStateV6 {
   expect(state.recyclingRecords).toEqual([]);
-  const { recyclingBatches: _recyclingBatches, recyclingRecords: _recyclingRecords, settlements, ...previous } = structuredClone(state);
+  const { payment: _payment, recyclingBatches: _recyclingBatches, recyclingRecords: _recyclingRecords, settlements, ...previous } = structuredClone(state);
   return {
     ...previous, schemaVersion: 6,
+    transactions: preCashTransactions(previous.transactions),
     settlements: settlements.map(({ recycledCrates: _recycledCrates, recyclingIncomePence: _recyclingIncomePence, ...record }) => record),
   };
 }
@@ -96,7 +98,7 @@ describe("read-only v6 migration into the recycling ledger", () => {
     expect(loaded.source).toBe("v6");
     expect(loaded.warning).toContain("不会额外发钱");
     expect(loaded.state).toEqual({
-      ...old, schemaVersion: 7, recyclingRecords: [],
+      ...old, schemaVersion: 8, payment: null, recyclingRecords: [],
       recyclingBatches: [
         { id: "crate-batch-1", productId: "milk", purchaseIds: ["paid-opening"] },
         { id: "crate-batch-2", productId: "bread", purchaseIds: ["paid-opening"] },
@@ -127,7 +129,7 @@ describe("read-only v6 migration into the recycling ledger", () => {
     const restored = parseImportedSimState(JSON.stringify(old));
     expect(restored.cashPence).toBe(1710);
     expect(restored.items).toEqual(old.items);
-    expect(restored.transactions).toEqual(old.transactions);
+    expect(restored.transactions).toEqual(old.transactions.map((transaction) => ({ ...transaction, paymentMethod: "card", tenderedPence: transaction.amountPence, changePence: 0 })));
     expect(restored.held).toEqual(old.held);
     expect(restored.day).toEqual(old.day);
     expect(restored.settlements).toEqual(old.settlements.map((record) => ({ ...record, recycledCrates: 0, recyclingIncomePence: 0 })));

@@ -33,7 +33,12 @@ export const NEXT_CUSTOMER_SECONDS = .65; // Was 2 s after leaving.
 
 const LEGACY_CUSTOMER_SEED = 31;
 // Appearance and dialogue depend on visit identity, never on the shopping basket.
-type VisitState = { customer: { number: number }; customerSeed?: number };
+type VisitState = {
+  customer: { number: number };
+  customerSeed?: number;
+  /** Older saves without a payment choice keep their original card dialogue. */
+  payment?: { method: "card" | "cash"; tenderedPence?: number } | null;
+};
 
 /** Stored once per new game. Old snapshots have a stable fallback, not a new draw on load. */
 export function createCustomerSeed(): number {
@@ -92,7 +97,23 @@ export function customerProfileFor(state: VisitState): CustomerProfile {
 }
 
 export function customerSpeechFor(state: VisitState, scene: CustomerScene): CustomerSpeechClip {
-  const entry = pickCustomerEntry(CUSTOMER_CORPUS[scene], state.customerSeed ?? LEGACY_CUSTOMER_SEED, state.customer.number, scene);
+  const pool = scene === "checkout" && state.payment?.method === "cash" ? "checkoutCash" : scene;
+  const entry = pickCustomerEntry(CUSTOMER_CORPUS[pool], state.customerSeed ?? LEGACY_CUSTOMER_SEED, state.customer.number, pool);
+  return withCustomerVoice(state, entry);
+}
+
+/** Fixed local lines describe the persisted tender, never a newly drawn amount. */
+export function cashTenderSpeechFor(state: VisitState): CustomerSpeechClip | null {
+  const tenderedPence = state.payment?.method === "cash" ? state.payment.tenderedPence : undefined;
+  if (typeof tenderedPence !== "number" || !Number.isSafeInteger(tenderedPence) || tenderedPence <= 0) return null;
+  const id = tenderedPence === 500 ? "tender-cash-five-pounds"
+    : tenderedPence === 1000 ? "tender-cash-ten-pounds" : "tender-cash-exact-amount";
+  const entry = CUSTOMER_CORPUS.tenderCash.find((phrase) => phrase.id === id);
+  if (!entry) throw new Error("缺少现金交款语料。");
+  return withCustomerVoice(state, entry);
+}
+
+function withCustomerVoice(state: VisitState, entry: Omit<CustomerSpeechClip, "src">): CustomerSpeechClip {
   const voice = customerProfileFor(state).voice;
   return { ...entry, src: `/assets/sim3d/audio/customers/${voice}/${entry.id}.wav` };
 }

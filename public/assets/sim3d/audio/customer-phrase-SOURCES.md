@@ -1,7 +1,7 @@
 # Customer corpus: local female and male speech
 
-The 56 WAV files under `customers/female/` and `customers/male/` are **synthetic
-speech**, generated locally on 2026-08-31 from the game's 28 original everyday
+The 70 WAV files under `customers/female/` and `customers/male/` are **synthetic
+speech**, generated locally on 2026-08-31 from the game's 35 original everyday
 shop phrases. They are not human recordings of those lines, not macOS system
 voices, and not output from an online or paid speech service. The female and
 male sets use distinct pretrained neural speaker identities, not pitch-shifted
@@ -36,8 +36,12 @@ legacy WAV files and `phrase-manifest.json` are unchanged.
 ## Shipped files and authoring dependencies
 
 `src/sim3d/customerCorpus.json` is the single editable text source. It contains
-8 greetings, 12 card-payment lines and 8 post-payment thanks, each with an
-English caption, Chinese translation and stable kebab-case ID. Each phrase has
+8 greetings, 12 card-payment lines, 8 post-payment thanks, 4 cash-payment
+requests and 3 cash-tender lines, each with an English caption, Chinese
+translation and stable kebab-case ID. The cash request pool is selected only
+for visitors with a saved cash payment. Tender lines describe the saved £5 or
+£10 amount; other exact tenders use "I have the exact amount." instead of
+constructing unsupported spoken numbers. Each phrase has
 both `/assets/sim3d/audio/customers/female/{id}.wav` and
 `/assets/sim3d/audio/customers/male/{id}.wav`. The separate
 `customer-phrase-manifest.json` records the source JSON hash and all clip text,
@@ -61,7 +65,7 @@ curl -fL --retry 2 -o tmp/piper-models/cori-med.onnx https://sfo3.digitaloceansp
 curl -fL --retry 2 -o tmp/piper-models/cori-med.onnx.json https://sfo3.digitaloceanspaces.com/bkmdls/cori-med.onnx.json
 curl -fL --retry 2 -o tmp/piper-models/mv2.onnx https://sfo3.digitaloceanspaces.com/bkmdls/mv2.onnx
 curl -fL --retry 2 -o tmp/piper-models/mv2.onnx.json https://sfo3.digitaloceanspaces.com/bkmdls/mv2.onnx.json
-tmp/piper-env/bin/python scripts/generate-customer-speech.py
+tmp/piper-env/bin/python scripts/generate-customer-speech.py --reuse-existing
 npm test -- tests/unit/sim3d-customer-speech-assets.test.ts
 ```
 
@@ -75,12 +79,22 @@ The script checks these exact, reviewed input hashes before loading a model:
 | `mv2.onnx.json` | 7,528 | `1dae6569843412ace557acdc2f2136405219ab75219efb3ddf882af2055a4c1c` |
 
 To add phrases, edit the appropriate scene in `customerCorpus.json` and rerun
-the generator for **both** voices. Keep card checkout lines compatible with
-the actual payment flow; cash, bags, receipts, refunds and discounts are not
-implemented. Do not change an existing ID to mean a different phrase without
-regenerating its audio. Test and review the resulting manifest and WAV files
-together. The script does not delete retired files automatically; any removal
-needs an explicit, reviewed change so orphaned assets are not silently lost.
+the generator for **both** voices. `--reuse-existing` checks existing clip text,
+voice settings, size and hash against the previous manifest, then generates
+only new clips. Translation-only changes refresh the Chinese manifest caption
+without changing the English recording. The cash extension added 14 clips
+while leaving all 56 existing customer WAV files byte-for-byte unchanged.
+The eight legacy phrase WAV files
+and their separate `phrase-manifest.json` also remain untouched.
+
+Omit `--reuse-existing` for an explicitly reviewed full regeneration or an
+empty output directory. Do not change an existing ID to mean a different
+phrase without regenerating its audio. Keep card/cash requests compatible with
+the saved payment choice; bags, receipts, refunds and discounts are not
+implemented. Test and review the resulting manifest and WAV files together.
+The script does not delete retired files automatically; incremental generation
+rejects retired or altered existing spoken-text records so removal needs an
+explicit, reviewed change and orphaned assets are not silently lost.
 
 ## Audio preparation and verification limits
 

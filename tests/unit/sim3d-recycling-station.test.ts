@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { payScannedCheckout } from "../helpers/sim3dPayment";
 import { DynamicTexture, NullEngine, PBRMaterial, Scene, TransformNode, UniversalCamera, Vector3 } from "@babylonjs/core";
 import { createShop } from "../../src/sim3d/assets";
 import { canSettleDay, createFirstDayState, isWalkablePosition, reduceSim, SAFE_DROP_POINTS, validateSimState, type SimCommand, type SimState } from "../../src/sim3d/domain";
@@ -118,7 +119,7 @@ describe("cardboard recycling in the physical shop", () => {
       expectRecyclingGuide();
       const item = state.items.find((candidate) => candidate.location.kind === "checkout")!;
       state = act(state, { type: "SCAN", itemId: item.id });
-      state = act(state, { type: "PAY", success: true });
+      state = payScannedCheckout(state);
       state = act(state, { type: "CUSTOMER_ADVANCE" });
     }
     expect(canSettleDay(state)).toBe(true);

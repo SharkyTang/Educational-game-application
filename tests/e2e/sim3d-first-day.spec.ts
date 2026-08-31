@@ -1,6 +1,7 @@
 import { expect, test, type Page } from "@playwright/test";
 import { createFirstDayState, reduceSim, validateSimState, type SimCommand, type SimState } from "../../src/sim3d/domain";
 import { customerProfileFor, customerSpeechFor } from "../../src/sim3d/customerSelection";
+import { completeFixturePayment, payScannedCheckout, readBrowserSnapshot } from "./helpers/sim3d-payment";
 
 // Keep these real 3D browser checks sequential even when the wider suite is parallel.
 // Every test gets Playwright's disposable context; no existing user browser is used.
@@ -39,7 +40,7 @@ function completedDayFixture(): SimState {
     state = command(state, { type: guest === 0 ? "OPEN_STORE" : "NEXT_CUSTOMER" });
     for (let stop = 0; stop < 3; stop += 1) state = command(state, { type: "CUSTOMER_ADVANCE" });
     for (const item of state.items.filter((entry) => entry.location.kind === "checkout")) state = command(state, { type: "SCAN", itemId: item.id });
-    state = command(state, { type: "PAY", success: true });
+    state = completeFixturePayment(state);
     state = command(state, { type: "CUSTOMER_ADVANCE" });
   }
   return state;
@@ -254,22 +255,27 @@ test("3D customer variety: three real visitors rotate models and voices, keep th
   const names = new Set<string>();
   const voices = new Set<string>();
   const checkoutLines = new Set<string>();
+  const paymentMethods = new Set<string>();
 
   for (let number = 1; number <= 3; number += 1) {
-    const visit = { ...fixture, customer: { ...fixture.customer, number } };
+    const visit = { customerSeed: fixture.customerSeed, customer: { number } };
     const profile = customerProfileFor(visit);
     const greeting = customerSpeechFor(visit, "greeting");
-    const checkout = customerSpeechFor(visit, "checkout");
     const thanks = customerSpeechFor(visit, "thanks");
     names.add(profile.name);
     voices.add(profile.voice);
-    checkoutLines.add(checkout.id);
     await expect(page.locator("#s3-customer-name")).toHaveText(`${profile.name} · 第 ${number} 位顾客`, { timeout: 12_000 });
     await expect(page.locator("#s3-customer-line")).toHaveText(`“${greeting.text}”`);
     await expect(page.locator("#s3-word-audio")).toHaveAttribute("src", greeting.src);
 
     // The renderer, not the fixture, walks each visitor through both shelves.
     await expect(page.locator("#s3-receipt-title")).toHaveText("顾客想结账", { timeout: 35_000 });
+    const atCheckout = await readBrowserSnapshot(page);
+    expect(atCheckout.customer.number).toBe(number);
+    expect(atCheckout.payment).not.toBeNull();
+    const checkout = customerSpeechFor(atCheckout, "checkout");
+    checkoutLines.add(checkout.id);
+    paymentMethods.add(atCheckout.payment!.method);
     await expect(page.locator("#s3-customer-line")).toHaveText(`“${checkout.text}”`);
     await expect(page.locator("#s3-customer-zh")).toHaveText(checkout.zh);
     await expect(page.locator("#s3-word-audio")).toHaveAttribute("src", checkout.src);
@@ -283,6 +289,7 @@ test("3D customer variety: three real visitors rotate models and voices, keep th
       await expect(page.locator("#s3-word-audio")).toHaveAttribute("src", checkout.src);
       await page.keyboard.press("r");
       await expect(page.locator("#s3-word-audio")).toHaveAttribute("src", checkout.src);
+      expect((await readBrowserSnapshot(page)).payment).toEqual(atCheckout.payment);
     }
 
     await expect(page.locator("#s3-target-label")).toContainText("收银台");
@@ -290,16 +297,38 @@ test("3D customer variety: three real visitors rotate models and voices, keep th
     await expect(page.locator("#s3-scan-milk")).toHaveText("已扫描");
     await page.keyboard.press("e");
     await expect(page.locator("#s3-scan-bread")).toHaveText("已扫描");
-    await page.keyboard.press("e");
-    await expect(page.locator("#s3-receipt-title")).toHaveText("本单已收款");
-    await expect(page.locator("#s3-customer-line")).toHaveText(`“${thanks.text}”`);
-    await expect(page.locator("#s3-word-audio")).toHaveAttribute("src", thanks.src);
+    // Observe the real media event before paying. The payment helper also checks
+    // the saved ledger; by the time it returns, the next visitor may be greeting.
+    // Capture the receipt, subtitle and selected voice together while thanks plays.
+    const thanksPlayback = page.locator("#s3-word-audio").evaluate((element, expectedSrc) => new Promise((resolve) => {
+      const onPlaying = (): void => {
+        if (element.getAttribute("src") !== expectedSrc) return;
+        element.removeEventListener("playing", onPlaying);
+        resolve({
+          src: element.getAttribute("src"),
+          title: document.querySelector("#s3-receipt-title")?.textContent,
+          line: document.querySelector("#s3-customer-line")?.textContent,
+          customer: document.querySelector("#s3-customer-name")?.textContent,
+        });
+      };
+      element.addEventListener("playing", onPlaying);
+    }), thanks.src);
+    await Promise.all([
+      payScannedCheckout(page),
+      expect(thanksPlayback).resolves.toEqual({
+        src: thanks.src,
+        title: "本单已收款",
+        line: `“${thanks.text}”`,
+        customer: `${profile.name} · 第 ${number} 位顾客`,
+      }),
+    ]);
     await expect(page.locator("#s3-cash")).toHaveText(`£${((510 + number * 400) / 100).toFixed(2)}`);
   }
 
   expect(names.size).toBe(3);
   expect(voices).toEqual(new Set(["female", "male"]));
   expect(checkoutLines.size).toBe(3);
+  expect(paymentMethods).toEqual(new Set(["card", "cash"]));
   await expect(page.locator("#s3-pause")).toBeVisible({ timeout: 12_000 });
   await expect(page.locator("#s3-day-progress")).toContainText("已收款 3 / 3 单");
   await expect(page.locator("#s3-day-cash")).toHaveText("£17.10");

@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { preCashTransactions } from "../helpers/sim3dPayment";
 import { SAFE_DROP_POINTS, createFirstDayState, createInitialSimState, getDeliverySummary, migrateV4SimState, migrateV5SimState,
   reduceSim, validateSimState, validateV4SimState, validateV5SimState, type LegacySimState, type SimState, type SimStateV4, type SimStateV5 } from "../../src/sim3d/domain";
 import {
@@ -48,7 +49,7 @@ function oldSnapshot(state = paidSnapshot()): LegacySimState {
     schemaVersion: 3, revision: state.revision, items: structuredClone(state.items), crates: structuredClone(state.crates),
     held: structuredClone(state.held), inspectedProducts: [...state.inspectedProducts],
     customer: { phase: state.customer.phase, number: state.customer.number },
-    scannedIds: [...state.scannedIds], transactions: structuredClone(state.transactions), cashPence: state.cashPence,
+    scannedIds: [...state.scannedIds], transactions: preCashTransactions(state.transactions), cashPence: state.cashPence,
     upgraded: state.upgraded, playerPose: { ...state.playerPose },
   };
 }
@@ -64,9 +65,10 @@ function v4Snapshot(): SimStateV4 {
 }
 
 function v5Snapshot(state = reduceSim(createFirstDayState(), { type: "PURCHASE_STOCK", orderId: "v5-original", pairs: 3 }).state): SimStateV5 {
-  const { recyclingBatches: _recyclingBatches, recyclingRecords: _recyclingRecords, settlements, ...previous } = structuredClone(state);
+  const { payment: _payment, recyclingBatches: _recyclingBatches, recyclingRecords: _recyclingRecords, settlements, ...previous } = structuredClone(state);
   return {
     ...previous, schemaVersion: 5, customer: { phase: previous.customer.phase, number: previous.customer.number },
+    transactions: preCashTransactions(previous.transactions),
     settlements: settlements.map(({ recycledCrates: _recycledCrates, recyclingIncomePence: _recyclingIncomePence, ...record }) => record),
     purchases: previous.purchases.map(({ id, dayNumber, pairs, itemIds, amountPence, receivedDay }) => ({
       id, dayNumber, pairs: pairs!, itemIds, amountPence, receivedDay,
@@ -241,14 +243,14 @@ describe("safe crate placement around the player", () => {
   });
 });
 
-describe("v7 snapshot persistence and read-only v3 migration", () => {
+describe("v8 snapshot persistence and read-only v3 migration", () => {
   it("starts the new namespace with £12 and empty crates without rewriting unrelated 2D data", () => {
     const storage = new MemoryStorage();
     storage.data.set("english-high-street:save:v2", "legacy-2d-content");
     const before = [...storage.data];
     expect(loadSimState(storage)).toEqual({ state: createFirstDayState(), source: "new" });
     expect([...storage.data]).toEqual(before);
-    expect(SIM_STORAGE_KEY).toBe("english-high-street:sim3d:v7");
+    expect(SIM_STORAGE_KEY).toBe("english-high-street:sim3d:v8");
   });
 
   it("migrates the valid v3 world once and leaves both original v3 keys byte-for-byte intact", () => {
@@ -262,8 +264,8 @@ describe("v7 snapshot persistence and read-only v3 migration", () => {
     expect(migrated.source).toBe("legacy");
     expect(migrated.warning).toContain("不会额外发放");
     expect(migrated.state.cashPence).toBe(400);
-    expect(migrated.state.schemaVersion).toBe(7);
-    expect(migrated.state.transactions).toEqual(oldSnapshot().transactions);
+    expect(migrated.state.schemaVersion).toBe(8);
+    expect(migrated.state.transactions).toEqual(oldSnapshot().transactions.map((transaction) => ({ ...transaction, paymentMethod: "card", tenderedPence: transaction.amountPence, changePence: 0 })));
     expect([...storage.data]).toEqual(before);
     saveSimState(migrated.state, storage);
     expect(storage.getItem(SIM_LEGACY_STORAGE_KEY)).toBe(primary);
@@ -528,11 +530,11 @@ describe("strict v5 selected-stock migration to the current schema", () => {
     const untouched = [...storage.data];
     const result = loadSimState(storage);
     expect(result.source).toBe("v5");
-    expect(result.state.schemaVersion).toBe(7);
+    expect(result.state.schemaVersion).toBe(8);
     expect(validateSimState(result.state)).toBe(true);
     expect(result.state.cashPence).toBe(old.cashPence);
     expect(result.state.items).toEqual(old.items);
-    expect(result.state.transactions).toEqual(old.transactions);
+    expect(result.state.transactions).toEqual(old.transactions.map((transaction) => ({ ...transaction, paymentMethod: "card", tenderedPence: transaction.amountPence, changePence: 0 })));
     expect(result.state.crates).toEqual(old.crates);
     expect(result.state.playerPose).toEqual(old.playerPose);
     expect(result.state.customerSeed).toBe(old.customerSeed);

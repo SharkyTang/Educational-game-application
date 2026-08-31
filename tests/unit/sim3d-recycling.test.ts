@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { payScannedCheckout } from "../helpers/sim3dPayment";
 import {
   PRODUCTS, RECYCLING_REWARD_PENCE, SAFE_DROP_POINTS,
   createFirstDayState, createInitialSimState, countAt, capacityFor, getDaySummary, getRecyclingOffer,
@@ -44,7 +45,7 @@ function sale(state: SimState): SimState {
   state = act(state, { type: state.customer.phase === "outside" ? "OPEN_STORE" : "NEXT_CUSTOMER" });
   while (state.customer.phase !== "checkout") state = act(state, { type: "CUSTOMER_ADVANCE" });
   for (const item of state.items.filter((candidate) => candidate.location.kind === "checkout")) state = act(state, { type: "SCAN", itemId: item.id });
-  state = act(state, { type: "PAY", success: true });
+  state = payScannedCheckout(state);
   return act(state, { type: "CUSTOMER_ADVANCE" });
 }
 

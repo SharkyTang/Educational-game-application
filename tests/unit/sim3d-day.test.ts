@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { payScannedCheckout, preCashTransactions } from "../helpers/sim3dPayment";
 import {
   CRATE_CAPACITY, DAY_CUSTOMER_TARGET, DELIVERY_DROP_POINTS, INITIAL_CAPITAL_PENCE, PRODUCTS, PURCHASE_PAIR_COST_PENCE,
   canSettleDay, capacityFor, countAt, createFirstDayState, createInitialSimState, getDaySummary, getObjective,
@@ -40,7 +41,7 @@ function checkout(state: SimState): SimState {
 function sale(state: SimState, leave = true): SimState {
   state = checkout(state);
   for (const item of state.items.filter((entry) => entry.location.kind === "checkout")) state = act(state, { type: "SCAN", itemId: item.id });
-  state = act(state, { type: "PAY", success: true });
+  state = payScannedCheckout(state);
   return leave ? act(state, { type: "CUSTOMER_ADVANCE" }) : state;
 }
 
@@ -64,7 +65,7 @@ function asLegacy(state: SimState): LegacySimState {
   return {
     schemaVersion: 3, revision: state.revision, items: structuredClone(state.items), crates: structuredClone(state.crates),
     held: structuredClone(state.held), inspectedProducts: [...state.inspectedProducts], customer: { ...state.customer },
-    scannedIds: [...state.scannedIds], transactions: structuredClone(state.transactions), cashPence: state.cashPence,
+    scannedIds: [...state.scannedIds], transactions: preCashTransactions(state.transactions), cashPence: state.cashPence,
     upgraded: state.upgraded, playerPose: { ...state.playerPose },
   };
 }
@@ -73,7 +74,7 @@ describe("first-day paired purchasing and conserved goods", () => {
   it("opens with £12 capital, two empty reusable crates and no free merchandise", () => {
     const state = createFirstDayState();
     expect(validateSimState(state)).toBe(true);
-    expect(state.schemaVersion).toBe(7);
+    expect(state.schemaVersion).toBe(8);
     expect(state.cashPence).toBe(INITIAL_CAPITAL_PENCE);
     expect(state.items).toEqual([]);
     expect(state.crates).toHaveLength(2);
@@ -440,7 +441,7 @@ describe("v3 legacy baseline migration", () => {
     expect(result.held).toEqual(legacy.held);
     expect(result.customer).toEqual(legacy.customer);
     expect(result.scannedIds).toEqual(legacy.scannedIds);
-    expect(result.transactions).toEqual(legacy.transactions);
+    expect(result.transactions).toEqual(legacy.transactions.map((transaction) => ({ ...transaction, paymentMethod: "card", tenderedPence: transaction.amountPence, changePence: 0 })));
     expect(result.day.phase).toBe("open");
     expect(result.day.openingInventoryValuePence).toBe(920);
     result.items[0]!.id = "mutated-copy";
@@ -457,7 +458,7 @@ describe("v3 legacy baseline migration", () => {
     const legacy = asLegacy(state);
     expect(validateLegacySimState(legacy)).toBe(true);
     let result = migrateLegacySimState(legacy);
-    expect(result.transactions).toEqual(legacy.transactions);
+    expect(result.transactions).toEqual(legacy.transactions.map((transaction) => ({ ...transaction, paymentMethod: "card", tenderedPence: transaction.amountPence, changePence: 0 })));
     expect(result.cashPence).toBe(800);
     expect(result.upgraded).toBe(true);
     expect(result.upgradeDay).toBe(1);

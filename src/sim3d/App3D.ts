@@ -10,13 +10,16 @@ import { loadSimState, parseImportedSimState, SimSaveConflictError, SimSaveSessi
 import { ShopWorld, type InteractionTarget, type Quality } from "./world";
 import { SPEECH_CLIPS } from "./speechClips";
 import { ShopAudio, type ShopEffect } from "./shopAudio";
-import { createCustomerSeed, customerProfileFor, customerSpeechFor, NEXT_CUSTOMER_SECONDS, type CustomerSpeechClip } from "./customerSelection";
+import { createCustomerSeed, customerProfileFor, customerSpeechFor, cashTenderSpeechFor, NEXT_CUSTOMER_SECONDS, type CustomerSpeechClip } from "./customerSelection";
+import { cashRegisterMarkup } from "./cashRegister";
+import { CashRegisterController } from "./cashRegisterController";
 import { STREET_VENUES, getStreetProgress, getVenueProgress } from "./progression";
 import { PRODUCT_ASSETS, PRODUCT_CATEGORIES, type ProductCategoryId } from "./product-library/catalog";
 import type { PointerMode } from "./pointerAccess";
 import "./styles.css";
+import "./cashRegister.css";
 
-type ScreenMode = "loading" | "start" | "playing" | "paused" | "inspecting" | "readonly" | "error";
+type ScreenMode = "loading" | "start" | "playing" | "paused" | "inspecting" | "cashier" | "readonly" | "error";
 type ManagementSection = "supply" | "day" | "upgrade" | "street";
 type StreetVenueId = (typeof STREET_VENUES)[number]["id"];
 const MANAGEMENT_SECTIONS: readonly ManagementSection[] = ["supply", "day", "upgrade", "street"];
@@ -25,6 +28,7 @@ interface InteractionDecision {
   message?: string;
   management?: ManagementSection;
   venueId?: StreetVenueId;
+  cashRegister?: true;
 }
 interface Settings {
   schemaVersion: 1;
@@ -102,7 +106,8 @@ export function commandForInteraction(state: SimState, target: InteractionTarget
     case "counter": {
       if (state.customer.phase !== "checkout") return { message: "等顾客带着商品来到收银台后，就可以收款。" };
       const next = state.items.find((item) => item.location.kind === "checkout" && !state.scannedIds.includes(item.id));
-      return { command: next ? { type: "SCAN", itemId: next.id } : { type: "PAY", success: true } };
+      if (next) return { command: { type: "SCAN", itemId: next.id } };
+      return state.payment?.method === "cash" ? { cashRegister: true } : { command: { type: "PAY", success: true } };
     }
     case "open-sign":
       if (state.day.phase === "settled" || getDaySummary(state).paidCustomers >= DAY_CUSTOMER_TARGET) return { management: "day" };
@@ -167,6 +172,7 @@ export class App3D {
   private importGeneration = 0;
   private readonly events = new AbortController();
   private readonly shopAudio: ShopAudio;
+  private readonly cashRegister: CashRegisterController;
   private audioForeground = true;
 
   constructor(root: HTMLElement) {
@@ -188,6 +194,42 @@ export class App3D {
       onStatus: (status) => { if (!this.disposed) this.text("s3-music-status", status) },
     });
     this.shopAudio.setSettings(this.settings);
+    this.cashRegister = new CashRegisterController(this.root, {
+      read: () => ({
+        payment: this.state.payment,
+        amountPence: getCheckoutTotal(this.state),
+        atCheckout: this.state.customer.phase === "checkout",
+        canWrite: !!this.saveSession?.canWrite,
+        customerName: `${customerProfileFor(this.state).name} · 第 ${this.state.customer.number} 位顾客`,
+        clip: cashTenderSpeechFor(this.state),
+        warning: this.saveError || this.writerWarning,
+      }),
+      canOpen: () => this.canOpenCashRegister(),
+      dispatch: (command) => this.dispatch(command),
+      onOpen: () => {
+        this.stopSpeech();
+        this.mode = "cashier";
+        this.world?.setActive(false);
+        this.releasePointer();
+        this.renderCaptureHint();
+        this.syncShopAudio();
+      },
+      onClose: () => {
+        // Lifecycle transitions close the dialog after changing mode. Never
+        // resume a stale, read-only, reinitializing or disposed world from here.
+        if (this.mode !== "cashier" || this.disposed) return;
+        this.stopSpeech();
+        this.mode = "playing";
+        this.lastFrameAt = performance.now();
+        this.world?.setActive(true);
+        this.releasePointer();
+        this.renderCaptureHint();
+        this.syncShopAudio();
+        this.el("s3-canvas").focus();
+        this.syncCustomerCue();
+      },
+      speak: (clip, rate) => this.speak(clip, rate),
+    }, this.events.signal);
     this.bindEvents();
     this.renderState();
     activeInstances.add(this);
@@ -199,6 +241,7 @@ export class App3D {
     const isCurrent = (): boolean => !this.disposed && generation === this.initGeneration;
     this.ready = false;
     this.mode = "loading";
+    this.cashRegister.close();
     this.shopAudio.setActive(false);
     this.stopSpeech();
     this.dragLookFallback = false;
@@ -317,6 +360,7 @@ export class App3D {
             <summary><span id="s3-receipt-title">本单小票</span><span id="s3-receipt-summary">£0.00</span></summary>
             <div class="s3-receipt-body">
               <p id="s3-customer-name" class="s3-muted"></p>
+              <p id="s3-payment-method" class="s3-payment-method" hidden></p>
               <p id="s3-customer-line" class="s3-customer-line">“Hello!”</p>
               <p id="s3-customer-zh" class="s3-muted"></p>
               <p id="s3-customer-order" class="s3-customer-order"></p>
@@ -326,7 +370,9 @@ export class App3D {
               ${PRODUCT_IDS.map((productId) => `<div id="s3-receipt-line-${productId}" class="s3-receipt-row" hidden><span>${PRODUCTS[productId].nameEn}<small id="s3-receipt-count-${productId}">${PRODUCTS[productId].nameZh}</small></span><span id="s3-scan-${productId}">未扫描</span><strong id="s3-receipt-price-${productId}"></strong></div>`).join("")}
               <div class="s3-receipt-total"><span id="s3-receipt-state">应收</span><strong id="s3-receipt-total">£0.00</strong></div>
               </div>
+              <p id="s3-receipt-cash-breakdown" class="s3-receipt-cash-breakdown" hidden></p>
               <p id="s3-receipt-help" class="s3-muted">靠近收银台，逐件扫描后启用刷卡机。</p>
+              <button id="s3-open-cash" class="s3-primary-button s3-cash-receipt-action" type="button" hidden disabled>打开现金收银台 <kbd>E</kbd></button>
             </div>
           </details>
           <div class="s3-action-area">
@@ -471,6 +517,8 @@ export class App3D {
           <section id="s3-import-confirm" class="s3-confirm" aria-labelledby="s3-import-title" hidden><h3 id="s3-import-title">确认导入这份存档？</h3><p id="s3-import-summary"></p><p>会替换当前 3D 进度，覆盖前保留当前有效快照。旧版 2D 存档不变；文件不会上传。</p><div><button id="s3-import-confirm-button" class="s3-primary-button" type="button">确认导入并替换进度</button><button id="s3-import-cancel" class="s3-secondary-button" type="button">保留当前进度</button></div></section>
         </dialog>
 
+        ${cashRegisterMarkup()}
+
         <div id="s3-save-banner" class="s3-save-banner" role="alert" hidden><p id="s3-save-warning"></p><button id="s3-dismiss-warning" class="s3-light-button" type="button">知道了</button></div>
         <p id="s3-toast" class="s3-toast" role="status" aria-live="polite" hidden></p>
       </main>`;
@@ -484,6 +532,7 @@ export class App3D {
     click("s3-takeover", () => { if (this.ready) void this.init() });
     click("s3-export-readonly", () => this.exportSave());
     click("s3-interact", () => this.interact());
+    click("s3-open-cash", () => this.openCashRegister());
     click("s3-inspect-button", () => this.openInspection());
     click("s3-drop-button", () => this.dropHeld());
     click("s3-pause-button", () => this.pause());
@@ -591,6 +640,7 @@ export class App3D {
       this.stopSpeech();
       this.initGeneration += 1;
       this.mode = "readonly";
+      this.cashRegister.close();
       this.ready = false;
       this.world?.setActive(false);
       this.saveSession?.release();
@@ -642,8 +692,28 @@ export class App3D {
     if (decision.management) {
       if (decision.venueId) this.selectedVenue = decision.venueId;
       this.openManagement(decision.management);
-    } else if (decision.command) this.dispatch(decision.command);
+    } else if (decision.cashRegister) this.openCashRegister();
+    else if (decision.command) this.dispatch(decision.command);
     else if (decision.message) this.notify(decision.message);
+  }
+
+  private canOpenCashRegister(): boolean {
+    if (this.mode !== "playing" || !this.ready || !this.saveSession?.canWrite
+      || !interactionInReach(this.target) || this.target.kind !== "counter"
+      || this.state.customer.phase !== "checkout" || this.state.payment?.method !== "cash") return false;
+    const items = this.state.items.filter((item) => item.location.kind === "checkout");
+    return items.length > 0 && items.every((item) => this.state.scannedIds.includes(item.id));
+  }
+
+  private openCashRegister(): void {
+    if (!this.canOpenCashRegister()) return;
+    // Preserve the actual counter pose too, so refresh returns to this checkout.
+    this.savePoseAndPersist();
+    if (!this.saveSession?.canWrite) return;
+    if (this.cashRegister.open()) {
+      this.text("s3-cash-audio-status", "按 R 重听交款金额，Shift + R 慢速重听；字幕始终保留。");
+      if (this.settings.autoSpeech) this.cashRegister.replay();
+    }
   }
 
   private dropHeld(): void {
@@ -836,10 +906,10 @@ export class App3D {
         this.playInteractionSound(command);
       }
       if (showMessage && result.message) this.notify(result.message);
-      if (result.changed && command.type === "PAY" && command.success) {
+      if (result.changed && ((command.type === "PAY" && command.success) || command.type === "CONFIRM_CASH")) {
         const summary = getDaySummary(this.state);
         const payment = this.state.transactions.find((transaction) => transaction.customerNumber === this.state.customer.number);
-        this.notify(`收款成功 +${money(payment?.amountPence ?? 0)} · 今日 ${summary.paidCustomers} / ${summary.targetCustomers} 单。${!this.state.upgraded && this.state.cashPence >= UPGRADE_COST_PENCE ? "按 U 可查看 £8 扩容；注意留足下次进货资金。" : `当前资金 ${money(this.state.cashPence)}。`}`);
+        this.notify(`${command.type === "CONFIRM_CASH" ? "现金" : "刷卡"}收款成功 +${money(payment?.amountPence ?? 0)} · 今日 ${summary.paidCustomers} / ${summary.targetCustomers} 单。${!this.state.upgraded && this.state.cashPence >= UPGRADE_COST_PENCE ? "按 U 可查看 £8 扩容；注意留足下次进货资金。" : `当前资金 ${money(this.state.cashPence)}。`}`);
       }
       return result.changed;
     } catch (error) {
@@ -859,6 +929,7 @@ export class App3D {
       case "STOCK": effect = "stock"; break;
       case "SCAN": effect = "scan"; break;
       case "PAY": if (command.success) effect = "payment"; break;
+      case "CONFIRM_CASH": effect = "payment"; break;
     }
     if (effect) this.shopAudio.playEffect(effect);
   }
@@ -944,6 +1015,7 @@ export class App3D {
     this.text("s3-delivery-hud", delivery.pendingOrders ? `${delivery.pendingUnits} 件待签收 · 门口货车旁按 E` : "");
     this.renderReceipt();
     this.renderTarget();
+    this.cashRegister.render();
     this.renderSaveStatus();
     this.renderManagement();
     this.el<HTMLButtonElement>("s3-cancel-customer").disabled = ["outside", "leaving", "complete"].includes(this.state.customer.phase);
@@ -1101,6 +1173,7 @@ export class App3D {
       ? recycling.allowed ? `回收空箱${recycling.rewardPence ? ` +${money(recycling.rewardPence)}` : " · 不重复奖励"}` : recycling.reason ?? "抱起空箱后回收"
       : delivery ? delivery.pendingOrders ? `签收 ${delivery.pendingUnits} 件送货` : "查看今日进货单" : inReach ? target.action : "走近物品后互动");
     this.el<HTMLButtonElement>("s3-interact").disabled = !inReach;
+    this.el<HTMLButtonElement>("s3-open-cash").disabled = !this.canOpenCashRegister();
     this.el<HTMLButtonElement>("s3-inspect-button").disabled = this.inspectableProduct() === null;
     this.el("s3-reticle").classList.toggle("s3-reticle-active", inReach);
     const held = this.state.held;
@@ -1132,6 +1205,13 @@ export class App3D {
     const total = transaction?.amountPence ?? getCheckoutTotal(this.state);
     this.text("s3-receipt-summary", shopping ? "听听问候" : money(total));
     this.text("s3-receipt-total", money(total));
+    const method = showPaid ? transaction?.paymentMethod : this.state.payment?.method;
+    this.el("s3-payment-method").hidden = !method;
+    this.el("s3-payment-method").setAttribute("data-method", method ?? "");
+    this.text("s3-payment-method", method === "cash" ? "现金付款 · CASH" : "刷卡付款 · CARD");
+    this.el("s3-receipt-cash-breakdown").hidden = !showPaid || method !== "cash";
+    this.text("s3-receipt-cash-breakdown", showPaid && transaction?.paymentMethod === "cash"
+      ? `交付 ${money(transaction.tenderedPence)} · 找零 ${money(transaction.changePence)} · 本单入账 ${money(transaction.amountPence)}` : "");
     this.el("s3-receipt-items").hidden = !atCheckout && !showPaid;
     const receiptItems = transaction && showPaid
       ? this.state.items.filter((item) => transaction.itemIds.includes(item.id))
@@ -1156,7 +1236,13 @@ export class App3D {
     this.text("s3-customer-zh", clip.zh);
     this.el("s3-repeat-customer").hidden = !atCheckout;
     const allScanned = receiptItems.length > 0 && receiptItems.every((item) => this.state.scannedIds.includes(item.id));
-    this.text("s3-receipt-help", showPaid ? "金额已入账，不会重复收费。可在营业账本中查看今天的收支。" : shopping ? `${shoppingProduct ? `顾客正在找 ${PRODUCTS[shoppingProduct].nameEn} / ${PRODUCTS[shoppingProduct].nameZh}。` : "顾客选好商品，正在走向收银台。"}R 可重听；Tab 释放鼠标。` : allScanned ? `本单 ${receiptItems.length} 件商品全部已扫描。靠近收银台按 E 启用刷卡机。` : `本单 ${receiptItems.length} 件商品，请在收银台内侧按 E 逐件扫描。鼠标已释放，可点击重听。`);
+    const cash = this.state.payment?.method === "cash" ? this.state.payment : null;
+    this.el("s3-open-cash").hidden = !atCheckout || !allScanned || !cash;
+    this.text("s3-open-cash", cash?.received ? "继续找零 · E" : "打开现金收银台 · E");
+    this.text("s3-receipt-help", showPaid ? "金额已入账，不会重复收费。可在营业账本中查看今天的收支。" : shopping ? `${shoppingProduct ? `顾客正在找 ${PRODUCTS[shoppingProduct].nameEn} / ${PRODUCTS[shoppingProduct].nameZh}。` : "顾客选好商品，正在走向收银台。"}R 可重听；Tab 释放鼠标。` : allScanned
+      ? cash ? `${cash.received ? `已暂收 ${money(cash.tenderedPence)}，本单尚未入账。` : `本单 ${receiptItems.length} 件商品全部已扫描。`}看向身边的收银台按 E ${cash.received ? "继续找零" : "收下现金并找零"}。`
+        : `本单 ${receiptItems.length} 件商品全部已扫描。靠近收银台按 E 启用刷卡机。`
+      : `本单 ${receiptItems.length} 件商品，请在收银台内侧按 E 逐件扫描。鼠标已释放，可点击重听。`);
   }
 
   private renderSaveStatus(): void {
@@ -1185,6 +1271,7 @@ export class App3D {
     this.writerWarning = message;
     this.lastSaveText = "只读 · 本页已停止写入";
     this.mode = "readonly";
+    this.cashRegister.close();
     this.world?.setActive(false);
     this.world?.inspect(null);
     this.releasePointer();
@@ -1270,7 +1357,7 @@ export class App3D {
 
   private syncShopAudio(): void {
     this.shopAudio.setActive(!this.disposed && this.ready && !!this.saveSession?.canWrite
-      && this.audioForeground && !document.hidden && (this.mode === "playing" || this.mode === "inspecting"));
+      && this.audioForeground && !document.hidden && (this.mode === "playing" || this.mode === "inspecting" || this.mode === "cashier"));
   }
 
   /** Prime this very same audio element in the Start click's user activation. */
@@ -1331,6 +1418,7 @@ export class App3D {
     const text = typeof input === "string" ? input : input.text;
     const report = (message: string): void => {
       if (this.mode === "inspecting") this.text("s3-speech-status", message);
+      else if (this.mode === "cashier") this.text("s3-cash-audio-status", message);
       else this.text("s3-customer-audio-status", message);
     };
     this.stopSpeech();
@@ -1575,6 +1663,7 @@ export class App3D {
     this.el("s3-hud").hidden = true;
     this.el("s3-start").hidden = false;
     this.mode = "start";
+    this.cashRegister.close();
     this.stopSpeech();
     this.renderState();
     this.el("s3-start-button").focus();
@@ -1589,6 +1678,7 @@ export class App3D {
     this.savePoseAndPersist();
     this.releaseCompletion = this.saveSession?.release() ?? Promise.resolve();
     this.disposed = true;
+    this.cashRegister.close();
     this.initGeneration += 1;
     this.events.abort();
     if (this.statusTimer) clearTimeout(this.statusTimer);

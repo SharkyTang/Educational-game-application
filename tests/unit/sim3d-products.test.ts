@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { payScannedCheckout } from "../helpers/sim3dPayment";
 import { PRODUCT_ASSET_IDS, PRODUCT_ASSETS } from "../../src/sim3d/product-library/catalog";
 import {
   PRODUCT_IDS, PRODUCTS, DELIVERY_DROP_POINTS, SAFE_DROP_POINTS, CRATE_CAPACITY,
@@ -38,7 +39,7 @@ function checkout(state: SimState): SimState {
 
 function pay(state: SimState): SimState {
   for (const item of state.items.filter((candidate) => candidate.location.kind === "checkout")) state = act(state, { type: "SCAN", itemId: item.id });
-  state = act(state, { type: "PAY", success: true });
+  state = payScannedCheckout(state);
   return act(state, { type: "CUSTOMER_ADVANCE" });
 }
 

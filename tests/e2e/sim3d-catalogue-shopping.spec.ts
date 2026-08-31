@@ -4,6 +4,7 @@ import {
   PRODUCTS, PRODUCT_IDS, createFirstDayState, reduceSim, validateSimState,
   type ProductId, type PurchaseLine, type SimCommand, type SimState,
 } from "../../src/sim3d/domain";
+import { completeFixturePayment, payScannedCheckout } from "./helpers/sim3d-payment";
 
 test.describe.configure({ mode: "default" });
 test.use({ viewport: { width: 1365, height: 860 } });
@@ -84,7 +85,7 @@ function allProductsFixture(): SimState {
       state = step(state, { type: visitor === 0 ? "OPEN_STORE" : "NEXT_CUSTOMER" });
       while (["to-milk", "to-bread", "to-checkout"].includes(state.customer.phase)) state = step(state, { type: "CUSTOMER_ADVANCE" });
       for (const item of state.items.filter((entry) => entry.location.kind === "checkout")) state = step(state, { type: "SCAN", itemId: item.id });
-      state = step(state, { type: "PAY", success: true });
+      state = completeFixturePayment(state);
       state = step(state, { type: "CUSTOMER_ADVANCE" });
     }
     state = step(state, { type: "SETTLE_DAY" });
@@ -192,7 +193,7 @@ test("single-product shop: a real visitor buys the chosen new SKU and resumes a 
   await page.locator("#s3-start-button").click();
   await expect(page.locator("#s3-scan-soap")).toHaveText("已扫描");
   await expect(page.locator("#s3-receipt-line-milk")).toBeHidden();
-  await page.keyboard.press("e");
+  await payScannedCheckout(page);
   const expectedCash = fixture.cashPence + PRODUCTS.soap.pricePence;
   await expect(page.locator("#s3-cash")).toHaveText(money(expectedCash));
   await expect(page.locator("#s3-receipt-title")).toHaveText("本单已收款");

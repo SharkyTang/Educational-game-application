@@ -7,7 +7,8 @@ import legacyManifest from "../../public/assets/sim3d/audio/phrase-manifest.json
 
 const AUDIO_ROOT = new URL("../../public/assets/sim3d/audio/", import.meta.url);
 const VOICES = ["female", "male"] as const;
-const SCENES = ["greeting", "checkout", "thanks"] as const;
+const SCENES = ["greeting", "checkout", "thanks", "checkoutCash", "tenderCash"] as const;
+const SCENE_ID_PREFIX = { greeting: "greeting", checkout: "checkout", thanks: "thanks", checkoutCash: "checkout-cash", tenderCash: "tender-cash" } as const;
 const PHRASES = SCENES.flatMap((scene) => corpus.scenes[scene].map((phrase) => ({ scene, ...phrase })));
 const sha256 = (data: Buffer): string => createHash("sha256").update(data).digest("hex");
 
@@ -43,12 +44,14 @@ describe("scene-based customer corpus and two bundled voice sets", () => {
     expect(corpus.scenes.greeting.length).toBeGreaterThanOrEqual(8);
     expect(corpus.scenes.checkout.length).toBeGreaterThanOrEqual(12);
     expect(corpus.scenes.thanks.length).toBeGreaterThanOrEqual(8);
+    expect(corpus.scenes.checkoutCash.length).toBeGreaterThanOrEqual(4);
+    expect(corpus.scenes.tenderCash).toHaveLength(3);
     expect(new Set(PHRASES.map((phrase) => phrase.id)).size).toBe(PHRASES.length);
     const normalTexts = PHRASES.map((phrase) => phrase.text.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim());
     expect(new Set(normalTexts).size).toBe(PHRASES.length);
     for (const { scene, ...phrase } of PHRASES) {
       expect(Object.keys(phrase).sort()).toEqual(["id", "text", "zh"]);
-      expect(phrase.id).toMatch(new RegExp(`^${scene}-[a-z]+(?:-[a-z]+)*$`));
+      expect(phrase.id).toMatch(new RegExp(`^${SCENE_ID_PREFIX[scene]}-[a-z]+(?:-[a-z]+)*$`));
       expect(phrase.text).toBe(phrase.text.trim());
       expect(phrase.text).toMatch(/[A-Za-z]/);
       expect(phrase.zh).toBe(phrase.zh.trim());
@@ -61,12 +64,20 @@ describe("scene-based customer corpus and two bundled voice sets", () => {
     }
   });
 
-  it("only offers the implemented card checkout intent and avoids premature goodbyes", () => {
+  it("separates card and cash requests, describes only implemented tenders, and avoids premature goodbyes", () => {
     for (const phrase of corpus.scenes.checkout) {
       expect(phrase.text).toMatch(/\bcard\b/i);
       expect(phrase.text).not.toMatch(/\b(cash|change|receipt|bag|discount|refund)\b/i);
       expect(phrase.text).not.toMatch(/\b(thank|thanks|cheers|goodbye)\b/i);
     }
+    for (const phrase of corpus.scenes.checkoutCash) {
+      expect(phrase.text).toMatch(/\bcash\b/i);
+      expect(phrase.text).not.toMatch(/\b(card|change|receipt|bag|discount|refund)\b/i);
+      expect(phrase.text).not.toMatch(/\b(thank|thanks|cheers|goodbye)\b/i);
+    }
+    expect(corpus.scenes.tenderCash.map((phrase) => phrase.text)).toEqual([
+      "Here's five pounds.", "Here's ten pounds.", "I have the exact amount.",
+    ]);
     for (const phrase of corpus.scenes.greeting) {
       expect(phrase.text).not.toMatch(/\b(morning|afternoon|evening|night|goodbye|cheers|thanks)\b/i);
     }
@@ -181,5 +192,14 @@ describe("scene-based customer corpus and two bundled voice sets", () => {
     for (const clip of legacyManifest.clips) {
       expect(sha256(readFileSync(new URL(clip.file, AUDIO_ROOT)))).toBe(clip.sha256);
     }
+  });
+
+  it("preserves all 56 original customer recordings byte-for-byte when extending the corpus", () => {
+    const originalScenes = new Set(["greeting", "checkout", "thanks"]);
+    const original = manifest.clips.filter((clip) => originalScenes.has(clip.scene));
+    expect(original).toHaveLength(56);
+    const records = original.map(({ voiceId, id, file }) => ({ voiceId, id, sha256: sha256(readFileSync(new URL(file, AUDIO_ROOT))) }))
+      .sort((a, b) => `${a.voiceId}/${a.id}`.localeCompare(`${b.voiceId}/${b.id}`));
+    expect(sha256(Buffer.from(JSON.stringify(records)))).toBe("c7703f3aa6d83e28b813481684e49edd272c238fa725c5f5320aafec23eda37f");
   });
 });

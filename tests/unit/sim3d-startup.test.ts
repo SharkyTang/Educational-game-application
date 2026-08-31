@@ -1,9 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { capacityFor, countAt, createFirstDayState, createInitialSimState, DELIVERY_DROP_POINTS, getCustomerOrder, getDeliverySummary, PRODUCTS, PRODUCT_IDS, reduceSim, validateSimState, type PlayerPose, type ProductId, type PurchaseLine, type SimCommand, type SimState } from "../../src/sim3d/domain";
+import { capacityFor, countAt, createFirstDayState, createInitialSimState, DELIVERY_DROP_POINTS, getCheckoutTotal, getCustomerOrder, getDeliverySummary, PRODUCTS, PRODUCT_IDS, reduceSim, validateSimState, type PlayerPose, type ProductId, type PurchaseLine, type SimCommand, type SimState } from "../../src/sim3d/domain";
 import { SIM_BACKUP_KEY, SIM_STORAGE_KEY, type SimLockManager, type StorageLike } from "../../src/sim3d/persistence";
 import type { InteractionTarget, WorldCallbacks } from "../../src/sim3d/world";
 import { SPEECH_CLIPS } from "../../src/sim3d/speechClips";
-import { customerProfileFor, customerSpeechFor, NEXT_CUSTOMER_SECONDS, type CustomerVoice } from "../../src/sim3d/customerSelection";
+import { customerProfileFor, customerSpeechFor, cashTenderSpeechFor, NEXT_CUSTOMER_SECONDS, type CustomerVoice } from "../../src/sim3d/customerSelection";
+import { CASH_DENOMINATIONS_PENCE, cashChangeDuePence } from "../../src/sim3d/cashPayment";
+import { payScannedCheckout } from "../helpers/sim3dPayment";
 
 const doubles = vi.hoisted(() => {
   class World {
@@ -194,7 +196,7 @@ function completeOrder(state: SimState, leave = true): SimState {
   state = act(state, { type: state.customer.phase === "outside" ? "OPEN_STORE" : "NEXT_CUSTOMER" });
   for (let step = 0; step < 3; step += 1) state = act(state, { type: "CUSTOMER_ADVANCE" });
   for (const item of state.items.filter((entry) => entry.location.kind === "checkout")) state = act(state, { type: "SCAN", itemId: item.id });
-  state = act(state, { type: "PAY", success: true });
+  state = payScannedCheckout(state);
   return leave ? act(state, { type: "CUSTOMER_ADVANCE" }) : state;
 }
 
@@ -246,8 +248,8 @@ async function readyGame(state = createFirstDayState()) {
   return { ...view, world, audio };
 }
 
-function key(code: string): Event {
-  const event = Object.assign(new Event("keydown", { cancelable: true }), { code, repeat: false, ctrlKey: false, metaKey: false, altKey: false, isComposing: false });
+function key(code: string, shiftKey = false): Event {
+  const event = Object.assign(new Event("keydown", { cancelable: true }), { code, shiftKey, repeat: false, ctrlKey: false, metaKey: false, altKey: false, isComposing: false });
   windowDouble.dispatchEvent(event);
   return event;
 }
@@ -855,7 +857,21 @@ describe("customer identity, dialogue continuity and saved seeds", () => {
       expect(view.audio.play).toHaveBeenCalledOnce(); // Scanning must not select/repeat another checkout line.
       expect(view.audio.src).toBe(checkout.src);
       expect(view.element("s3-customer-line").textContent).toContain(checkout.text);
+      const scanned = savedState();
+      const expectedVoicePlays = scanned.payment?.method === "cash" ? 3 : 2;
       view.world.callbacks.onInteract();
+      if (scanned.payment?.method === "cash") {
+        expect(view.element("s3-cash-dialog").open).toBe(true);
+        expect(view.audio.src).toBe(cashTenderSpeechFor(scanned)?.src);
+        expect(view.audio.src).toContain(`/customers/${profile.voice}/`);
+        view.element("s3-cash-receive").click();
+        let change = cashChangeDuePence(scanned.payment, getCheckoutTotal(scanned));
+        for (const denomination of [...CASH_DENOMINATIONS_PENCE].reverse()) {
+          while (change >= denomination) { view.element(`s3-cash-add-${denomination}`).click(); change -= denomination }
+        }
+        view.element("s3-cash-confirm").click();
+        expect(view.element("s3-cash-dialog").open).toBe(false);
+      }
       const thanks = customerSpeechFor(savedState(), "thanks");
       thanksIds.add(thanks.id);
       expect(savedState().customer.phase).toBe("leaving");
@@ -865,10 +881,10 @@ describe("customer identity, dialogue continuity and saved seeds", () => {
       expect(view.audio.src).toBe(thanks.src);
       expect(view.element("s3-customer-line").textContent).toContain(thanks.text);
       expect(view.element("s3-customer-zh").textContent).toBe(thanks.zh);
-      expect(view.audio.play).toHaveBeenCalledTimes(2);
+      expect(view.audio.play).toHaveBeenCalledTimes(expectedVoicePlays);
       view.world.callbacks.onCustomerArrive();
       expect(savedState().customer.phase).toBe("complete");
-      expect(view.audio.play).toHaveBeenCalledTimes(2); // Departure is not a second thank-you.
+      expect(view.audio.play).toHaveBeenCalledTimes(expectedVoicePlays); // Departure is not a second thank-you.
       view.audio.play.mockClear();
       now += 650;
       view.world.callbacks.onFrame?.(60, shopping.playerPose);
@@ -1571,6 +1587,179 @@ describe("receipts for the products actually stocked", () => {
     expect(savedState().customer).toEqual({ number: 2, phase: "to-milk", shoppingList: ["soap"] });
     expect(view.element("s3-customer-order").textContent).toContain("香皂");
     expect(view.element("s3-pause").open).toBe(false);
+  });
+});
+
+function cashCheckoutState(scanned = true): SimState {
+  let state = act(beforeCheckout(1), { type: "CUSTOMER_ADVANCE" });
+  expect(state.payment).toEqual({ method: "cash", tenderedPence: 500, received: false, selectedChange: [] });
+  if (scanned) for (const item of state.items.filter((entry) => entry.location.kind === "checkout")) state = act(state, { type: "SCAN", itemId: item.id });
+  return state;
+}
+
+function counterTarget(distance = 1): InteractionTarget {
+  return { id: "counter", kind: "counter", label: "收银台", action: "现金收款", inspectable: false, distance };
+}
+
+describe("cash checkout app wiring and recoverable interaction", () => {
+  it("requires both scans and a nearby counter, then commits one cash sale and one payment sound", async () => {
+    const state = cashCheckoutState(false);
+    const view = await readyGame(state);
+    expect(view.element("s3-payment-method").textContent).toContain("现金");
+    expect(view.element("s3-customer-line").textContent).toContain("cash");
+    expect(view.element("s3-open-cash").hidden).toBe(true);
+    view.world.callbacks.onTarget(counterTarget());
+    view.world.callbacks.onInteract();
+    expect(view.element("s3-cash-dialog").open).toBe(false);
+    expect(view.element("s3-open-cash").hidden).toBe(true);
+    view.world.callbacks.onInteract();
+    expect(view.element("s3-open-cash").hidden).toBe(false);
+    expect(view.element("s3-open-cash").disabled).toBe(false);
+    view.world.callbacks.onTarget(counterTarget(3));
+    expect(view.element("s3-open-cash").disabled).toBe(true);
+    // The handler checks the live target even if a stale DOM event is delivered.
+    view.element("s3-open-cash").dispatchEvent(new Event("click"));
+    expect(view.element("s3-cash-dialog").open).toBe(false);
+    view.world.callbacks.onTarget(null);
+    view.element("s3-open-cash").dispatchEvent(new Event("click"));
+    expect(view.element("s3-cash-dialog").open).toBe(false);
+    view.world.callbacks.onTarget(counterTarget());
+    view.world.callbacks.onInteract();
+    expect(view.element("s3-cash-dialog").open).toBe(true);
+    expect(view.world.setActive).toHaveBeenLastCalledWith(false);
+    expect(view.world.setCursorFree).toHaveBeenLastCalledWith(true);
+    expect(view.audio.src).toBe(cashTenderSpeechFor(state)?.src);
+    expect(view.element("s3-cash-due").textContent).toBe("£4.00");
+    expect(view.element("s3-cash-tendered").textContent).toBe("£5.00");
+    expect(view.element("s3-cash-confirm").disabled).toBe(true);
+    view.shopAudio.playEffect.mockClear();
+    view.element("s3-cash-receive").click();
+    view.element("s3-cash-add-50").click();
+    expect(savedState().cashPence).toBe(state.cashPence);
+    expect(savedState().transactions).toEqual(state.transactions);
+    expect(view.element("s3-cash-feedback").textContent).toContain("还差 £0.50");
+    expect(view.shopAudio.playEffect).not.toHaveBeenCalled();
+    view.element("s3-cash-add-50").click();
+    expect(view.element("s3-cash-confirm").disabled).toBe(false);
+    view.element("s3-cash-confirm").click();
+    expect(view.element("s3-cash-dialog").open).toBe(false);
+    expect(savedState().cashPence).toBe(state.cashPence + 400);
+    expect(savedState().transactions.at(-1)).toMatchObject({ paymentMethod: "cash", amountPence: 400, tenderedPence: 500, changePence: 100 });
+    expect(view.element("s3-receipt-cash-breakdown").textContent).toBe("交付 £5.00 · 找零 £1.00 · 本单入账 £4.00");
+    expect(view.world.setActive).toHaveBeenLastCalledWith(true);
+    expect(view.shopAudio.playEffect.mock.calls).toEqual([["payment"]]);
+    view.element("s3-cash-confirm").dispatchEvent(new Event("click"));
+    view.world.callbacks.onInteract();
+    expect(savedState().transactions).toHaveLength(2);
+    expect(view.shopAudio.playEffect.mock.calls).toEqual([["payment"]]);
+  });
+
+  it("replays the fixed tender slowly, blocks background actions, and Esc preserves partial change", async () => {
+    const state = cashCheckoutState();
+    const view = await readyGame(state);
+    view.world.callbacks.onTarget(counterTarget());
+    view.element("s3-open-cash").click();
+    view.element("s3-cash-receive").click();
+    view.element("s3-cash-add-50").click();
+    const pending = savedState();
+    key("KeyR", true);
+    expect(view.audio.src).toBe(cashTenderSpeechFor(pending)?.src);
+    expect(view.audio.playbackRate).toBe(.84);
+    for (const code of ["KeyE", "KeyF", "KeyG", "KeyB", "KeyU", "KeyM"]) expect(key(code).defaultPrevented).toBe(true);
+    view.world.callbacks.onCustomerArrive();
+    expect(savedState()).toEqual(pending);
+    expect(view.element("s3-pause").open).toBe(false);
+    expect(key("Escape").defaultPrevented).toBe(true);
+    expect(view.element("s3-cash-dialog").open).toBe(false);
+    expect(view.element("s3-pause").open).toBe(false);
+    expect(savedState().payment).toEqual(pending.payment);
+    expect(view.world.requestPointerLock).not.toHaveBeenCalled();
+    view.world.callbacks.onTarget(counterTarget());
+    view.element("s3-open-cash").click();
+    expect(view.element("s3-cash-selected-total").textContent).toBe("£0.50");
+    expect(view.element("s3-cash-receive").hidden).toBe(true);
+    view.element("s3-cash-close").click();
+    key("KeyB");
+    view.element("s3-cancel-customer").click();
+    expect(view.element("s3-toast").textContent).toContain("暂收现金已退回");
+    expect(savedState().cashPence).toBe(state.cashPence);
+    expect(savedState().payment).toBeNull();
+    expect(savedState().transactions).toEqual(state.transactions);
+    expect(savedState().items.some((item) => item.location.kind === "checkout")).toBe(false);
+  });
+
+  it("restores pending tender and selected coins after disposing and mounting a new app", async () => {
+    const state = cashCheckoutState();
+    const first = await readyGame(state);
+    first.world.callbacks.onTarget(counterTarget());
+    first.element("s3-open-cash").click();
+    first.element("s3-cash-receive").click();
+    first.element("s3-cash-add-50").click();
+    first.world.setActive.mockClear();
+    await first.app.dispose();
+    expect(first.element("s3-cash-dialog").open).toBe(false);
+    expect(first.world.setActive).not.toHaveBeenCalledWith(true);
+    const restored = savedState();
+    expect(restored.payment).toMatchObject({ received: true, selectedChange: [50] });
+    const second = await readyGame(restored);
+    second.world.callbacks.onTarget(counterTarget());
+    second.element("s3-open-cash").click();
+    expect(second.element("s3-cash-selected-total").textContent).toBe("£0.50");
+    second.element("s3-cash-add-50").click();
+    second.element("s3-cash-confirm").click();
+    expect(savedState().cashPence).toBe(state.cashPence + 400);
+    expect(savedState().transactions).toHaveLength(2);
+  });
+
+  it("closes without reactivating the world when another writer replaces an open cash checkout", async () => {
+    const view = await readyGame(cashCheckoutState());
+    view.world.callbacks.onTarget(counterTarget());
+    view.element("s3-open-cash").click();
+    view.element("s3-cash-receive").click();
+    const external = act(savedState(), { type: "ADD_CHANGE", denominationPence: 50 });
+    const raw = JSON.stringify(external);
+    storage.setItem(SIM_STORAGE_KEY, raw);
+    view.world.setActive.mockClear();
+    windowDouble.dispatchEvent(Object.assign(new Event("storage"), { key: SIM_STORAGE_KEY, newValue: raw }));
+    expect(view.element("s3-cash-dialog").open).toBe(false);
+    expect(view.element("s3-hud").hidden).toBe(true);
+    expect(view.element("s3-start-button").disabled).toBe(true);
+    expect(view.world.setActive).not.toHaveBeenCalledWith(true);
+    expect(view.world.setActive).toHaveBeenLastCalledWith(false);
+    view.element("s3-cash-confirm").dispatchEvent(new Event("click"));
+    expect(storage.getItem(SIM_STORAGE_KEY)).toBe(raw);
+  });
+
+  it("shows save failures inside the modal instead of claiming pending cash was saved", async () => {
+    const state = cashCheckoutState();
+    const view = await readyGame(state);
+    view.world.callbacks.onTarget(counterTarget());
+    view.element("s3-open-cash").click();
+    vi.spyOn(storage, "setItem").mockImplementation(() => { throw new DOMException("storage full", "QuotaExceededError") });
+    view.element("s3-cash-receive").click();
+    expect(view.element("s3-cash-save-note").textContent).toContain("尚未保存");
+    expect(view.element("s3-cash-save-note").getAttribute("data-error")).toBe("true");
+    expect(view.element("s3-cash-dialog").open).toBe(true);
+    expect(view.element("s3-cash").textContent).toBe(`£${(state.cashPence / 100).toFixed(2)}`);
+    expect(savedState().payment).toMatchObject({ received: false });
+  });
+
+  it("keeps music ducking and visibility handling while cash counting without moving the world", async () => {
+    const view = await readyGame(cashCheckoutState());
+    view.world.callbacks.onTarget(counterTarget());
+    view.element("s3-open-cash").click();
+    expect(view.shopAudio.setActive).toHaveBeenLastCalledWith(true);
+    view.audio.onplaying?.();
+    expect(view.shopAudio.setSpeechActive).toHaveBeenLastCalledWith(true);
+    expect(view.element("s3-cash-audio-status").textContent).toContain("正在播放");
+    windowDouble.dispatchEvent(new Event("blur"));
+    expect(view.shopAudio.setActive).toHaveBeenLastCalledWith(false);
+    expect(view.element("s3-cash-dialog").open).toBe(true);
+    expect(view.world.setActive).toHaveBeenLastCalledWith(false);
+    windowDouble.dispatchEvent(new Event("focus"));
+    expect(view.shopAudio.setActive).toHaveBeenLastCalledWith(true);
+    expect(view.element("s3-cash-dialog").open).toBe(true);
+    expect(view.world.setActive).toHaveBeenLastCalledWith(false);
   });
 });
 
