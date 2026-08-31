@@ -301,6 +301,13 @@ export class App3D {
         onInspect: () => { if (isCurrent()) this.openInspection() },
         onDrop: () => { if (isCurrent()) this.dropHeld() },
         onPause: () => { if (isCurrent()) this.pause() },
+        onCustomerEnter: () => {
+          if (!isCurrent() || this.mode !== "playing") return;
+          this.shopAudio.playEffect("doorbell");
+          this.renderObjective();
+          this.renderReceipt();
+          this.syncCustomerCue();
+        },
         onCustomerArrive: () => {
           if (isCurrent() && this.mode === "playing" && !this.learningPlayback && this.audioForeground && !document.hidden) this.dispatch({ type: "CUSTOMER_ADVANCE" });
         },
@@ -1042,8 +1049,6 @@ export class App3D {
   private playInteractionSound(command: SimCommand): void {
     let effect: ShopEffect | undefined;
     switch (command.type) {
-      case "OPEN_STORE":
-      case "NEXT_CUSTOMER": effect = "doorbell"; break;
       case "STOCK": effect = "stock"; break;
       case "SCAN": effect = "scan"; break;
       case "PAY": if (command.success) effect = "payment"; break;
@@ -1155,6 +1160,11 @@ export class App3D {
     this.text("s3-cash-business-clock", `${clock.timeLabel} · ${stateLabel}${day.phase === "closing" ? " · 已停止接新客，本单可以继续完成" : paused ? " · 重听或离开页面时暂停" : " · 正常找零期间营业钟继续"}`);
   }
 
+  private renderObjective(): void {
+    this.text("s3-objective", this.state.day.phase === "open" && this.world?.isCustomerApproaching()
+      ? "顾客正沿人行道走来，请留出店门和通道。" : getObjective(this.state));
+  }
+
   private renderState(): void {
     const day = getDaySummary(this.state);
     const delivery = getDeliverySummary(this.state);
@@ -1170,7 +1180,7 @@ export class App3D {
       : "按 B 打开进货清单，自己选择商品与数量，再确认总价下单。至少上架一种商品即可迎客；按 M 查看商业街的成长目标。");
     this.text("s3-start-capital", money(this.state.cashPence));
     this.text("s3-start-capital-label", this.loadedSession ? "已保存资金 · 原进度保留" : "首日本金 · 进货会扣钱");
-    this.text("s3-objective", getObjective(this.state));
+    this.renderObjective();
     this.text("s3-phase", `第 ${this.state.day.number} 天 · ${this.state.day.phase === "settled" ? "已日结" : this.state.day.phase === "preparing" ? "进货与开店" : this.state.day.phase === "closing" ? "打烊收尾" : "营业中"}`);
     this.text("s3-cash", money(this.state.cashPence));
     this.text("s3-sold", `今日 ${day.paidCustomers} 单 · 库存 ${day.remainingStockUnits} 件`);
@@ -1382,13 +1392,14 @@ export class App3D {
     const atCheckout = phase === "checkout";
     const showPaid = !!transaction && (phase === "leaving" || phase === "complete");
     const shopping = ["to-milk", "to-bread", "to-checkout"].includes(phase);
+    const approaching = this.world?.isCustomerApproaching() ?? false;
     const receipt = this.el<HTMLDetailsElement>("s3-receipt");
     receipt.hidden = !atCheckout && !showPaid && !shopping;
     if (atCheckout && this.receiptCustomer !== this.state.customer.number) { receipt.open = true; this.receiptCustomer = this.state.customer.number }
-    this.text("s3-receipt-title", showPaid ? "本单已收款" : atCheckout ? "顾客想结账" : "顾客进店了");
+    this.text("s3-receipt-title", showPaid ? "本单已收款" : atCheckout ? "顾客想结账" : approaching ? "顾客正从街上走来" : "顾客进店了");
     this.text("s3-receipt-state", showPaid ? "实收" : "应收");
     const total = transaction?.amountPence ?? getCheckoutTotal(this.state);
-    this.text("s3-receipt-summary", shopping ? "听听问候" : money(total));
+    this.text("s3-receipt-summary", shopping ? approaching ? "即将进店" : "听听问候" : money(total));
     this.text("s3-receipt-total", money(total));
     const method = showPaid ? transaction?.paymentMethod : this.state.payment?.method;
     this.el("s3-payment-method").hidden = !method;
@@ -1565,6 +1576,10 @@ export class App3D {
 
   private syncCustomerCue(): void {
     if (this.mode !== "playing" || this.state.customer.phase === "outside") return;
+    if (this.world?.isCustomerApproaching()) {
+      this.text("s3-customer-audio-status", "顾客正在走近，进店后会打招呼。");
+      return;
+    }
     const phase = this.state.customer.phase;
     if ((phase === "leaving" || phase === "complete") && !this.state.transactions.some((sale) => sale.customerNumber === this.state.customer.number)) return;
     const cue = `${this.state.customer.number}:${this.customerClip.id}`;

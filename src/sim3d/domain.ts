@@ -926,7 +926,7 @@ export function reduceSim(state: SimState, command: SimCommand): SimResult {
       next.day.phase = "open";
       next.day.nextCustomerAtMs = null;
       next.customer.phase = "to-milk";
-      return finish("营业开始，一位邻居走进了小店。");
+      return finish("一位邻居正沿街走来，准备到小店购物。");
     }
     case "CLOSE_STORE": {
       if (next.day.phase === "settled") return reject("今天已经日结，不会重复打烊。");

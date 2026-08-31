@@ -6,12 +6,13 @@ import {
 } from "@babylonjs/core";
 import { CustomerActors } from "./customerActors";
 import { CUSTOMER_EXIT_STOP_SECONDS, CUSTOMER_STOP_SECONDS, CUSTOMER_WALK_SPEED } from "./customerSelection";
+import { CUSTOMER_DOORSTEP, customerArrivalOrigins, customerJourneyRoute } from "./customerJourney";
 import { PointerAccess, type PointerMode } from "./pointerAccess";
 import { playerMovementSpeed } from "./playerMovement";
 import { createCrate, createPlayerHands, createShop, setCheckoutDisplay, setShelfCapacity, setShopSignState, type ShopEnvironment } from "./assets";
 import { createCatalogFixtures, createReceivingPads, type CatalogFixtures } from "./productFixtures";
 import { basketPlacement, checkoutPlacement, crateDimensions, cratePlacement, fitProduct, PRODUCT_DISPLAYS, type ProductDisplay } from "./productLayout";
-import { CHECKOUT_CLERK_POINT, CHECKOUT_CUSTOMER_POINT, furnitureForProduct, layoutEquals, layoutRoute, shopBounds, transformLayoutPoint, type ShopLayout } from "./shopLayout";
+import { CHECKOUT_CLERK_POINT, CHECKOUT_CUSTOMER_POINT, furnitureForProduct, layoutEquals, transformLayoutPoint, type ShopLayout } from "./shopLayout";
 import { crateRestingHeight, measureCrateSupport, ProductVisuals, productDimensions, type CrateSupport } from "./productPresentation";
 import { createStreet, setDeliveryTruckStatus, setStreetVenueStatus, type StreetEnvironment } from "./street";
 import { createRecyclingStation, RECYCLING_POINT } from "./recyclingStation";
@@ -41,6 +42,8 @@ export interface WorldCallbacks {
   onInspect: () => void;
   onDrop: () => void;
   onPause: () => void;
+  /** Presentation only: crossing the doorway does not collect any stock. */
+  onCustomerEnter?: () => void;
   onCustomerArrive: () => void;
   onStatus: (text: string) => void;
   onFrame?: (fps: number, pose: PlayerPose) => void;
@@ -91,6 +94,7 @@ export class ShopWorld {
   private arrivedRevision = -1;
   private customerRouteBlocked = false;
   private customerObstacleSignature = "";
+  private customerEntryAnnounced = false;
   private active = false;
   private disposed = false;
   private inspectionProduct: ProductId | null = null;
@@ -477,13 +481,15 @@ export class ShopWorld {
     const phase = this.state.customer.phase;
     const order = getCustomerOrder(this.state);
     const freshCustomer = phase === "to-milk" && this.customerPhase !== "to-milk";
+    const arrivalOrigins = (initial || freshCustomer) && phase === "to-milk" ? customerArrivalOrigins(this.state) : null;
     if (initial || freshCustomer) {
+      this.customerEntryAnnounced = phase !== "to-milk";
       const first = order[0] ? this.displays[order[0]].approach : this.displays.milk.approach;
       const lastProduct = order.at(-1);
       const last = lastProduct ? this.displays[lastProduct].approach : first;
-      const start = phase === "to-milk" ? { x: 0, z: -4.35 }
+      const start = arrivalOrigins ? arrivalOrigins[0]!
         : phase === "to-bread" ? first : phase === "to-checkout" ? last
-          : phase === "checkout" || phase === "leaving" ? this.checkoutPoint() : { x: 0, z: -5.3 };
+          : phase === "checkout" || phase === "leaving" ? this.checkoutPoint() : CUSTOMER_DOORSTEP;
       this.customer.position.set(start.x, 0, start.z);
     }
     this.customerPhase = phase;
@@ -491,10 +497,21 @@ export class ShopWorld {
     const product = getShoppingProduct(this.state);
     const destination = product ? this.displays[product].approach
       : phase === "to-checkout" ? this.checkoutPoint()
-        : phase === "leaving" ? { x: 0, z: -5.3 } : null;
+        : phase === "leaving" ? CUSTOMER_DOORSTEP : null;
     const obstacles = this.customerColliders();
-    const route = destination ? layoutRoute({ x: this.customer.position.x, z: this.customer.position.z }, destination, obstacles,
-      { ...shopBounds(this.state.renovation.layout.expansion), minZ: -6 }) : [];
+    const plan = (from: Position) => destination ? customerJourneyRoute(from, destination, obstacles, this.state.renovation.layout.expansion) : [];
+    let route = plan(this.customer.position);
+    // A stocked unloading area may temporarily obstruct one end of the street.
+    // Choose another distant start only before a new visitor is first displayed.
+    if (route === null && arrivalOrigins) {
+      for (const origin of arrivalOrigins.slice(1)) {
+        const alternative = plan(origin);
+        if (alternative === null) continue;
+        this.customer.position.set(origin.x, 0, origin.z);
+        route = alternative;
+        break;
+      }
+    }
     this.customerRouteBlocked = route === null;
     this.route = route ?? [];
     this.customerObstacleSignature = this.crateObstacleSignature();
@@ -502,6 +519,9 @@ export class ShopWorld {
     this.routeIndex = 0;
     this.arrivalDelay = 0;
     this.arrivedRevision = -1;
+    if ((initial || freshCustomer) && route?.[0]) {
+      this.customer.rotation.y = Math.atan2(route[0].x - this.customer.position.x, route[0].z - this.customer.position.z);
+    }
     if (phase === "checkout") this.customer.rotation.y = -Math.PI / 2 + this.checkoutYaw();
   }
 
@@ -549,6 +569,10 @@ export class ShopWorld {
     this.customerActors.play(walking);
   }
 
+  isCustomerApproaching(): boolean {
+    return this.customerPhase === "to-milk" && this.customer.position.z < -4.5;
+  }
+
   private updateCustomer(dt: number): void {
     if (!this.active || !this.customer.isEnabled()) return;
     if (this.customerRouteBlocked) { this.playCustomerAnimation(false); return; }
@@ -562,7 +586,10 @@ export class ShopWorld {
         this.playCustomerAnimation(false);
         return;
       }
-      if (distance < .045) {
+      if (distance < 1e-7) {
+        // Finish the corner before turning, rather than cutting diagonally
+        // inside the planned clearance around a tree, lamp or shelf.
+        this.customer.position.set(next.x, 0, next.z);
         this.routeIndex += 1;
       } else {
         const step = Math.min(distance, dt * CUSTOMER_WALK_SPEED);
@@ -573,6 +600,10 @@ export class ShopWorld {
         angle = Math.atan2(Math.sin(angle), Math.cos(angle));
         this.customer.rotation.y += angle * Math.min(1, dt * 9);
         this.playCustomerAnimation(true);
+      }
+      if (!this.customerEntryAnnounced && this.customerPhase === "to-milk" && !this.isCustomerApproaching()) {
+        this.customerEntryAnnounced = true;
+        this.callbacks.onCustomerEnter?.();
       }
       return;
     }
@@ -927,7 +958,8 @@ export class ShopWorld {
       } else { point = { x: .65, z: -4.48 }; title = "门口营业牌"; }
     } else {
       point = { x: this.customer.position.x, z: this.customer.position.z };
-      title = "顾客正在购物 · 留出通道";
+      title = this.isCustomerApproaching()
+        ? "顾客正从街上走来 · 留出店门" : "顾客正在购物 · 留出通道";
     }
     const dx = point.x - this.camera.position.x;
     const dz = point.z - this.camera.position.z;

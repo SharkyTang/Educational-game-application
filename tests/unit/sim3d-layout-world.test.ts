@@ -9,6 +9,7 @@ import { segmentClear, type FloorPoint, type LayoutCollider, type ProductDisplay
 import { ProductVisuals } from "../../src/sim3d/productPresentation";
 import { CHECKOUT_CLERK_POINT, createDefaultShopLayout, furnitureForProduct, transformLayoutPoint, validateShopLayout, type FurnitureId, type FurnitureRotation, type ShopLayout } from "../../src/sim3d/shopLayout";
 import { ShopWorld } from "../../src/sim3d/world";
+import { CUSTOMER_STOP_SECONDS, CUSTOMER_WALK_SPEED } from "../../src/sim3d/customerSelection";
 
 interface WorldHarness {
   state: SimState;
@@ -196,7 +197,12 @@ describe("renovation applied to real world interactions, stock and movement", ()
       view.callbacks.onCustomerArrive.mockClear();
       view.setCustomerRoute(true);
       expect(view.customerRouteBlocked).toBe(false);
-      for (let frame = 0; frame < 1_000 && view.callbacks.onCustomerArrive.mock.calls.length === 0; frame += 1) {
+      const points = [{ x: view.customer.position.x, z: view.customer.position.z }, ...view.route];
+      const distance = view.route.reduce((total, next, index) => total + Math.hypot(next.x - points[index]!.x, next.z - points[index]!.z), 0);
+      // The visit now includes the distant pavement. Budget actual route time
+      // plus waypoint/arrival frames at each tested FPS, retaining every check.
+      const frameBudget = Math.ceil((distance / CUSTOMER_WALK_SPEED + CUSTOMER_STOP_SECONDS + 1) / dt) + view.route.length * 2;
+      for (let frame = 0; frame < frameBudget && view.callbacks.onCustomerArrive.mock.calls.length === 0; frame += 1) {
         const before = { x: view.customer.position.x, z: view.customer.position.z };
         view.updateCustomer(dt);
         const after = { x: view.customer.position.x, z: view.customer.position.z };

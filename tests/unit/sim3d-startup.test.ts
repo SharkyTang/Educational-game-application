@@ -13,6 +13,8 @@ const doubles = vi.hoisted(() => {
     static instances: World[] = [];
     readonly callbacks: WorldCallbacks;
     private readonly pose: PlayerPose;
+    private customer: SimState["customer"];
+    private approaching: boolean;
     private finish!: () => void;
     private readonly loading = new Promise<void>((resolve) => { this.finish = resolve });
     readonly setActive = vi.fn();
@@ -23,15 +25,24 @@ const doubles = vi.hoisted(() => {
     readonly inspect = vi.fn();
     readonly requestPointerLock = vi.fn();
     readonly setCursorFree = vi.fn();
-    readonly setState = vi.fn();
+    readonly setState = vi.fn((state: SimState) => {
+      if (state.customer.phase !== "to-milk") this.approaching = false;
+      else if (this.customer.phase !== "to-milk" || this.customer.number !== state.customer.number) this.approaching = true;
+      this.customer = { ...state.customer };
+    });
     readonly restorePose = vi.fn();
     constructor(_canvas: HTMLCanvasElement, state: SimState, callbacks: WorldCallbacks) {
       this.callbacks = callbacks;
       this.pose = { ...state.playerPose };
+      this.customer = { ...state.customer };
+      this.approaching = state.customer.phase === "to-milk";
       World.instances.push(this);
     }
     init(): Promise<void> { return this.loading }
     getPose(): PlayerPose { return this.pose }
+    isCustomerApproaching(): boolean { return this.approaching }
+    /** Simulate only crossing the doorway, never reaching a shelf or advancing an order. */
+    enterShop(): void { this.approaching = false; this.callbacks.onCustomerEnter?.() }
     complete(): void { this.callbacks.onStatus("模型就绪"); this.finish() }
   }
   class ShopAudio {
@@ -852,6 +863,134 @@ describe("automatic customer voice and manual replay wiring", () => {
   });
 });
 
+describe("customer doorway cues are separate from shopping progress", () => {
+  it("waits through the approach and pause/resume, then rings and greets without taking stock or saving an order step", async () => {
+    frameTime();
+    const view = await readyGame({ ...stockedFirstDay(), customerSeed: 31 });
+    view.world.callbacks.onTarget({ id: "open-sign", kind: "open-sign", label: "营业牌", action: "开门营业", inspectable: false, distance: 1 });
+    view.world.callbacks.onInteract();
+    expect(view.world.isCustomerApproaching()).toBe(true);
+    expect(view.element("s3-receipt-title").textContent).toBe("顾客正从街上走来");
+    expect(view.element("s3-objective").textContent).toContain("正沿人行道走来");
+    expect(view.element("s3-customer-audio-status").textContent).toContain("进店后会打招呼");
+    expect(view.shopAudio.playEffect).not.toHaveBeenCalled();
+    expect(view.audio.play).not.toHaveBeenCalled();
+
+    view.element("s3-pause-button").click();
+    view.element("s3-resume").click();
+    expect(view.world.isCustomerApproaching()).toBe(true);
+    expect(view.shopAudio.playEffect).not.toHaveBeenCalled();
+    expect(view.audio.play).not.toHaveBeenCalled();
+    const before = savedState();
+    const saved = storage.getItem(SIM_STORAGE_KEY);
+    const writes = storage.writes;
+    const greeting = customerSpeechFor(before, "greeting");
+    view.world.setState.mockClear();
+
+    view.world.enterShop();
+    expect(view.world.isCustomerApproaching()).toBe(false);
+    expect(view.element("s3-receipt-title").textContent).toBe("顾客进店了");
+    expect(view.element("s3-objective").textContent).toContain("正在挑选");
+    expect(view.element("s3-customer-line").textContent).toContain(greeting.text);
+    expect(view.audio.src).toBe(greeting.src);
+    expect(view.audio.play).toHaveBeenCalledOnce();
+    expect(view.shopAudio.playEffect.mock.calls).toEqual([["doorbell"]]);
+    expect(savedState()).toEqual(before);
+    expect(storage.getItem(SIM_STORAGE_KEY)).toBe(saved);
+    expect(storage.writes).toBe(writes);
+    expect(view.world.setState).not.toHaveBeenCalled();
+    expect(countAt(savedState(), "milk", "basket")).toBe(0);
+    expect(countAt(savedState(), "milk", "shelf")).toBe(3);
+
+    view.element("s3-pause-button").click();
+    view.element("s3-resume").click();
+    expect(view.audio.play).toHaveBeenCalledOnce();
+    expect(view.shopAudio.playEffect.mock.calls).toEqual([["doorbell"]]);
+    view.world.callbacks.onCustomerArrive();
+    expect(savedState().customer.phase).toBe("to-bread");
+    expect(countAt(savedState(), "milk", "basket")).toBe(1);
+    expect(countAt(savedState(), "milk", "shelf")).toBe(2);
+    expect(view.audio.play).toHaveBeenCalledOnce();
+    expect(view.shopAudio.playEffect.mock.calls).toEqual([["doorbell"]]);
+  });
+
+  it("restores a saved street approach silently and greets its unchanged visitor only after the new doorway crossing", async () => {
+    frameTime();
+    const state = act({ ...stockedFirstDay(), customerSeed: 31 }, { type: "OPEN_STORE" });
+    const view = await readyGame(state);
+    expect(view.world.isCustomerApproaching()).toBe(true);
+    expect(view.element("s3-receipt-title").textContent).toBe("顾客正从街上走来");
+    expect(view.audio.src).toBe(SPEECH_CLIPS.greeting.src); // Only Start's muted media unlock has loaded audio.
+    expect(view.shopAudio.playEffect).not.toHaveBeenCalled();
+    expect(view.audio.play).not.toHaveBeenCalled();
+    const before = savedState();
+
+    view.world.enterShop();
+    expect(view.audio.src).toBe(customerSpeechFor(before, "greeting").src);
+    expect(view.audio.play).toHaveBeenCalledOnce();
+    expect(view.shopAudio.playEffect.mock.calls).toEqual([["doorbell"]]);
+    expect(savedState()).toEqual(before);
+  });
+
+  it("keeps the entrance bell and subtitles with automatic speech disabled and leaves manual greeting replay available", async () => {
+    const view = await readyGame(stockedFirstDay());
+    view.element("s3-pause-button").click();
+    view.element("s3-auto-speech").checked = false;
+    view.element("s3-auto-speech").dispatchEvent(new Event("input"));
+    view.element("s3-resume").click();
+    view.world.callbacks.onTarget({ id: "open-sign", kind: "open-sign", label: "营业牌", action: "开门营业", inspectable: false, distance: 1 });
+    view.world.callbacks.onInteract();
+    expect(view.shopAudio.playEffect).not.toHaveBeenCalled();
+    expect(view.audio.play).not.toHaveBeenCalled();
+    view.world.enterShop();
+    const greeting = customerSpeechFor(savedState(), "greeting");
+    expect(view.shopAudio.playEffect.mock.calls).toEqual([["doorbell"]]);
+    expect(view.audio.play).not.toHaveBeenCalled();
+    expect(view.element("s3-customer-line").textContent).toContain(greeting.text);
+    expect(view.element("s3-customer-zh").textContent).toBe(greeting.zh);
+    expect(view.element("s3-customer-audio-status").textContent).toContain("字幕始终保留");
+    key("KeyR");
+    expect(view.audio.src).toBe(greeting.src);
+    expect(view.audio.play).toHaveBeenCalledOnce();
+    expect(view.shopAudio.playEffect.mock.calls).toEqual([["doorbell"]]);
+  });
+
+  it("ignores a replaced world's late entrance even after the new world starts, and ignores entry after disposal", async () => {
+    frameTime();
+    const view = await readyGame(act(stockedFirstDay(), { type: "OPEN_STORE" }));
+    const oldWorld = view.world;
+    const loading = view.app.init();
+    await settle();
+    const currentWorld = doubles.World.instances.at(-1)!;
+    expect(currentWorld).not.toBe(oldWorld);
+    expect(oldWorld.dispose).toHaveBeenCalledOnce();
+    currentWorld.complete();
+    await loading;
+    view.element("s3-start-button").click();
+    await settle();
+    view.audio.play.mockClear();
+    const before = savedState();
+    const writes = storage.writes;
+    expect(currentWorld.isCustomerApproaching()).toBe(true);
+
+    oldWorld.enterShop();
+    expect(view.shopAudio.playEffect).not.toHaveBeenCalled();
+    expect(view.audio.play).not.toHaveBeenCalled();
+    expect(view.element("s3-receipt-title").textContent).toBe("顾客正从街上走来");
+    expect(savedState()).toEqual(before);
+    expect(storage.writes).toBe(writes);
+    currentWorld.enterShop();
+    expect(view.shopAudio.playEffect.mock.calls).toEqual([["doorbell"]]);
+    expect(view.audio.play).toHaveBeenCalledOnce();
+    expect(view.audio.src).toBe(customerSpeechFor(before, "greeting").src);
+    expect(savedState()).toEqual(before);
+    await view.app.dispose();
+    currentWorld.callbacks.onCustomerEnter?.();
+    expect(view.shopAudio.playEffect.mock.calls).toEqual([["doorbell"]]);
+    expect(view.audio.play).toHaveBeenCalledOnce();
+  });
+});
+
 describe("customer identity, dialogue continuity and saved seeds", () => {
   it("keeps three visibly named customers and both voice sets consistent through greeting, scanning, payment and departure", async () => {
     const clock = frameTime();
@@ -873,6 +1012,11 @@ describe("customer identity, dialogue continuity and saved seeds", () => {
       greetingIds.add(greeting.id);
       expect(shopping.customer).toEqual({ number, phase: "to-milk", shoppingList: ["milk", "bread"] });
       expect(view.element("s3-customer-name").textContent).toBe(`${profile.name} · 第 ${number} 位顾客`);
+      expect(view.world.isCustomerApproaching()).toBe(true);
+      expect(view.element("s3-receipt-title").textContent).toBe("顾客正从街上走来");
+      expect(view.audio.play).not.toHaveBeenCalled();
+      view.world.enterShop();
+      expect(view.element("s3-receipt-title").textContent).toBe("顾客进店了");
       expect(view.element("s3-customer-line").textContent).toContain(greeting.text);
       expect(view.element("s3-customer-zh").textContent).toBe(greeting.zh);
       expect(view.audio.src).toBe(greeting.src);
@@ -1299,6 +1443,10 @@ describe("first-day management event wiring and persistence", () => {
     expect(view.audio.play).not.toHaveBeenCalled();
     clock.advance(view, 1);
     expect(savedState().customer).toEqual({ number: paidCustomers + 1, phase: "to-milk", shoppingList: ["milk", "bread"] });
+    expect(view.world.isCustomerApproaching()).toBe(true);
+    expect(view.element("s3-receipt-title").textContent).toBe("顾客正从街上走来");
+    expect(view.audio.play).not.toHaveBeenCalled();
+    view.world.enterShop();
     expect(view.audio.src).toBe(customerSpeechFor(savedState(), "greeting").src);
     expect(view.audio.play).toHaveBeenCalledOnce();
     expect(view.element("s3-pause").open).toBe(false);
@@ -2346,6 +2494,8 @@ describe("accepted shop actions emit feedback once", () => {
     expect(view.shopAudio.playEffect).not.toHaveBeenCalled();
     view.world.callbacks.onTarget({ id: "open-sign", kind: "open-sign", label: "营业牌", action: "开店", inspectable: false, distance: 1 });
     view.world.callbacks.onInteract();
+    expect(view.shopAudio.playEffect).not.toHaveBeenCalled();
+    view.world.enterShop();
     view.world.callbacks.onInteract();
     expect(view.element("s3-pause").open).toBe(true); // The open sign now opens business management.
     view.element("s3-resume").click();
@@ -2391,6 +2541,9 @@ describe("accepted shop actions emit feedback once", () => {
     expect(view.shopAudio.playEffect).not.toHaveBeenCalled();
     clock.advance(view, state.day.nextCustomerAtMs! - state.day.elapsedOpenMs);
     expect(savedState().customer.number).toBe(2);
+    expect(view.world.isCustomerApproaching()).toBe(true);
+    expect(view.shopAudio.playEffect).not.toHaveBeenCalled();
+    view.world.enterShop();
     expect(view.shopAudio.playEffect.mock.calls).toEqual([["doorbell"]]);
     clock.advance(view, 12_000);
     view.element("s3-read-customer").click();

@@ -267,7 +267,10 @@ test("3D customer variety: three real visitors rotate models and voices, keep th
     voices.add(profile.voice);
     await expect(page.locator("#s3-customer-name")).toHaveText(`${profile.name} · 第 ${number} 位顾客`, { timeout: 25_000 });
     await expect(page.locator("#s3-customer-line")).toHaveText(`“${greeting.text}”`);
-    await expect(page.locator("#s3-word-audio")).toHaveAttribute("src", greeting.src);
+    // The new visitor first walks along the street; the greeting is not an
+    // arrival timer and must wait for the actual doorway crossing.
+    await expect(page.locator("#s3-receipt-title")).toHaveText("顾客正从街上走来");
+    await expect(page.locator("#s3-word-audio")).toHaveAttribute("src", greeting.src, { timeout: 30_000 });
 
     // The renderer, not the fixture, walks each visitor through both shelves.
     await expect(page.locator("#s3-receipt-title")).toHaveText("顾客想结账", { timeout: 35_000 });
