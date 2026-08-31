@@ -99,6 +99,9 @@
 .s3-delivery-hud { margin-top: 8px !important; padding: 8px 12px; border: 1px solid #d4b67d; border-radius: 6px; color: #614624; background: #fbecd0f2; font-size: 11px; line-height: 1.7; }
 
 .s3-start { position: absolute; inset: 0; display: flex; align-items: center; padding: 36px clamp(24px, 5vw, 90px); background: #1c34261a; }
+.s3-asset-library-link { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 10px; padding: 10px 12px; border: 1px solid #b9c4af; border-radius: 5px; color: #345646; background: #f5f2e4; text-decoration: none; font-size: 12px; font-weight: 650; }
+.s3-asset-library-link span { font-size: 10px; font-weight: 400; }
+.s3-asset-library-link:hover { background: #e8eddd; }
 .s3-start-card { width: min(440px, 100%); padding: 29px 32px 24px; border: 1px solid #faf6e18a; border-radius: 12px; background: #fff9edea; box-shadow: 0 12px 50px #173b2421; }
 .s3-eyebrow { color: #7a8265; font-size: 10px; font-weight: 650; letter-spacing: 0.18em; line-height: 1.6; }
 .s3-start h1 { margin: 17px 0 20px; color: #2b4637; font: 400 clamp(62px, 6vw, 92px)/0.85 Georgia, "Times New Roman", serif; letter-spacing: -0.055em; }

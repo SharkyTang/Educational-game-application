@@ -21,6 +21,7 @@
   "dependencies": {
     "@babylonjs/core": "9.23.0",
     "@babylonjs/loaders": "9.23.0",
+    "@babylonjs/serializers": "9.23.0",
     "phaser": "4.2.1"
   },
   "devDependencies": {

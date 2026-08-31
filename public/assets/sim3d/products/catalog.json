@@ -1,0 +1,679 @@
+{
+  "version": "corner-shop-products@1.0.0",
+  "units": "metres",
+  "origin": "bottom-centre",
+  "front": "-Z",
+  "source": "Project-authored procedural Babylon.js geometry and PBR materials; milk/bread retain their recorded texture sources.",
+  "gameplayNote": "Only milk and bread are integrated with S1 orders, inventory and audio. Other models are library assets, not completed teaching tasks.",
+  "factory": "src/sim3d/product-library/index.ts#createProductAsset",
+  "categories": [
+    {
+      "id": "drinks",
+      "nameZh": "饮料",
+      "nameEn": "Drinks"
+    },
+    {
+      "id": "bakery",
+      "nameZh": "烘焙与零食",
+      "nameEn": "Bakery & snacks"
+    },
+    {
+      "id": "chilled",
+      "nameZh": "冷藏食品",
+      "nameEn": "Chilled food"
+    },
+    {
+      "id": "produce",
+      "nameZh": "蔬菜与水果",
+      "nameEn": "Fruit & vegetables"
+    },
+    {
+      "id": "pantry",
+      "nameZh": "粮食与冲饮",
+      "nameEn": "Pantry"
+    },
+    {
+      "id": "household",
+      "nameZh": "日用品",
+      "nameEn": "Household"
+    }
+  ],
+  "products": [
+    {
+      "nameEn": "milk",
+      "nameZh": "牛奶",
+      "category": "drinks",
+      "unitEn": "carton",
+      "phraseEn": "a carton of milk",
+      "phraseZh": "一盒牛奶",
+      "shelf": "chiller",
+      "size": [
+        0.087,
+        0.241,
+        0.087
+      ],
+      "appearance": "折顶纸盒、蓝色旋盖与双面标签",
+      "id": "milk",
+      "modelReady": true,
+      "modelUrl": "/assets/sim3d/products/milk.glb",
+      "thumbnailUrl": "/assets/sim3d/products/milk.png",
+      "gameplay": "active",
+      "audio": {
+        "wordUrl": "/assets/sim3d/audio/milk.ogg",
+        "phraseUrl": "/assets/sim3d/audio/milk-phrase.wav"
+      }
+    },
+    {
+      "nameEn": "bread",
+      "nameZh": "面包",
+      "category": "bakery",
+      "unitEn": "loaf",
+      "phraseEn": "a loaf of bread",
+      "phraseZh": "一条面包",
+      "shelf": "bakery",
+      "size": [
+        0.348,
+        0.146,
+        0.154
+      ],
+      "appearance": "烤色外皮、四道割口与透明束口包装",
+      "id": "bread",
+      "modelReady": true,
+      "modelUrl": "/assets/sim3d/products/bread.glb",
+      "thumbnailUrl": "/assets/sim3d/products/bread.png",
+      "gameplay": "active",
+      "audio": {
+        "wordUrl": "/assets/sim3d/audio/bread.ogg",
+        "phraseUrl": "/assets/sim3d/audio/bread-phrase.wav"
+      }
+    },
+    {
+      "nameEn": "sparkling water",
+      "nameZh": "气泡水",
+      "category": "drinks",
+      "unitEn": "bottle",
+      "phraseEn": "a bottle of sparkling water",
+      "phraseZh": "一瓶气泡水",
+      "shelf": "chiller",
+      "size": [
+        0.068,
+        0.24,
+        0.068
+      ],
+      "appearance": "有瓶肩和凹槽的透明瓶身、蓝绿旋盖",
+      "id": "water",
+      "modelReady": true,
+      "modelUrl": "/assets/sim3d/products/water.glb",
+      "thumbnailUrl": "/assets/sim3d/products/water.png",
+      "gameplay": "library-only",
+      "audio": null
+    },
+    {
+      "nameEn": "orange juice",
+      "nameZh": "橙汁",
+      "category": "drinks",
+      "unitEn": "carton",
+      "phraseEn": "a carton of orange juice",
+      "phraseZh": "一盒橙汁",
+      "shelf": "chiller",
+      "size": [
+        0.075,
+        0.215,
+        0.075
+      ],
+      "appearance": "带旋盖的橙色折顶纸盒、橙瓣标识",
+      "id": "orange-juice",
+      "modelReady": true,
+      "modelUrl": "/assets/sim3d/products/orange-juice.glb",
+      "thumbnailUrl": "/assets/sim3d/products/orange-juice.png",
+      "gameplay": "library-only",
+      "audio": null
+    },
+    {
+      "nameEn": "cola",
+      "nameZh": "可乐",
+      "category": "drinks",
+      "unitEn": "can",
+      "phraseEn": "a can of cola",
+      "phraseZh": "一罐可乐",
+      "shelf": "chiller",
+      "size": [
+        0.066,
+        0.122,
+        0.066
+      ],
+      "appearance": "金属易拉罐、卷边与独立拉环",
+      "id": "cola",
+      "modelReady": true,
+      "modelUrl": "/assets/sim3d/products/cola.glb",
+      "thumbnailUrl": "/assets/sim3d/products/cola.png",
+      "gameplay": "library-only",
+      "audio": null
+    },
+    {
+      "nameEn": "crisps",
+      "nameZh": "薯片",
+      "category": "bakery",
+      "unitEn": "packet",
+      "phraseEn": "a packet of crisps",
+      "phraseZh": "一包薯片",
+      "shelf": "ambient",
+      "size": [
+        0.145,
+        0.215,
+        0.065
+      ],
+      "appearance": "鼓起的枕形袋、上下压封边与薯片图案",
+      "id": "crisps",
+      "modelReady": true,
+      "modelUrl": "/assets/sim3d/products/crisps.glb",
+      "thumbnailUrl": "/assets/sim3d/products/crisps.png",
+      "gameplay": "library-only",
+      "audio": null
+    },
+    {
+      "nameEn": "biscuits",
+      "nameZh": "饼干",
+      "category": "bakery",
+      "unitEn": "packet",
+      "phraseEn": "a packet of biscuits",
+      "phraseZh": "一包饼干",
+      "shelf": "ambient",
+      "size": [
+        0.195,
+        0.075,
+        0.075
+      ],
+      "appearance": "横放卷筒包装、两端封口与圆饼图案",
+      "id": "biscuits",
+      "modelReady": true,
+      "modelUrl": "/assets/sim3d/products/biscuits.glb",
+      "thumbnailUrl": "/assets/sim3d/products/biscuits.png",
+      "gameplay": "library-only",
+      "audio": null
+    },
+    {
+      "nameEn": "chocolate",
+      "nameZh": "巧克力",
+      "category": "bakery",
+      "unitEn": "bar",
+      "phraseEn": "a bar of chocolate",
+      "phraseZh": "一块巧克力",
+      "shelf": "ambient",
+      "size": [
+        0.088,
+        0.17,
+        0.016
+      ],
+      "appearance": "薄片包装、折边铝箔与巧克力格纹",
+      "id": "chocolate",
+      "modelReady": true,
+      "modelUrl": "/assets/sim3d/products/chocolate.glb",
+      "thumbnailUrl": "/assets/sim3d/products/chocolate.png",
+      "gameplay": "library-only",
+      "audio": null
+    },
+    {
+      "nameEn": "yoghurt",
+      "nameZh": "酸奶",
+      "category": "chilled",
+      "unitEn": "pot",
+      "phraseEn": "a pot of yoghurt",
+      "phraseZh": "一杯酸奶",
+      "shelf": "chiller",
+      "size": [
+        0.09,
+        0.108,
+        0.09
+      ],
+      "appearance": "上宽下窄杯身、铝箔盖与揭盖耳",
+      "id": "yoghurt",
+      "modelReady": true,
+      "modelUrl": "/assets/sim3d/products/yoghurt.glb",
+      "thumbnailUrl": "/assets/sim3d/products/yoghurt.png",
+      "gameplay": "library-only",
+      "audio": null
+    },
+    {
+      "nameEn": "cheese",
+      "nameZh": "奶酪",
+      "category": "chilled",
+      "unitEn": "block",
+      "phraseEn": "a block of cheese",
+      "phraseZh": "一块奶酪",
+      "shelf": "chiller",
+      "size": [
+        0.13,
+        0.085,
+        0.048
+      ],
+      "appearance": "切块黄奶酪、半透明包膜与纸腰封",
+      "id": "cheese",
+      "modelReady": true,
+      "modelUrl": "/assets/sim3d/products/cheese.glb",
+      "thumbnailUrl": "/assets/sim3d/products/cheese.png",
+      "gameplay": "library-only",
+      "audio": null
+    },
+    {
+      "nameEn": "butter",
+      "nameZh": "黄油",
+      "category": "chilled",
+      "unitEn": "pack",
+      "phraseEn": "a pack of butter",
+      "phraseZh": "一包黄油",
+      "shelf": "chiller",
+      "size": [
+        0.115,
+        0.045,
+        0.07
+      ],
+      "appearance": "矮长方形金色纸包、端部折边",
+      "id": "butter",
+      "modelReady": true,
+      "modelUrl": "/assets/sim3d/products/butter.glb",
+      "thumbnailUrl": "/assets/sim3d/products/butter.png",
+      "gameplay": "library-only",
+      "audio": null
+    },
+    {
+      "nameEn": "eggs",
+      "nameZh": "鸡蛋",
+      "category": "chilled",
+      "unitEn": "box",
+      "phraseEn": "a box of eggs",
+      "phraseZh": "一盒鸡蛋",
+      "shelf": "chiller",
+      "size": [
+        0.16,
+        0.07,
+        0.112
+      ],
+      "appearance": "六格纸浆蛋托、可见蛋形与纸套",
+      "id": "eggs",
+      "modelReady": true,
+      "modelUrl": "/assets/sim3d/products/eggs.glb",
+      "thumbnailUrl": "/assets/sim3d/products/eggs.png",
+      "gameplay": "library-only",
+      "audio": null
+    },
+    {
+      "nameEn": "apple",
+      "nameZh": "苹果",
+      "category": "produce",
+      "unitEn": "apple",
+      "phraseEn": "an apple",
+      "phraseZh": "一个苹果",
+      "shelf": "produce",
+      "size": [
+        0.081,
+        0.086,
+        0.081
+      ],
+      "appearance": "带肩部起伏和凹顶的红苹果、果梗与叶片",
+      "id": "apple",
+      "modelReady": true,
+      "modelUrl": "/assets/sim3d/products/apple.glb",
+      "thumbnailUrl": "/assets/sim3d/products/apple.png",
+      "gameplay": "library-only",
+      "audio": null
+    },
+    {
+      "nameEn": "bananas",
+      "nameZh": "香蕉",
+      "category": "produce",
+      "unitEn": "bunch",
+      "phraseEn": "a bunch of bananas",
+      "phraseZh": "一把香蕉",
+      "shelf": "produce",
+      "size": [
+        0.21,
+        0.12,
+        0.14
+      ],
+      "appearance": "三根弧形香蕉、棱面果皮与深色端头",
+      "id": "banana",
+      "modelReady": true,
+      "modelUrl": "/assets/sim3d/products/banana.glb",
+      "thumbnailUrl": "/assets/sim3d/products/banana.png",
+      "gameplay": "library-only",
+      "audio": null
+    },
+    {
+      "nameEn": "orange",
+      "nameZh": "橙子",
+      "category": "produce",
+      "unitEn": "orange",
+      "phraseEn": "an orange",
+      "phraseZh": "一个橙子",
+      "shelf": "produce",
+      "size": [
+        0.083,
+        0.087,
+        0.083
+      ],
+      "appearance": "有细密起伏的橙皮、顶部果蒂",
+      "id": "orange",
+      "modelReady": true,
+      "modelUrl": "/assets/sim3d/products/orange.glb",
+      "thumbnailUrl": "/assets/sim3d/products/orange.png",
+      "gameplay": "library-only",
+      "audio": null
+    },
+    {
+      "nameEn": "tomato",
+      "nameZh": "番茄",
+      "category": "produce",
+      "unitEn": "tomato",
+      "phraseEn": "a tomato",
+      "phraseZh": "一个番茄",
+      "shelf": "produce",
+      "size": [
+        0.086,
+        0.072,
+        0.086
+      ],
+      "appearance": "略扁的分瓣红果与五角绿色萼片",
+      "id": "tomato",
+      "modelReady": true,
+      "modelUrl": "/assets/sim3d/products/tomato.glb",
+      "thumbnailUrl": "/assets/sim3d/products/tomato.png",
+      "gameplay": "library-only",
+      "audio": null
+    },
+    {
+      "nameEn": "potatoes",
+      "nameZh": "土豆",
+      "category": "produce",
+      "unitEn": "bag",
+      "phraseEn": "a bag of potatoes",
+      "phraseZh": "一袋土豆",
+      "shelf": "produce",
+      "size": [
+        0.15,
+        0.185,
+        0.09
+      ],
+      "appearance": "纸袋中的不规则土豆、可见芽眼与提口",
+      "id": "potato",
+      "modelReady": true,
+      "modelUrl": "/assets/sim3d/products/potato.glb",
+      "thumbnailUrl": "/assets/sim3d/products/potato.png",
+      "gameplay": "library-only",
+      "audio": null
+    },
+    {
+      "nameEn": "carrot",
+      "nameZh": "胡萝卜",
+      "category": "produce",
+      "unitEn": "carrot",
+      "phraseEn": "a carrot",
+      "phraseZh": "一根胡萝卜",
+      "shelf": "produce",
+      "size": [
+        0.055,
+        0.24,
+        0.055
+      ],
+      "appearance": "渐细锥形根部、横向纹路与短叶柄",
+      "id": "carrot",
+      "modelReady": true,
+      "modelUrl": "/assets/sim3d/products/carrot.glb",
+      "thumbnailUrl": "/assets/sim3d/products/carrot.png",
+      "gameplay": "library-only",
+      "audio": null
+    },
+    {
+      "nameEn": "lettuce",
+      "nameZh": "生菜",
+      "category": "produce",
+      "unitEn": "head",
+      "phraseEn": "a head of lettuce",
+      "phraseZh": "一颗生菜",
+      "shelf": "produce",
+      "size": [
+        0.16,
+        0.13,
+        0.16
+      ],
+      "appearance": "由内向外包裹的起伏叶片与浅色叶脉",
+      "id": "lettuce",
+      "modelReady": true,
+      "modelUrl": "/assets/sim3d/products/lettuce.glb",
+      "thumbnailUrl": "/assets/sim3d/products/lettuce.png",
+      "gameplay": "library-only",
+      "audio": null
+    },
+    {
+      "nameEn": "cucumber",
+      "nameZh": "黄瓜",
+      "category": "produce",
+      "unitEn": "cucumber",
+      "phraseEn": "a cucumber",
+      "phraseZh": "一根黄瓜",
+      "shelf": "produce",
+      "size": [
+        0.05,
+        0.23,
+        0.05
+      ],
+      "appearance": "略弯长果、收窄两端与深浅纵纹",
+      "id": "cucumber",
+      "modelReady": true,
+      "modelUrl": "/assets/sim3d/products/cucumber.glb",
+      "thumbnailUrl": "/assets/sim3d/products/cucumber.png",
+      "gameplay": "library-only",
+      "audio": null
+    },
+    {
+      "nameEn": "cereal",
+      "nameZh": "早餐麦片",
+      "category": "pantry",
+      "unitEn": "box",
+      "phraseEn": "a box of cereal",
+      "phraseZh": "一盒早餐麦片",
+      "shelf": "ambient",
+      "size": [
+        0.17,
+        0.25,
+        0.065
+      ],
+      "appearance": "直立纸盒、盒顶折缝与麦穗图案",
+      "id": "cereal",
+      "modelReady": true,
+      "modelUrl": "/assets/sim3d/products/cereal.glb",
+      "thumbnailUrl": "/assets/sim3d/products/cereal.png",
+      "gameplay": "library-only",
+      "audio": null
+    },
+    {
+      "nameEn": "pasta",
+      "nameZh": "意大利面",
+      "category": "pantry",
+      "unitEn": "packet",
+      "phraseEn": "a packet of pasta",
+      "phraseZh": "一包意大利面",
+      "shelf": "ambient",
+      "size": [
+        0.1,
+        0.27,
+        0.048
+      ],
+      "appearance": "长形开窗袋、窗内独立直条意面",
+      "id": "pasta",
+      "modelReady": true,
+      "modelUrl": "/assets/sim3d/products/pasta.glb",
+      "thumbnailUrl": "/assets/sim3d/products/pasta.png",
+      "gameplay": "library-only",
+      "audio": null
+    },
+    {
+      "nameEn": "rice",
+      "nameZh": "大米",
+      "category": "pantry",
+      "unitEn": "bag",
+      "phraseEn": "a bag of rice",
+      "phraseZh": "一袋大米",
+      "shelf": "ambient",
+      "size": [
+        0.135,
+        0.19,
+        0.065
+      ],
+      "appearance": "米色鼓袋、透明视窗与米粒",
+      "id": "rice",
+      "modelReady": true,
+      "modelUrl": "/assets/sim3d/products/rice.glb",
+      "thumbnailUrl": "/assets/sim3d/products/rice.png",
+      "gameplay": "library-only",
+      "audio": null
+    },
+    {
+      "nameEn": "flour",
+      "nameZh": "面粉",
+      "category": "pantry",
+      "unitEn": "bag",
+      "phraseEn": "a bag of flour",
+      "phraseZh": "一袋面粉",
+      "shelf": "ambient",
+      "size": [
+        0.12,
+        0.195,
+        0.075
+      ],
+      "appearance": "卷口纸袋、面粉标签与麦穗线条",
+      "id": "flour",
+      "modelReady": true,
+      "modelUrl": "/assets/sim3d/products/flour.glb",
+      "thumbnailUrl": "/assets/sim3d/products/flour.png",
+      "gameplay": "library-only",
+      "audio": null
+    },
+    {
+      "nameEn": "sugar",
+      "nameZh": "白糖",
+      "category": "pantry",
+      "unitEn": "bag",
+      "phraseEn": "a bag of sugar",
+      "phraseZh": "一袋白糖",
+      "shelf": "ambient",
+      "size": [
+        0.1,
+        0.16,
+        0.065
+      ],
+      "appearance": "蓝白糖袋、折叠封口与糖粒图案",
+      "id": "sugar",
+      "modelReady": true,
+      "modelUrl": "/assets/sim3d/products/sugar.glb",
+      "thumbnailUrl": "/assets/sim3d/products/sugar.png",
+      "gameplay": "library-only",
+      "audio": null
+    },
+    {
+      "nameEn": "tea",
+      "nameZh": "茶",
+      "category": "pantry",
+      "unitEn": "box",
+      "phraseEn": "a box of tea",
+      "phraseZh": "一盒茶",
+      "shelf": "ambient",
+      "size": [
+        0.125,
+        0.105,
+        0.062
+      ],
+      "appearance": "森林绿茶盒、顶盖接缝与茶叶图案",
+      "id": "tea",
+      "modelReady": true,
+      "modelUrl": "/assets/sim3d/products/tea.glb",
+      "thumbnailUrl": "/assets/sim3d/products/tea.png",
+      "gameplay": "library-only",
+      "audio": null
+    },
+    {
+      "nameEn": "coffee",
+      "nameZh": "咖啡",
+      "category": "pantry",
+      "unitEn": "jar",
+      "phraseEn": "a jar of coffee",
+      "phraseZh": "一罐咖啡",
+      "shelf": "ambient",
+      "size": [
+        0.085,
+        0.145,
+        0.085
+      ],
+      "appearance": "棕色可见内容物罐身、深色旋盖与咖啡豆图案",
+      "id": "coffee",
+      "modelReady": true,
+      "modelUrl": "/assets/sim3d/products/coffee.glb",
+      "thumbnailUrl": "/assets/sim3d/products/coffee.png",
+      "gameplay": "library-only",
+      "audio": null
+    },
+    {
+      "nameEn": "soap",
+      "nameZh": "香皂",
+      "category": "household",
+      "unitEn": "bar",
+      "phraseEn": "a bar of soap",
+      "phraseZh": "一块香皂",
+      "shelf": "household",
+      "size": [
+        0.092,
+        0.038,
+        0.06
+      ],
+      "appearance": "圆润皂块与中间环绕纸套",
+      "id": "soap",
+      "modelReady": true,
+      "modelUrl": "/assets/sim3d/products/soap.glb",
+      "thumbnailUrl": "/assets/sim3d/products/soap.png",
+      "gameplay": "library-only",
+      "audio": null
+    },
+    {
+      "nameEn": "shampoo",
+      "nameZh": "洗发水",
+      "category": "household",
+      "unitEn": "bottle",
+      "phraseEn": "a bottle of shampoo",
+      "phraseZh": "一瓶洗发水",
+      "shelf": "household",
+      "size": [
+        0.075,
+        0.205,
+        0.05
+      ],
+      "appearance": "扁圆瓶肩、翻盖接缝与护理标签",
+      "id": "shampoo",
+      "modelReady": true,
+      "modelUrl": "/assets/sim3d/products/shampoo.glb",
+      "thumbnailUrl": "/assets/sim3d/products/shampoo.png",
+      "gameplay": "library-only",
+      "audio": null
+    },
+    {
+      "nameEn": "tissues",
+      "nameZh": "抽纸",
+      "category": "household",
+      "unitEn": "box",
+      "phraseEn": "a box of tissues",
+      "phraseZh": "一盒抽纸",
+      "shelf": "household",
+      "size": [
+        0.22,
+        0.145,
+        0.115
+      ],
+      "appearance": "长方形纸盒、椭圆抽口与立体抽出纸张",
+      "id": "tissues",
+      "modelReady": true,
+      "modelUrl": "/assets/sim3d/products/tissues.glb",
+      "thumbnailUrl": "/assets/sim3d/products/tissues.png",
+      "gameplay": "library-only",
+      "audio": null
+    }
+  ]
+}

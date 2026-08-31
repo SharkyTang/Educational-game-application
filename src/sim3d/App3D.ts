@@ -305,6 +305,7 @@ export class App3D {
             <div class="s3-start-stock"><span><span id="s3-start-capital">£12</span><small id="s3-start-capital-label">首日本金 · 进货会扣钱</small></span><span>3 guests <small>下单 → 签收 → 营业 → 成长</small></span></div>
             <p id="s3-start-note" class="s3-muted">首次建议购买 3 份组合货，共 £6.90。到门口按 E 签收；商业街店铺的开放条件可按 M 查看。</p>
             <button id="s3-start-button" class="s3-primary-button" type="button" disabled>开始第一天</button>
+            <a id="s3-asset-library-link" class="s3-asset-library-link" href="?assets=1">商品素材库 <span>30 种模型 · 查看与调用 ↗</span></a>
             <p id="s3-readonly-note" class="s3-pause-alert" role="status" hidden></p>
             <button id="s3-takeover" class="s3-secondary-button" type="button" hidden>读取最新进度并尝试接管</button>
             <button id="s3-export-readonly" class="s3-text-button" type="button" hidden>下载本页快照</button>
