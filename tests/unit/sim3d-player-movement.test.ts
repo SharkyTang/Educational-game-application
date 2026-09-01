@@ -1,11 +1,11 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { Vector3, type Engine, type Scene, type UniversalCamera } from "@babylonjs/core";
-import { createFirstDayState, type PlayerPose, type SimState } from "../../src/sim3d/domain";
+import { countAt, createFirstDayState, createInitialSimState, reduceSim, type PlayerPose, type SimState } from "../../src/sim3d/domain";
 import {
   PLAYER_CARRY_WALK_SPEED, PLAYER_SPRINT_MULTIPLIER, PLAYER_WALK_SPEED, playerMovementSpeed,
 } from "../../src/sim3d/playerMovement";
 import { PointerAccess } from "../../src/sim3d/pointerAccess";
-import { ShopWorld, type WorldCallbacks } from "../../src/sim3d/world";
+import { ShopWorld, STOCK_HOLD_DELAY_MS, STOCK_HOLD_INTERVAL_MS, type InteractionTarget, type WorldCallbacks } from "../../src/sim3d/world";
 
 type Collider = { minX: number; maxX: number; minZ: number; maxZ: number };
 
@@ -45,6 +45,9 @@ interface MovementRuntime {
   canvasWasLost: boolean;
   reducedMotion: boolean;
   inspectionProduct: null;
+  currentTarget: InteractionTarget | null;
+  stockHoldTimer: ReturnType<typeof setTimeout> | undefined;
+  stockHoldActive: boolean;
   sensitivity: number;
   frameClock: number;
   viewClock: number;
@@ -52,6 +55,9 @@ interface MovementRuntime {
   movePlayer(dt: number): void;
   isFree(x: number, z: number): boolean;
   installInput(): void;
+  canRepeatStocking(): boolean;
+  startStockHold(): void;
+  stopStockHold(): void;
   setActive(active: boolean): void;
   setCursorFree(free: boolean): void;
   render(): void;
@@ -86,6 +92,7 @@ function createMovementWorld(keys: readonly string[] = [], held: SimState["held"
     colliders: [], keys: new Set(keys), lifetime, pointerAccess: new PointerAccess(),
     pointerRequestGeneration: 0, drag: null, active: true, disposed: false,
     canvasWasLost: false, reducedMotion: true, inspectionProduct: null, sensitivity: 1,
+    currentTarget: null, stockHoldTimer: undefined, stockHoldActive: false,
     frameClock: 0, viewClock: 0, poseClock: 0,
     updateCustomer, updateTruck, updateTarget: vi.fn(), updateGuide: vi.fn(),
   });
@@ -112,18 +119,24 @@ function createInputWorld() {
     windowDouble.dispatchEvent(event);
     return event;
   }
+  function mouse(target: EventTarget, type: "mousedown" | "mouseup", button = 0): Event {
+    const event = Object.assign(new Event(type, { cancelable: true }), { button, clientX: 0, clientY: 0 });
+    target.dispatchEvent(event);
+    return event;
+  }
   function lockPointer(): void {
     harness.world.pointerAccess.requestLock();
     documentDouble.pointerLockElement = harness.world.canvas;
     documentDouble.dispatchEvent(new Event("pointerlockchange"));
   }
-  return { ...harness, windowDouble, documentDouble, key, lockPointer };
+  return { ...harness, windowDouble, documentDouble, key, mouse, lockPointer };
 }
 
 afterEach(() => {
   for (const lifetime of lifetimes.splice(0)) lifetime.abort();
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
+  vi.useRealTimers();
 });
 
 describe("player movement speed selection", () => {
@@ -228,6 +241,106 @@ describe("real ShopWorld player movement", () => {
 });
 
 describe("real input hold, repeat and release behavior", () => {
+  it("stocks one item immediately, then one by one while left mouse stays held", () => {
+    vi.useFakeTimers();
+    const { world, windowDouble, mouse, lockPointer } = createInputWorld();
+    world.state = reduceSim(createInitialSimState(), { type: "PICK_CRATE", crateId: "milk-crate" }).state;
+    world.currentTarget = {
+      id: "milk-shelf", kind: "shelf", productId: "milk", label: "牛奶货架",
+      action: "上架", inspectable: false, distance: 1,
+    };
+    world.callbacks.onInteract = vi.fn(() => {
+      const slot = Array.from({ length: 4 }, (_, index) => index)
+        .find((candidate) => !world.state.items.some((item) => item.location.kind === "shelf"
+          && item.location.productId === "milk" && item.location.slot === candidate));
+      if (slot !== undefined) world.state = reduceSim(world.state, { type: "STOCK", productId: "milk", slot }).state;
+    });
+    lockPointer();
+
+    mouse(world.canvas, "mousedown");
+    expect(world.callbacks.onInteract).toHaveBeenCalledOnce();
+    expect(countAt(world.state, "milk", "shelf")).toBe(1);
+    vi.advanceTimersByTime(STOCK_HOLD_DELAY_MS - 1);
+    expect(countAt(world.state, "milk", "shelf")).toBe(1);
+    vi.advanceTimersByTime(1);
+    expect(countAt(world.state, "milk", "shelf")).toBe(2);
+    vi.advanceTimersByTime(STOCK_HOLD_INTERVAL_MS * 2);
+    expect(countAt(world.state, "milk", "shelf")).toBe(4);
+    expect(countAt(world.state, "milk", "crate")).toBe(0);
+    vi.advanceTimersByTime(STOCK_HOLD_INTERVAL_MS * 3);
+    expect(world.callbacks.onInteract).toHaveBeenCalledTimes(4);
+
+    mouse(windowDouble, "mouseup");
+    expect(world.stockHoldActive).toBe(false);
+  });
+
+  it("does not turn a crate pickup into auto-stocking and cancels a real shelf hold on release", () => {
+    vi.useFakeTimers();
+    const { world, windowDouble, mouse, lockPointer } = createInputWorld();
+    lockPointer();
+    world.state = createInitialSimState();
+    world.currentTarget = {
+      id: "milk-crate", kind: "crate", crateId: "milk-crate", productId: "milk",
+      label: "牛奶货箱", action: "抱起", inspectable: true, distance: 1,
+    };
+    world.callbacks.onInteract = vi.fn(() => {
+      if (world.state.held.kind !== "none") return;
+      world.state = reduceSim(world.state, { type: "PICK_CRATE", crateId: "milk-crate" }).state;
+      world.currentTarget = {
+        id: "milk-shelf", kind: "shelf", productId: "milk", label: "牛奶货架",
+        action: "上架", inspectable: false, distance: 1,
+      };
+    });
+    mouse(world.canvas, "mousedown");
+    vi.advanceTimersByTime(STOCK_HOLD_DELAY_MS + STOCK_HOLD_INTERVAL_MS * 3);
+    expect(world.callbacks.onInteract).toHaveBeenCalledOnce();
+
+    mouse(world.canvas, "mousedown");
+    mouse(windowDouble, "mouseup");
+    vi.advanceTimersByTime(STOCK_HOLD_DELAY_MS + STOCK_HOLD_INTERVAL_MS);
+    expect(world.callbacks.onInteract).toHaveBeenCalledTimes(2);
+    expect(world.stockHoldActive).toBe(false);
+  });
+
+  it("stops an active shelf hold as soon as the player looks away", () => {
+    vi.useFakeTimers();
+    const { world, mouse, lockPointer } = createInputWorld();
+    world.state = reduceSim(createInitialSimState(), { type: "PICK_CRATE", crateId: "milk-crate" }).state;
+    world.currentTarget = {
+      id: "milk-shelf", kind: "shelf", productId: "milk", label: "牛奶货架",
+      action: "上架", inspectable: false, distance: 1,
+    };
+    lockPointer();
+    mouse(world.canvas, "mousedown");
+    vi.advanceTimersByTime(STOCK_HOLD_DELAY_MS);
+    expect(world.callbacks.onInteract).toHaveBeenCalledTimes(2);
+
+    world.currentTarget = null;
+    vi.advanceTimersByTime(STOCK_HOLD_INTERVAL_MS);
+    expect(world.callbacks.onInteract).toHaveBeenCalledTimes(2);
+    expect(world.stockHoldActive).toBe(false);
+  });
+
+  it("stops immediately when left mouse is released after repeating has begun", () => {
+    vi.useFakeTimers();
+    const { world, windowDouble, mouse, lockPointer } = createInputWorld();
+    world.state = reduceSim(createInitialSimState(), { type: "PICK_CRATE", crateId: "milk-crate" }).state;
+    world.currentTarget = {
+      id: "milk-shelf", kind: "shelf", productId: "milk", label: "牛奶货架",
+      action: "上架", inspectable: false, distance: 1,
+    };
+    lockPointer();
+    mouse(world.canvas, "mousedown");
+    vi.advanceTimersByTime(STOCK_HOLD_DELAY_MS + STOCK_HOLD_INTERVAL_MS);
+    expect(world.callbacks.onInteract).toHaveBeenCalledTimes(3);
+    expect(world.stockHoldActive).toBe(true);
+
+    mouse(windowDouble, "mouseup");
+    vi.advanceTimersByTime(STOCK_HOLD_INTERVAL_MS * 3);
+    expect(world.callbacks.onInteract).toHaveBeenCalledTimes(3);
+    expect(world.stockHoldActive).toBe(false);
+  });
+
   it.each(["ShiftLeft", "ShiftRight"])("accepts %s without adding a movement step, including while W is already held", (modifier) => {
     const { world, key, frame } = createInputWorld();
     const movePlayer = vi.spyOn(world, "movePlayer");

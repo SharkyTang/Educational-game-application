@@ -18,7 +18,7 @@ import { createStreet, setDeliveryTruckStatus, setStreetVenueStatus, type Street
 import { createRecyclingStation, RECYCLING_POINT } from "./recyclingStation";
 import { STREET_VENUES, getVenueProgress, type VenueId } from "./progression";
 import {
-  countAt, canSettleDay, canStartCustomer, getCheckoutTotal, getCustomerOrder, getShoppingProduct, getDeliverySummary, getRecyclingOffer, getRecyclingSummary, isWalkablePosition, PRODUCTS, PRODUCT_IDS, SAFE_DROP_POINTS, type CrateId, type CustomerPhase,
+  capacityFor, countAt, canSettleDay, canStartCustomer, getCheckoutTotal, getCustomerOrder, getShoppingProduct, getDeliverySummary, getRecyclingOffer, getRecyclingSummary, isWalkablePosition, PRODUCTS, PRODUCT_IDS, SAFE_DROP_POINTS, type CrateId, type CustomerPhase,
   type PlayerPose, type Position, type ProductId, type SimState,
 } from "./domain";
 
@@ -55,6 +55,8 @@ type Collider = { minX: number; maxX: number; minZ: number; maxZ: number };
 type TargetData = Omit<InteractionTarget, "label" | "action" | "inspectable" | "distance">;
 const EYE_HEIGHT = 1.65;
 const INTERACTION_RANGE = 2.6;
+export const STOCK_HOLD_DELAY_MS = 400;
+export const STOCK_HOLD_INTERVAL_MS = 180;
 const KEY_CODES = new Set([
   "KeyW", "KeyA", "KeyS", "KeyD", "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight",
   "KeyI", "KeyJ", "KeyK", "KeyL", "KeyE", "KeyF", "KeyG", "Escape",
@@ -104,6 +106,9 @@ export class ShopWorld {
   private sensitivity = 1;
   private reducedMotion = true;
   private targetMesh: AbstractMesh | null = null;
+  private currentTarget: InteractionTarget | null = null;
+  private stockHoldTimer: ReturnType<typeof setTimeout> | undefined;
+  private stockHoldActive = false;
   private frameClock = 0;
   private viewClock = 0;
   private poseClock = 0;
@@ -653,14 +658,14 @@ export class ShopWorld {
       else if (this.active && !this.keys.has("ShiftLeft") && !this.keys.has("ShiftRight")) this.keys.add("Shift");
     }, options);
     window.addEventListener("blur", () => {
-      this.keys.clear(); this.drag = null;
+      this.keys.clear(); this.drag = null; this.stopStockHold();
       if (this.active) this.callbacks.onPause();
     }, options);
     document.addEventListener("visibilitychange", () => {
-      if (document.hidden) { this.keys.clear(); if (this.active) this.callbacks.onPause(); }
+      if (document.hidden) { this.keys.clear(); this.stopStockHold(); if (this.active) this.callbacks.onPause(); }
     }, options);
     document.addEventListener("pointerlockchange", () => {
-      this.drag = null; this.keys.clear();
+      this.drag = null; this.keys.clear(); this.stopStockHold();
       const result = this.pointerAccess.changed(document.pointerLockElement === this.canvas, this.active);
       this.callbacks.onPointerMode?.(result.mode);
       if (result.release) document.exitPointerLock();
@@ -672,12 +677,22 @@ export class ShopWorld {
       this.canvas.focus();
       if (this.inspectionProduct) { this.drag = { x: event.clientX, y: event.clientY }; return; }
       if (!this.active) return;
-      if (document.pointerLockElement === this.canvas) this.callbacks.onInteract();
+      if (document.pointerLockElement === this.canvas) {
+        if (this.stockHoldActive) return;
+        // Freeze the pre-click target so picking up a box cannot turn the same
+        // held press into stocking when the ray target changes synchronously.
+        const wasRepeatableStocking = this.canRepeatStocking();
+        this.callbacks.onInteract();
+        if (wasRepeatableStocking) this.startStockHold();
+      }
       // Free cursor stays free: a click on the scene only begins drag-look.
       // Capturing it again requires the visible control or the Tab shortcut.
       else this.drag = { x: event.clientX, y: event.clientY };
     }, options);
-    window.addEventListener("mouseup", () => { this.drag = null; }, options);
+    window.addEventListener("mouseup", (event) => {
+      this.drag = null;
+      if (event.button === 0) this.stopStockHold();
+    }, options);
     window.addEventListener("mousemove", (event) => {
       if (this.inspectionProduct && this.drag) {
         const root = this.inspection.get(this.inspectionProduct)!;
@@ -693,6 +708,39 @@ export class ShopWorld {
       }
     }, options);
     this.canvas.addEventListener("contextmenu", (event) => event.preventDefault(), options);
+  }
+
+  /** Only shelf stocking repeats; all one-shot interactions keep click-once semantics. */
+  private canRepeatStocking(): boolean {
+    const target = this.currentTarget;
+    const held = this.state.held;
+    if (!this.active || this.disposed || document.pointerLockElement !== this.canvas
+      || !target || target.kind !== "shelf" || !target.productId || held.kind !== "crate") return false;
+    const crate = this.state.crates.find((candidate) => candidate.id === held.crateId);
+    return crate?.productId === target.productId
+      && countAt(this.state, target.productId, "shelf") < capacityFor(this.state)
+      && this.state.items.some((item) => item.productId === target.productId
+        && item.location.kind === "crate" && item.location.crateId === held.crateId);
+  }
+
+  private startStockHold(): void {
+    this.stopStockHold();
+    if (!this.canRepeatStocking()) return;
+    this.stockHoldActive = true;
+    const repeat = (): void => {
+      this.stockHoldTimer = undefined;
+      if (!this.stockHoldActive || !this.canRepeatStocking()) { this.stopStockHold(); return; }
+      this.callbacks.onInteract();
+      if (!this.stockHoldActive || !this.canRepeatStocking()) { this.stopStockHold(); return; }
+      this.stockHoldTimer = setTimeout(repeat, STOCK_HOLD_INTERVAL_MS);
+    };
+    this.stockHoldTimer = setTimeout(repeat, STOCK_HOLD_DELAY_MS);
+  }
+
+  private stopStockHold(): void {
+    this.stockHoldActive = false;
+    if (this.stockHoldTimer !== undefined) clearTimeout(this.stockHoldTimer);
+    this.stockHoldTimer = undefined;
   }
 
   private enableDragLook(): void {
@@ -718,6 +766,7 @@ export class ShopWorld {
   }
 
   setCursorFree(free: boolean): void {
+    this.stopStockHold();
     if (!free) { this.requestPointerLock(); return; }
     this.pointerRequestGeneration += 1;
     const locked = document.pointerLockElement === this.canvas;
@@ -730,10 +779,10 @@ export class ShopWorld {
 
   setActive(active: boolean): void {
     this.active = active;
-    this.keys.clear(); this.drag = null;
+    this.keys.clear(); this.drag = null; this.stopStockHold();
     this.scene.animationsEnabled = active;
     if (!active) this.setCursorFree(true);
-    if (!active) this.callbacks.onTarget(null);
+    if (!active) { this.currentTarget = null; this.callbacks.onTarget(null); }
   }
 
   inspect(productId: ProductId | null): void {
@@ -909,6 +958,7 @@ export class ShopWorld {
     const data = hit?.pickedMesh?.metadata?.interaction as TargetData | undefined;
     if (hit?.hit && hit.distance <= INTERACTION_RANGE && data && (data.kind !== "delivery" || this.truckPhase === "parked")) {
       const target = this.decorateTarget(data, hit.distance);
+      this.currentTarget = target;
       this.targetMesh = hit.pickedMesh;
       if (hit.pickedMesh instanceof Mesh) {
         hit.pickedMesh.renderOutline = true;
@@ -916,7 +966,10 @@ export class ShopWorld {
         hit.pickedMesh.outlineColor = new Color3(.95, .73, .30);
       }
       this.callbacks.onTarget(target);
-    } else this.callbacks.onTarget(null);
+    } else {
+      this.currentTarget = null;
+      this.callbacks.onTarget(null);
+    }
   }
 
   private updateGuide(): void {
@@ -1005,6 +1058,7 @@ export class ShopWorld {
   dispose(): void {
     this.disposed = true;
     this.active = false;
+    this.stopStockHold();
     this.lifetime.abort();
     this.keys.clear();
     if (document.pointerLockElement === this.canvas) document.exitPointerLock();
