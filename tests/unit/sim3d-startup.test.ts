@@ -1010,7 +1010,7 @@ describe("customer identity, dialogue continuity and saved seeds", () => {
       profileIds.add(profile.id);
       voices.add(profile.voice);
       greetingIds.add(greeting.id);
-      expect(shopping.customer).toEqual({ number, phase: "to-milk", shoppingList: ["milk", "bread"] });
+      expect(shopping.customer).toEqual({ number, phase: "to-milk", shoppingList: ["milk", "bread"], contentVersion: 2 });
       expect(view.element("s3-customer-name").textContent).toBe(`${profile.name} · 第 ${number} 位顾客`);
       expect(view.world.isCustomerApproaching()).toBe(true);
       expect(view.element("s3-receipt-title").textContent).toBe("顾客正从街上走来");
@@ -1082,7 +1082,7 @@ describe("customer identity, dialogue continuity and saved seeds", () => {
     expect(greetingIds.size).toBe(3);
     expect(checkoutIds.size).toBe(3);
     expect(thanksIds.size).toBe(3);
-    expect(savedState().customer).toEqual({ number: 3, phase: "complete", shoppingList: ["milk", "bread"] });
+    expect(savedState().customer).toEqual({ number: 3, phase: "complete", shoppingList: ["milk", "bread"], contentVersion: 2 });
     expect(view.element("s3-pause").open).toBe(false);
     expect(savedState().day.phase).toBe("open");
     view.element("s3-open-day").click();
@@ -1281,7 +1281,7 @@ describe("customer identity, dialogue continuity and saved seeds", () => {
     expect(entropy).toHaveBeenCalledOnce();
     expect(fresh.customerSeed).toBe(0x12345678);
     expect(fresh.customerSeed).not.toBe(77);
-    expect(fresh.customer).toEqual({ number: 1, phase: "outside", shoppingList: [] });
+    expect(fresh.customer).toEqual({ number: 1, phase: "outside", shoppingList: [], contentVersion: 2 });
     expect(fresh.cashPence).toBe(1200);
     expect(fresh.transactions).toEqual([]);
     expect(storage.getItem(SIM_BACKUP_KEY)).toBe(original);
@@ -1442,7 +1442,7 @@ describe("first-day management event wiring and persistence", () => {
     expect(view.element("s3-pause").open).toBe(false);
     expect(view.audio.play).not.toHaveBeenCalled();
     clock.advance(view, 1);
-    expect(savedState().customer).toEqual({ number: paidCustomers + 1, phase: "to-milk", shoppingList: ["milk", "bread"] });
+    expect(savedState().customer).toEqual({ number: paidCustomers + 1, phase: "to-milk", shoppingList: ["milk", "bread"], contentVersion: 2 });
     expect(view.world.isCustomerApproaching()).toBe(true);
     expect(view.element("s3-receipt-title").textContent).toBe("顾客正从街上走来");
     expect(view.audio.play).not.toHaveBeenCalled();
@@ -1768,7 +1768,7 @@ describe("receipts for the products actually stocked", () => {
     state = act(state, { type: "CUSTOMER_ADVANCE" });
     const view = await readyGame(state);
     clock.advance(view, state.day.nextCustomerAtMs! - state.day.elapsedOpenMs);
-    expect(savedState().customer).toEqual({ number: 2, phase: "to-milk", shoppingList: ["soap"] });
+    expect(savedState().customer).toEqual({ number: 2, phase: "to-milk", shoppingList: ["soap"], contentVersion: 2 });
     expect(view.element("s3-customer-order").textContent).toContain("香皂");
     expect(view.element("s3-pause").open).toBe(false);
   });

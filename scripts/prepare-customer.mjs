@@ -9,7 +9,8 @@
  * node scripts/prepare-customer.mjs --skip-convert (repack existing conversions)
  * node scripts/prepare-customer.mjs --verify-only (offline output checks)
  * node scripts/prepare-customer.mjs --avatar male-01 --download
- * Avatars: female-01 (default/legacy output), female-02, male-01, male-02.
+ * Avatars: female-01 (default/legacy output), female-02, female-03,
+ * female-04, male-01, male-02, male-03, male-04.
  */
 
 import { spawnSync } from "node:child_process";
@@ -45,6 +46,24 @@ const AVATARS = {
       opacity: "3d930c42ed476ab3f58548e5ee33e10ea9f02a27",
     },
   },
+  "female-03": {
+    sourceAvatar: "Female_Adult_03", texturePrefix: "f003", animationPrefix: "f",
+    modelSha: "9ff910a80e1572c35f9064bfe649c58898f946c2",
+    textures: {
+      body: "6e7e0bba4a2c5fd119c2f40bf3886ec2ebd89af0",
+      head: "b185268832e1b05b2e30434b714ed1a50c79726f",
+      opacity: "7967eb62237314e3c76ae437a259f94052a032c3",
+    },
+  },
+  "female-04": {
+    sourceAvatar: "Female_Adult_04", texturePrefix: "f004", animationPrefix: "f",
+    modelSha: "cf5a84ba111473c662e1ad77ae6c68d840e4ec71",
+    textures: {
+      body: "d087c788a3d06ddff161f7d726e5964d10ab5679",
+      head: "8431d9774e3d416447096367fecf4a0f75bc7ea5",
+      opacity: "86f656686004a338b13026515c7395c946170352",
+    },
+  },
   "male-01": {
     sourceAvatar: "Male_Adult_01", texturePrefix: "m002", animationPrefix: "m",
     modelSha: "fdaf4aa7d15054f1601740ea1a09cf111938d210",
@@ -61,6 +80,24 @@ const AVATARS = {
       body: "23e54f1b4e06ca411aa166a016d77f7536316151",
       head: "ec68799915ff8aa26cd18a85c09b1e86c51b17a4",
       opacity: "8860d347a396261f06cbb2f620a28efffe11c334",
+    },
+  },
+  "male-03": {
+    sourceAvatar: "Male_Adult_03", texturePrefix: "m004", animationPrefix: "m",
+    modelSha: "9e81e1cee43804851693c7874840e4f76f762126",
+    textures: {
+      body: "6c74391f617e383371c9cd77775ebbae16998f8e",
+      head: "bc8c4b56be8bef30ea204ea772451a03457a9d85",
+      opacity: "7a705836b26da41fbd46d5cf41835bcff82b1e0d",
+    },
+  },
+  "male-04": {
+    sourceAvatar: "Male_Adult_04", texturePrefix: "m006", animationPrefix: "m",
+    modelSha: "b74a2a8e261a16bebb7acd7335dc41f8c6b7b41e",
+    textures: {
+      body: "eb98a1056b856d117f54145abef183c93721b8a7",
+      head: "b8d9af1e5337c9a5ed8969395e73f8fdd6abdda6",
+      opacity: "dca7411aadf0ba5b62ab314981591fad88dbf1b0",
     },
   },
 };

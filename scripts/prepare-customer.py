@@ -17,7 +17,11 @@ TARGET = ROOT / "tmp" / "customer-source" / "prepared-textures"
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--texture-prefix", choices=("f001", "f002", "m002", "m003"), default="f001")
+    parser.add_argument(
+        "--texture-prefix",
+        choices=("f001", "f002", "f003", "f004", "m002", "m003", "m004", "m006"),
+        default="f001",
+    )
     prefix = parser.parse_args().texture_prefix
     TARGET.mkdir(parents=True, exist_ok=True)
     for name in ("body", "head", "opacity"):

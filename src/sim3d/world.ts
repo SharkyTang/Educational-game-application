@@ -5,6 +5,8 @@ import {
   Vector3,
 } from "@babylonjs/core";
 import { CustomerActors } from "./customerActors";
+import { StreetNeighbourActors } from "./streetNeighbourActors";
+import { STREET_NEIGHBOUR_PROFILES, type StreetNeighbourId } from "./streetNeighbourContent";
 import { CUSTOMER_EXIT_STOP_SECONDS, CUSTOMER_STOP_SECONDS, CUSTOMER_WALK_SPEED } from "./customerSelection";
 import { CUSTOMER_DOORSTEP, customerArrivalOrigins, customerJourneyRoute } from "./customerJourney";
 import { PointerAccess, type PointerMode } from "./pointerAccess";
@@ -25,11 +27,12 @@ import {
 export type Quality = "standard" | "low";
 export interface InteractionTarget {
   id: string;
-  kind: "crate" | "shelf" | "item" | "counter" | "open-sign" | "drop-zone" | "delivery" | "venue" | "recycling";
+  kind: "crate" | "shelf" | "item" | "counter" | "open-sign" | "drop-zone" | "delivery" | "venue" | "recycling" | "street-neighbour";
   productId?: ProductId;
   itemId?: string;
   crateId?: CrateId;
   venueId?: VenueId;
+  streetNeighbourId?: StreetNeighbourId;
   position?: Position;
   label: string;
   action: string;
@@ -87,6 +90,7 @@ export class ShopWorld {
   private readonly hands: TransformNode;
   private readonly customer: TransformNode;
   private readonly customerActors: CustomerActors;
+  private readonly streetNeighbourActors: StreetNeighbourActors;
   private readonly basket: TransformNode;
   private readonly inspection = new Map<ProductId, TransformNode>();
   private customerPhase: CustomerPhase;
@@ -211,6 +215,7 @@ export class ShopWorld {
     this.setViewModel(this.hands, true);
     this.customer = new TransformNode("customer-path-root", this.scene);
     this.customerActors = new CustomerActors(this.scene, this.shadow, this.customer);
+    this.streetNeighbourActors = new StreetNeighbourActors(this.scene, this.shadow);
     this.basket = this.createBasket();
     this.basket.parent = this.customer;
     this.basket.position.set(.34, .47, .04);
@@ -242,8 +247,17 @@ export class ShopWorld {
   }
 
   async init(): Promise<void> {
-    await this.customerActors.init(this.state);
+    await Promise.all([this.customerActors.init(this.state), this.streetNeighbourActors.init(this.state)]);
     if (this.disposed) return;
+    for (const target of this.streetNeighbourActors.targets) {
+      this.tag(target.root, { id: `street-neighbour-${target.id}`, kind: "street-neighbour", streetNeighbourId: target.id });
+    }
+    // A restored visitor may already be on the pavement. Replan only after
+    // today's neighbour and any companion dog have real collision bounds.
+    this.setCustomerRoute(false);
+    // Older saves can restore the player inside a newly introduced neighbour
+    // or dog collider. Resolve that pose after those real bounds exist.
+    this.ensureSafePose();
     await this.scene.whenReadyAsync();
     this.callbacks.onStatus("小店已准备好 · 先查看进货单，再搬运商品开始营业。");
   }
@@ -272,11 +286,12 @@ export class ShopWorld {
     this.state = state;
     if (layoutChanged) this.syncShopLayout();
     this.customerActors.select(state);
+    const streetNeighbourChanged = this.streetNeighbourActors?.select(state) ?? false;
     if (newDay || freshRun) this.resetTruck(state.day.phase === "settled" ? "away" : "arriving");
     else if (closed && this.truckPhase !== "away") this.truckPhase = "departing";
     this.syncInventory();
     const obstacles = this.crateObstacleSignature();
-    if (phaseChanged || newCustomer || freshRun || layoutChanged || obstacles !== this.customerObstacleSignature) this.setCustomerRoute(freshRun || newCustomer || layoutChanged);
+    if (phaseChanged || newCustomer || freshRun || layoutChanged || streetNeighbourChanged || obstacles !== this.customerObstacleSignature) this.setCustomerRoute(freshRun || newCustomer || layoutChanged);
     this.syncStreet();
     this.ensureSafePose();
     this.updateTarget();
@@ -536,7 +551,7 @@ export class ShopWorld {
   }
 
   private customerColliders(): Collider[] {
-    const boxes = [...this.colliders];
+    const boxes = [...this.colliders, ...(this.streetNeighbourActors?.colliders ?? [])];
     for (const crate of this.state.crates) {
       if (!this.occupiedCrates.has(crate.id) || this.state.held.kind === "crate" && this.state.held.crateId === crate.id) continue;
       const size = crateDimensions(crate.productId);
@@ -858,6 +873,9 @@ export class ShopWorld {
     for (const box of this.colliders) {
       if (x > box.minX - radius && x < box.maxX + radius && z > box.minZ - radius && z < box.maxZ + radius) return false;
     }
+    for (const box of this.streetNeighbourActors?.colliders ?? []) {
+      if (x > box.minX - radius && x < box.maxX + radius && z > box.minZ - radius && z < box.maxZ + radius) return false;
+    }
     // Empty boxes remain pickable and reserve their bay, but do not block walking.
     for (const crate of this.state.crates) {
       if (!this.occupiedCrates.has(crate.id)) continue;
@@ -933,6 +951,13 @@ export class ShopWorld {
       const venue = STREET_VENUES.find((entry) => entry.id === data.venueId);
       label = venue ? `${venue.nameEn} · ${venue.nameZh}` : "High Street · 商业街";
       action = data.venueId ? `${getVenueProgress(this.state, data.venueId).statusText} · 查看条件` : "查看开放条件";
+      inspectable = false;
+    } else if (data.kind === "street-neighbour") {
+      const profile = STREET_NEIGHBOUR_PROFILES.find((entry) => entry.id === data.streetNeighbourId);
+      const supported = !!profile && this.state.streetSupportRecords.some((record) =>
+        record.dayNumber === this.state.day.number && record.neighbourId === profile.id);
+      label = profile ? `${profile.name}${profile.dog ? ` & ${profile.dog.name}` : ""} · 街头邻居` : "Neighbour · 街头邻居";
+      action = supported ? "今天已帮助过 · 仍可聊天" : "打个招呼 · 可自愿帮助";
       inspectable = false;
     } else if (data.kind === "recycling") {
       const offer = getRecyclingOffer(this.state);
@@ -1064,6 +1089,7 @@ export class ShopWorld {
     if (document.pointerLockElement === this.canvas) document.exitPointerLock();
     this.engine.stopRenderLoop();
     this.customerActors.dispose();
+    this.streetNeighbourActors?.dispose();
     this.scene.dispose();
     this.engine.dispose();
   }

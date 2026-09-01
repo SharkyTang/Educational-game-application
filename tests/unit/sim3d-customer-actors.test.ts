@@ -52,10 +52,10 @@ describe("cached customer model visibility and animation ownership", () => {
     vi.restoreAllMocks();
   });
 
-  it("loads four assets once, grounds their own proportions and enables only the current visitor", async () => {
+  it("loads every configured asset once, grounds its own proportions and enables only the current visitor", async () => {
     const state = createFirstDayState();
     await actors.init(state);
-    expect(imports).toHaveBeenCalledTimes(4);
+    expect(imports).toHaveBeenCalledTimes(CUSTOMER_PROFILES.length);
     for (const profile of CUSTOMER_PROFILES) {
       const root = scene.getTransformNodeByName(`customer-visual-${profile.id}`)!;
       expect(root.parent).toBe(path);
@@ -72,7 +72,7 @@ describe("cached customer model visibility and animation ownership", () => {
       const enabled = CUSTOMER_PROFILES.filter((profile) => scene.getTransformNodeByName(`customer-visual-${profile.id}`)!.isEnabled());
       expect(enabled.map((profile) => profile.id)).toEqual([customerProfileFor(next).id]);
     }
-    expect(imports).toHaveBeenCalledTimes(4);
+    expect(imports).toHaveBeenCalledTimes(CUSTOMER_PROFILES.length);
   });
 
   it("switches animation with the actor and does not restart the walk loop on every frame", async () => {
@@ -108,7 +108,7 @@ describe("cached customer model visibility and animation ownership", () => {
 
   it("releases skeletons as well as mesh and animation resources on normal disposal", async () => {
     await actors.init(createFirstDayState());
-    expect(scene.skeletons).toHaveLength(4);
+    expect(scene.skeletons).toHaveLength(CUSTOMER_PROFILES.length);
     actors.dispose();
     expect(scene.meshes).toHaveLength(0);
     expect(scene.skeletons).toHaveLength(0);

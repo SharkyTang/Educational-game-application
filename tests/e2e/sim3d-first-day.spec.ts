@@ -259,7 +259,10 @@ test("3D customer variety: three real visitors rotate models and voices, keep th
   const paymentMethods = new Set<string>();
 
   for (let number = 1; number <= 3; number += 1) {
-    const visit = { customerSeed: fixture.customerSeed, customer: { number } };
+    const visit = {
+      customerSeed: fixture.customerSeed,
+      customer: { number, contentVersion: fixture.customer.contentVersion },
+    };
     const profile = customerProfileFor(visit);
     const greeting = customerSpeechFor(visit, "greeting");
     const thanks = customerSpeechFor(visit, "thanks");

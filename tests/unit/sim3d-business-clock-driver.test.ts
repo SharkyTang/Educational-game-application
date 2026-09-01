@@ -15,7 +15,7 @@ describe("business time activity policy", () => {
     expect(isBusinessTimeRunning({ ...playing, phase })).toBe(false);
   });
 
-  it.each(["loading", "start", "paused", "inspecting", "readonly", "error"])("does not run on the %s screen", (mode) => {
+  it.each(["loading", "start", "paused", "inspecting", "street-dialogue", "readonly", "error"])("does not run on the %s screen", (mode) => {
     expect(isBusinessTimeRunning({ ...playing, mode })).toBe(false);
   });
 

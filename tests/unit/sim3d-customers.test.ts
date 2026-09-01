@@ -33,8 +33,12 @@ interface GlbDocument {
 const CUSTOMERS = [
   { file: "customer.glb", avatar: "Female_Adult_01", prefix: "f001", height: 1.74335 },
   { file: "customer-female-02.glb", avatar: "Female_Adult_02", prefix: "f002", height: 1.73516 },
+  { file: "customer-female-03.glb", avatar: "Female_Adult_03", prefix: "f003", height: 1.73889 },
+  { file: "customer-female-04.glb", avatar: "Female_Adult_04", prefix: "f004", height: 1.76592 },
   { file: "customer-male-01.glb", avatar: "Male_Adult_01", prefix: "m002", height: 1.82368 },
   { file: "customer-male-02.glb", avatar: "Male_Adult_02", prefix: "m003", height: 1.82275 },
+  { file: "customer-male-03.glb", avatar: "Male_Adult_03", prefix: "m004", height: 1.80725 },
+  { file: "customer-male-04.glb", avatar: "Male_Adult_04", prefix: "m006", height: 1.86858 },
 ] as const;
 
 function loadGlb(file: string) {
@@ -68,7 +72,7 @@ function floatAccessor(document: GlbDocument, binary: Buffer, index: number) {
 }
 
 /** Binary/rig contracts. The real browser checks hair, faces and gait separately. */
-describe("four independently modelled Rocketbox customers", () => {
+describe("eight independently modelled Rocketbox adults", () => {
   it.each(CUSTOMERS)("ships $file as a bounded, self-contained and licensed GLB", ({ file, avatar, prefix }) => {
     const { bytes, document, binary } = loadGlb(file);
     expect(bytes.length).toBeLessThan(8 * 1024 * 1024);
@@ -182,7 +186,7 @@ describe("four independently modelled Rocketbox customers", () => {
     }
   });
 
-  it("has four different meshes/faces/outfits within an 8 MiB total download budget", () => {
+  it("has eight different meshes/faces/outfits within a 15 MiB total download budget", () => {
     const geometries = new Set<string>();
     const heads = new Set<string>();
     const outfits = new Set<string>();
@@ -198,10 +202,10 @@ describe("four independently modelled Rocketbox customers", () => {
         hashes.add(createHash("sha256").update(binary.subarray(offset, offset + view.byteLength)).digest("hex"));
       }
     }
-    expect(geometries.size).toBe(4);
-    expect(heads.size).toBe(4);
-    expect(outfits.size).toBe(4);
-    expect(total).toBeLessThan(8 * 1024 * 1024);
+    expect(geometries.size).toBe(8);
+    expect(heads.size).toBe(8);
+    expect(outfits.size).toBe(8);
+    expect(total).toBeLessThan(15 * 1024 * 1024);
     expect(readFileSync(new URL("../../public/assets/sim3d/customer-LICENSE.txt", import.meta.url), "utf8")).toContain("Permission is hereby granted");
   });
 });

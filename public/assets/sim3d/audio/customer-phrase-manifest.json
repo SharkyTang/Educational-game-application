@@ -1,9 +1,9 @@
 {
-  "version": 1,
+  "version": 2,
   "generatedBy": "scripts/generate-customer-speech.py",
   "corpusSource": "src/sim3d/customerCorpus.json",
-  "corpusVersion": 1,
-  "corpusSha256": "3ad2624c95180429c68bccf6a28e62916b13eab213abe51d17559c742b2ad97d",
+  "corpusVersion": 2,
+  "corpusSha256": "5615efebe95554974ac5fe7a45f2e125bcc3908fcc0f73301953510c446a730a",
   "voices": [
     {
       "id": "female",
@@ -43,7 +43,7 @@
     "sampleRate": 22050,
     "channels": 1
   },
-  "totalBytes": 5733562,
+  "totalBytes": 7833246,
   "clips": [
     {
       "scene": "greeting",
@@ -156,6 +156,48 @@
       "sha256": "9fac2cbb5af0fa8d1aa15d515cb88180c53bd6729715eb83b1537a98ebafd1a4",
       "peakDbFS": -5.0,
       "rmsDbFS": -20.73
+    },
+    {
+      "scene": "greeting",
+      "id": "greeting-all-right-quick-look",
+      "text": "All right? Just having a quick look.",
+      "zh": "你好呀？我随便看看。",
+      "voiceId": "female",
+      "file": "customers/female/greeting-all-right-quick-look.wav",
+      "src": "/assets/sim3d/audio/customers/female/greeting-all-right-quick-look.wav",
+      "bytes": 113454,
+      "durationSeconds": 2.572,
+      "sha256": "03141db33ee5579dd36c9c3cf3275e3246a0560545f8a7ebd5f618eb45ee89a7",
+      "peakDbFS": -4.11,
+      "rmsDbFS": -19.76
+    },
+    {
+      "scene": "greeting",
+      "id": "greeting-hiya-couple-of-bits",
+      "text": "Hiya! I'm after a couple of bits.",
+      "zh": "嗨！我来买几样东西。",
+      "voiceId": "female",
+      "file": "customers/female/greeting-hiya-couple-of-bits.wav",
+      "src": "/assets/sim3d/audio/customers/female/greeting-hiya-couple-of-bits.wav",
+      "bytes": 116014,
+      "durationSeconds": 2.63,
+      "sha256": "df53656a7fbaf6dfebb2564c410743b8772bad6189a8947ed3c9d01749975c25",
+      "peakDbFS": -5.06,
+      "rmsDbFS": -21.38
+    },
+    {
+      "scene": "greeting",
+      "id": "greeting-pop-in-while-passing",
+      "text": "Hello! Thought I'd pop in while I'm passing.",
+      "zh": "你好！我正好路过，就进来看看。",
+      "voiceId": "female",
+      "file": "customers/female/greeting-pop-in-while-passing.wav",
+      "src": "/assets/sim3d/audio/customers/female/greeting-pop-in-while-passing.wav",
+      "bytes": 149806,
+      "durationSeconds": 3.396,
+      "sha256": "681dd87caaac20f85f9907d80efd1f68a127d960f552fec22132e3c971987760",
+      "peakDbFS": -5.26,
+      "rmsDbFS": -20.04
     },
     {
       "scene": "checkout",
@@ -326,6 +368,34 @@
       "rmsDbFS": -20.55
     },
     {
+      "scene": "checkout",
+      "id": "checkout-pop-that-on-card",
+      "text": "I'll pop that on my card, please.",
+      "zh": "我用银行卡付，谢谢。",
+      "voiceId": "female",
+      "file": "customers/female/checkout-pop-that-on-card.wav",
+      "src": "/assets/sim3d/audio/customers/female/checkout-pop-that-on-card.wav",
+      "bytes": 98698,
+      "durationSeconds": 2.237,
+      "sha256": "38a29ee1a29ccce5a07da31dce1ceef8e468504bd3431c96d7dadeec339099e8",
+      "peakDbFS": -3.0,
+      "rmsDbFS": -21.06
+    },
+    {
+      "scene": "checkout",
+      "id": "checkout-mind-paid-by-card",
+      "text": "Would you mind if I paid by card?",
+      "zh": "请问我可以刷卡付款吗？",
+      "voiceId": "female",
+      "file": "customers/female/checkout-mind-paid-by-card.wav",
+      "src": "/assets/sim3d/audio/customers/female/checkout-mind-paid-by-card.wav",
+      "bytes": 97836,
+      "durationSeconds": 2.218,
+      "sha256": "7f141e21e38ea945474e2fd06eb9a4f6c75f3db46a3f952643073e41782b50c2",
+      "peakDbFS": -4.24,
+      "rmsDbFS": -18.24
+    },
+    {
       "scene": "thanks",
       "id": "thanks-lovely-day",
       "text": "Thank you. Have a lovely day!",
@@ -438,6 +508,48 @@
       "rmsDbFS": -22.42
     },
     {
+      "scene": "thanks",
+      "id": "thanks-brilliant-very-much",
+      "text": "Brilliant, thanks very much!",
+      "zh": "太好了，非常感谢！",
+      "voiceId": "female",
+      "file": "customers/female/thanks-brilliant-very-much.wav",
+      "src": "/assets/sim3d/audio/customers/female/thanks-brilliant-very-much.wav",
+      "bytes": 103980,
+      "durationSeconds": 2.357,
+      "sha256": "2b005dda6654cb734b3eab0bff23d317f4edf9bfaa62f70659b7b8dae50e0e92",
+      "peakDbFS": -3.0,
+      "rmsDbFS": -17.59
+    },
+    {
+      "scene": "thanks",
+      "id": "thanks-cheers-sorted",
+      "text": "Cheers, that's me sorted!",
+      "zh": "谢谢，这下都办妥了！",
+      "voiceId": "female",
+      "file": "customers/female/thanks-cheers-sorted.wav",
+      "src": "/assets/sim3d/audio/customers/female/thanks-cheers-sorted.wav",
+      "bytes": 94252,
+      "durationSeconds": 2.136,
+      "sha256": "a4ea1d356a24cb231a7ee91d7d1ea24e2c73f6bab1a24baa3ae9b48f3d188658",
+      "peakDbFS": -8.99,
+      "rmsDbFS": -24.65
+    },
+    {
+      "scene": "thanks",
+      "id": "thanks-ta-next-time",
+      "text": "Ta, see you next time!",
+      "zh": "谢啦，下次见！",
+      "voiceId": "female",
+      "file": "customers/female/thanks-ta-next-time.wav",
+      "src": "/assets/sim3d/audio/customers/female/thanks-ta-next-time.wav",
+      "bytes": 95276,
+      "durationSeconds": 2.159,
+      "sha256": "cb4675c13b21effe16183703814b2aad38081df45f3ceb0f9a52bf970ee2cd3b",
+      "peakDbFS": -7.61,
+      "rmsDbFS": -22.43
+    },
+    {
       "scene": "checkoutCash",
       "id": "checkout-cash-can-i-pay",
       "text": "Can I pay in cash, please?",
@@ -492,6 +604,34 @@
       "sha256": "158710de2adf31bead1bff53a7a22e259f6015bb712834f852b1288388954068",
       "peakDbFS": -4.73,
       "rmsDbFS": -21.15
+    },
+    {
+      "scene": "checkoutCash",
+      "id": "checkout-cash-if-okay",
+      "text": "I'll pay with cash, if that's okay.",
+      "zh": "如果可以的话，我用现金付。",
+      "voiceId": "female",
+      "file": "customers/female/checkout-cash-if-okay.wav",
+      "src": "/assets/sim3d/audio/customers/female/checkout-cash-if-okay.wav",
+      "bytes": 124972,
+      "durationSeconds": 2.833,
+      "sha256": "267f43fc4c1f9a2cb1e1765831ef742d720fbbb31242fa113af3a82786eed3b0",
+      "peakDbFS": -3.53,
+      "rmsDbFS": -21.32
+    },
+    {
+      "scene": "checkoutCash",
+      "id": "checkout-cash-settle-this",
+      "text": "Could I settle this in cash, please?",
+      "zh": "请问我可以用现金结账吗？",
+      "voiceId": "female",
+      "file": "customers/female/checkout-cash-settle-this.wav",
+      "src": "/assets/sim3d/audio/customers/female/checkout-cash-settle-this.wav",
+      "bytes": 119340,
+      "durationSeconds": 2.705,
+      "sha256": "a1ea504117cad3aefebd29d2ce90ae724423713dcfa5279f46484898cb5ceca4",
+      "peakDbFS": -7.68,
+      "rmsDbFS": -22.85
     },
     {
       "scene": "tenderCash",
@@ -646,6 +786,48 @@
       "sha256": "5b9cb180a3d6455eb5918901f88816e22bf904e67c1ce42e8276aa62d9fc40de",
       "peakDbFS": -3.85,
       "rmsDbFS": -19.17
+    },
+    {
+      "scene": "greeting",
+      "id": "greeting-all-right-quick-look",
+      "text": "All right? Just having a quick look.",
+      "zh": "你好呀？我随便看看。",
+      "voiceId": "male",
+      "file": "customers/male/greeting-all-right-quick-look.wav",
+      "src": "/assets/sim3d/audio/customers/male/greeting-all-right-quick-look.wav",
+      "bytes": 105774,
+      "durationSeconds": 2.398,
+      "sha256": "ec2db1a65b0b1a45be43f73536c919578e4c6c5747c1f7cfb2d2c5d5033859c1",
+      "peakDbFS": -3.0,
+      "rmsDbFS": -18.8
+    },
+    {
+      "scene": "greeting",
+      "id": "greeting-hiya-couple-of-bits",
+      "text": "Hiya! I'm after a couple of bits.",
+      "zh": "嗨！我来买几样东西。",
+      "voiceId": "male",
+      "file": "customers/male/greeting-hiya-couple-of-bits.wav",
+      "src": "/assets/sim3d/audio/customers/male/greeting-hiya-couple-of-bits.wav",
+      "bytes": 119598,
+      "durationSeconds": 2.711,
+      "sha256": "d314b5b5ce4cb0ff39f60eb31b6c9f33b99cfe9ea7409cc3059a7cdcc7e4220b",
+      "peakDbFS": -3.0,
+      "rmsDbFS": -19.48
+    },
+    {
+      "scene": "greeting",
+      "id": "greeting-pop-in-while-passing",
+      "text": "Hello! Thought I'd pop in while I'm passing.",
+      "zh": "你好！我正好路过，就进来看看。",
+      "voiceId": "male",
+      "file": "customers/male/greeting-pop-in-while-passing.wav",
+      "src": "/assets/sim3d/audio/customers/male/greeting-pop-in-while-passing.wav",
+      "bytes": 114990,
+      "durationSeconds": 2.606,
+      "sha256": "c105853a37d67c8d92867f6117d3ddbd86f55106d171ebfcc0812238bc6bdef1",
+      "peakDbFS": -3.0,
+      "rmsDbFS": -20.14
     },
     {
       "scene": "checkout",
@@ -816,6 +998,34 @@
       "rmsDbFS": -18.5
     },
     {
+      "scene": "checkout",
+      "id": "checkout-pop-that-on-card",
+      "text": "I'll pop that on my card, please.",
+      "zh": "我用银行卡付，谢谢。",
+      "voiceId": "male",
+      "file": "customers/male/checkout-pop-that-on-card.wav",
+      "src": "/assets/sim3d/audio/customers/male/checkout-pop-that-on-card.wav",
+      "bytes": 104758,
+      "durationSeconds": 2.374,
+      "sha256": "3fc7ecdbd6c5ac307c10bc00bad3eab78c4035137ce107cc6f387041e62e3f9f",
+      "peakDbFS": -3.0,
+      "rmsDbFS": -18.63
+    },
+    {
+      "scene": "checkout",
+      "id": "checkout-mind-paid-by-card",
+      "text": "Would you mind if I paid by card?",
+      "zh": "请问我可以刷卡付款吗？",
+      "voiceId": "male",
+      "file": "customers/male/checkout-mind-paid-by-card.wav",
+      "src": "/assets/sim3d/audio/customers/male/checkout-mind-paid-by-card.wav",
+      "bytes": 95788,
+      "durationSeconds": 2.171,
+      "sha256": "fb05e462880bc6e8c4741d85f4d54e6da9f45796a7352096bf4231cf6fcffb2c",
+      "peakDbFS": -3.99,
+      "rmsDbFS": -16.56
+    },
+    {
       "scene": "thanks",
       "id": "thanks-lovely-day",
       "text": "Thank you. Have a lovely day!",
@@ -928,6 +1138,48 @@
       "rmsDbFS": -20.15
     },
     {
+      "scene": "thanks",
+      "id": "thanks-brilliant-very-much",
+      "text": "Brilliant, thanks very much!",
+      "zh": "太好了，非常感谢！",
+      "voiceId": "male",
+      "file": "customers/male/thanks-brilliant-very-much.wav",
+      "src": "/assets/sim3d/audio/customers/male/thanks-brilliant-very-much.wav",
+      "bytes": 82988,
+      "durationSeconds": 1.881,
+      "sha256": "b41d00d0cc222b3a5f7a77010656e0492e967f155fa9df7bc330e2a8d3cf9133",
+      "peakDbFS": -3.0,
+      "rmsDbFS": -18.27
+    },
+    {
+      "scene": "thanks",
+      "id": "thanks-cheers-sorted",
+      "text": "Cheers, that's me sorted!",
+      "zh": "谢谢，这下都办妥了！",
+      "voiceId": "male",
+      "file": "customers/male/thanks-cheers-sorted.wav",
+      "src": "/assets/sim3d/audio/customers/male/thanks-cheers-sorted.wav",
+      "bytes": 94764,
+      "durationSeconds": 2.148,
+      "sha256": "0506c722fe693250df03b75bd347ec5573964d37733e603628313dbe85b492da",
+      "peakDbFS": -3.0,
+      "rmsDbFS": -18.51
+    },
+    {
+      "scene": "thanks",
+      "id": "thanks-ta-next-time",
+      "text": "Ta, see you next time!",
+      "zh": "谢啦，下次见！",
+      "voiceId": "male",
+      "file": "customers/male/thanks-ta-next-time.wav",
+      "src": "/assets/sim3d/audio/customers/male/thanks-ta-next-time.wav",
+      "bytes": 84012,
+      "durationSeconds": 1.904,
+      "sha256": "387ad13d9379f5cd36c0fb03b8d2977c44d4734ec917cc56e58bbcdfc22e6b4d",
+      "peakDbFS": -3.0,
+      "rmsDbFS": -18.53
+    },
+    {
       "scene": "checkoutCash",
       "id": "checkout-cash-can-i-pay",
       "text": "Can I pay in cash, please?",
@@ -982,6 +1234,34 @@
       "sha256": "7a898eeffd1c636a7d4a577d53f037661d126c668bbaeca4ebce53af9d8d5c3d",
       "peakDbFS": -3.68,
       "rmsDbFS": -19.59
+    },
+    {
+      "scene": "checkoutCash",
+      "id": "checkout-cash-if-okay",
+      "text": "I'll pay with cash, if that's okay.",
+      "zh": "如果可以的话，我用现金付。",
+      "voiceId": "male",
+      "file": "customers/male/checkout-cash-if-okay.wav",
+      "src": "/assets/sim3d/audio/customers/male/checkout-cash-if-okay.wav",
+      "bytes": 87084,
+      "durationSeconds": 1.974,
+      "sha256": "6723390c9e999f7af77b3e25354bccef320dc985b815fdaa58bcf50b18523ea2",
+      "peakDbFS": -3.0,
+      "rmsDbFS": -19.18
+    },
+    {
+      "scene": "checkoutCash",
+      "id": "checkout-cash-settle-this",
+      "text": "Could I settle this in cash, please?",
+      "zh": "请问我可以用现金结账吗？",
+      "voiceId": "male",
+      "file": "customers/male/checkout-cash-settle-this.wav",
+      "src": "/assets/sim3d/audio/customers/male/checkout-cash-settle-this.wav",
+      "bytes": 96300,
+      "durationSeconds": 2.183,
+      "sha256": "fdba98d99f27d010a79295295e46117add7a7b6701b3234105e632f5a2666d80",
+      "peakDbFS": -3.0,
+      "rmsDbFS": -20.0
     },
     {
       "scene": "tenderCash",

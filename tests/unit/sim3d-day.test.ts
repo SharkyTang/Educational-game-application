@@ -75,7 +75,7 @@ describe("first-day paired purchasing and conserved goods", () => {
   it("opens with £12 capital, two empty reusable crates and no free merchandise", () => {
     const state = createFirstDayState();
     expect(validateSimState(state)).toBe(true);
-    expect(state.schemaVersion).toBe(10);
+    expect(state.schemaVersion).toBe(11);
     expect(state.cashPence).toBe(INITIAL_CAPITAL_PENCE);
     expect(state.items).toEqual([]);
     expect(state.crates).toHaveLength(2);
@@ -205,6 +205,7 @@ describe("a complete business day and continued operation", () => {
       revenuePence: 1200, procurementPence: 690, costOfGoodsPence: 690, grossProfitPence: 510,
       upgradeSpendPence: 0, expansionSpendPence: 0, closingCashPence: 1710, remainingStockUnits: 0, remainingInventoryValuePence: 0,
       recycledCrates: 0, recyclingIncomePence: 0,
+      communitySupportCount: 0, communityCashPence: 0,
     });
     expect(state.cashPence).toBe(1710);
     expect(state.items.filter((item) => item.location.kind === "sold")).toHaveLength(6);
@@ -254,7 +255,7 @@ describe("a complete business day and continued operation", () => {
     state = act(state, { type: "START_NEXT_DAY" });
     expect(state.cashPence).toBe(1710);
     expect(state.day).toMatchObject({ number: 2, phase: "preparing", openingCashPence: 1710, transactionStart: 3, purchaseStart: 1 });
-    expect(state.customer).toEqual({ number: 4, phase: "outside", shoppingList: [] });
+    expect(state.customer).toEqual({ number: 4, phase: "outside", shoppingList: [], contentVersion: 2 });
     expect(getDaySummary(state).revenuePence).toBe(0);
     expect(getDaySummary(state).procurementPence).toBe(0);
     expect(reduceSim(state, { type: "START_NEXT_DAY" }).state).toBe(state);
@@ -452,7 +453,7 @@ describe("v3 legacy baseline migration", () => {
     expect(result.cashPence).toBe(0);
     expect(result.items).toEqual(legacy.items);
     expect(result.held).toEqual(legacy.held);
-    expect(result.customer).toEqual(legacy.customer);
+    expect(result.customer).toEqual({ ...legacy.customer, contentVersion: 1 });
     expect(result.scannedIds).toEqual(legacy.scannedIds);
     expect(result.transactions).toEqual(legacy.transactions.map((transaction) => ({ ...transaction, paymentMethod: "card", tenderedPence: transaction.amountPence, changePence: 0 })));
     expect(result.day.phase).toBe("open");

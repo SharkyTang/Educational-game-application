@@ -21,12 +21,17 @@ import { shopRenovationReason } from "./shopDevelopment";
 import { STREET_VENUES, getStreetProgress, getVenueProgress } from "./progression";
 import { PRODUCT_ASSETS, PRODUCT_CATEGORIES, type ProductCategoryId } from "./product-library/catalog";
 import type { PointerMode } from "./pointerAccess";
+import {
+  STREET_NEIGHBOUR_PROFILES, streetNeighbourForDay, streetNeighbourSpeechFor,
+  type StreetNeighbourId, type StreetNeighbourScene, type StreetNeighbourSpeechClip,
+} from "./streetNeighbourContent";
 import "./styles.css";
 import "./cashRegister.css";
 import "./businessTime.css";
 import "./developmentPanel.css";
+import "./streetNeighbourDialog.css";
 
-type ScreenMode = "loading" | "start" | "playing" | "paused" | "inspecting" | "cashier" | "readonly" | "error";
+type ScreenMode = "loading" | "start" | "playing" | "paused" | "inspecting" | "cashier" | "street-dialogue" | "readonly" | "error";
 type ManagementSection = "supply" | "day" | "upgrade" | "development" | "layout" | "street";
 type StreetVenueId = (typeof STREET_VENUES)[number]["id"];
 const MANAGEMENT_SECTIONS: readonly ManagementSection[] = ["supply", "day", "upgrade", "development", "layout", "street"];
@@ -35,6 +40,7 @@ interface InteractionDecision {
   message?: string;
   management?: ManagementSection;
   venueId?: StreetVenueId;
+  streetNeighbourId?: StreetNeighbourId;
   cashRegister?: true;
 }
 interface Settings {
@@ -97,6 +103,8 @@ export function commandForInteraction(state: SimState, target: InteractionTarget
         : { message: delivery.reason ?? "暂时不能卸货，请先腾出双手与门口卸货位。" };
     }
     case "venue": return { management: "street", venueId: target.venueId };
+    case "street-neighbour": return target.streetNeighbourId ? { streetNeighbourId: target.streetNeighbourId }
+      : { message: "这位街头邻居暂时不能交谈。" };
     case "crate": return target.crateId ? { command: { type: "PICK_CRATE", crateId: target.crateId } } : {};
     case "shelf": {
       if (!target.productId) return {};
@@ -122,6 +130,7 @@ export function commandForInteraction(state: SimState, target: InteractionTarget
       return state.held.kind === "item" ? { command: { type: "RETURN_ITEM" } }
         : target.position ? { command: { type: "DROP_HELD", position: target.position } } : {};
   }
+  return {};
 }
 
 export function inspectableProduct(state: SimState, target: InteractionTarget | null): ProductId | null {
@@ -162,6 +171,9 @@ export class App3D {
   private dragLookFallback = false;
   private pointerMode: PointerMode = "free";
   private customerClip: CustomerSpeechClip = customerSpeechFor(this.state, "greeting");
+  private streetNeighbourId: StreetNeighbourId | null = null;
+  private streetNeighbourClip: StreetNeighbourSpeechClip | null = null;
+  private streetNeighbourInteractionNumber = 0;
   private lastCustomerCue = "";
   private readonly businessClock = new BusinessClockDriver();
   private learningPlayback = false;
@@ -261,6 +273,7 @@ export class App3D {
     this.ready = false;
     this.mode = "loading";
     this.businessClock.reset();
+    this.dismissStreetDialogue();
     this.cashRegister.close();
     this.shopAudio.setActive(false);
     this.stopSpeech();
@@ -506,9 +519,9 @@ export class App3D {
             <p id="s3-day-eyebrow" class="s3-eyebrow">TODAY AT THE CORNER SHOP</p><h3 id="s3-day-title">今天的小店</h3>
             <p id="s3-day-progress" class="s3-muted"></p>
             <p id="s3-day-clock" class="s3-day-clock"></p>
-            <dl class="s3-account-lines"><div><dt>今日营业收入</dt><dd id="s3-day-revenue"></dd></div><div><dt>已售商品成本</dt><dd id="s3-day-cogs"></dd></div><div class="s3-account-result"><dt>商品毛利</dt><dd id="s3-day-profit"></dd></div><div><dt>空箱回收收入</dt><dd id="s3-day-recycling"></dd></div><div><dt>今日进货支出</dt><dd id="s3-day-procurement"></dd></div><div><dt>货架扩容支出</dt><dd id="s3-day-investment"></dd></div><div><dt>店面扩建支出</dt><dd id="s3-day-expansion"></dd></div><div><dt>当前剩余资金</dt><dd id="s3-day-cash"></dd></div><div><dt>未售商品 / 成本价值</dt><dd id="s3-day-inventory"></dd></div></dl>
+            <dl class="s3-account-lines"><div><dt>今日营业收入</dt><dd id="s3-day-revenue"></dd></div><div><dt>已售商品成本</dt><dd id="s3-day-cogs"></dd></div><div class="s3-account-result"><dt>商品毛利</dt><dd id="s3-day-profit"></dd></div><div><dt>空箱回收收入</dt><dd id="s3-day-recycling"></dd></div><div><dt>今日进货支出</dt><dd id="s3-day-procurement"></dd></div><div><dt>货架扩容支出</dt><dd id="s3-day-investment"></dd></div><div><dt>店面扩建支出</dt><dd id="s3-day-expansion"></dd></div><div><dt>社区现金帮助</dt><dd id="s3-day-community"></dd></div><div><dt>当前剩余资金</dt><dd id="s3-day-cash"></dd></div><div><dt>未售商品 / 成本价值</dt><dd id="s3-day-inventory"></dd></div></dl>
             <p id="s3-day-recycling-count" class="s3-muted"></p>
-            <p class="s3-muted">商品毛利 = 营业收入 − 已售商品成本。回收收入单独记账，投入时即入账，日结不再发一次。进货中尚未卖出的部分仍是存货；扩容是投资，不把钱包余额当利润。</p>
+            <p class="s3-muted">商品毛利 = 营业收入 − 已售商品成本。回收收入单独记账，自愿现金帮助单独记为社区支出，不计经验或成就。进货中尚未卖出的部分仍是存货；扩容是投资，不把钱包余额当利润。</p>
             <p id="s3-day-reason" class="s3-inline-reason" role="status"></p>
             <div class="s3-management-buttons"><button id="s3-close-shop" class="s3-secondary-button" type="button">提前打烊</button><button id="s3-settle-day" class="s3-primary-button" type="button" hidden>完成日结</button><button id="s3-next-day" class="s3-primary-button" type="button" hidden>开始下一天</button><button id="s3-day-to-upgrade" class="s3-secondary-button" type="button">看看 £8 普通扩容</button></div>
             <div id="s3-close-confirm" class="s3-close-confirm" role="group" aria-label="确认提前打烊" hidden>
@@ -561,6 +574,40 @@ export class App3D {
           <section id="s3-import-confirm" class="s3-confirm" aria-labelledby="s3-import-title" hidden><h3 id="s3-import-title">确认导入这份存档？</h3><p id="s3-import-summary"></p><p>会替换当前 3D 进度，覆盖前保留当前有效快照。旧版 2D 存档不变；文件不会上传。</p><div><button id="s3-import-confirm-button" class="s3-primary-button" type="button">确认导入并替换进度</button><button id="s3-import-cancel" class="s3-secondary-button" type="button">保留当前进度</button></div></section>
         </dialog>
 
+        <dialog id="s3-neighbour-dialog" class="s3-neighbour-dialog" aria-labelledby="s3-neighbour-title" aria-describedby="s3-neighbour-context">
+          <div class="s3-neighbour-heading">
+            <div><p class="s3-eyebrow">STREET NEIGHBOUR · 街头邻居</p><h2 id="s3-neighbour-title">Street neighbour</h2><p id="s3-neighbour-dog-name" class="s3-neighbour-dog-name"></p></div>
+            <button id="s3-neighbour-close" class="s3-secondary-button" type="button">返回街道 <kbd>Esc</kbd></button>
+          </div>
+          <div class="s3-neighbour-body">
+            <div class="s3-neighbour-dialogue">
+              <div class="s3-neighbour-spoken-line" role="status" aria-live="polite" aria-atomic="true">
+                <p id="s3-neighbour-speaker" class="s3-neighbour-speaker">SAM SAYS</p>
+                <p id="s3-neighbour-line" class="s3-neighbour-line" lang="en"></p>
+                <p id="s3-neighbour-zh" class="s3-neighbour-zh"></p>
+              </div>
+              <div class="s3-neighbour-audio-row"><button id="s3-neighbour-replay" class="s3-text-button" type="button">重听这句 <kbd>R</kbd></button><p id="s3-neighbour-audio-status" role="status" aria-live="polite"></p></div>
+            </div>
+            <section class="s3-neighbour-choices" aria-labelledby="s3-neighbour-chat-title">
+              <h3 id="s3-neighbour-chat-title">征得同意后聊聊</h3>
+              <div class="s3-neighbour-choice-grid">
+                <button id="s3-neighbour-chat" class="s3-secondary-button" type="button">聊聊今天的街道<span>How is the high street today?</span></button>
+                <button id="s3-neighbour-needs" class="s3-secondary-button" type="button">先问对方需要什么<span>What would be useful today?</span></button>
+                <button id="s3-neighbour-dog" class="s3-secondary-button" type="button">先问再靠近 Patch<span>May I say hello to Patch?</span></button>
+                <button id="s3-neighbour-outreach" class="s3-secondary-button" type="button">聊本地外展帮助<span>Ask before contacting a service</span></button>
+              </div>
+            </section>
+            <section class="s3-neighbour-support" aria-labelledby="s3-neighbour-support-title">
+              <h3 id="s3-neighbour-support-title">自愿提供现金帮助</h3>
+              <p class="s3-neighbour-support-copy">可从小店资金给 £1 或 £2，每位邻居每天一次。不增加经验、成就或好感度；不提供也没有惩罚。</p>
+              <div class="s3-neighbour-support-actions"><button id="s3-neighbour-give-one" class="s3-primary-button" type="button">给 £1</button><button id="s3-neighbour-give-two" class="s3-primary-button" type="button">给 £2</button><button id="s3-neighbour-no-donation" class="s3-secondary-button" type="button">这次先不给现金</button></div>
+              <p id="s3-neighbour-support-status" class="s3-neighbour-support-status" role="status" aria-live="polite"></p>
+            </section>
+            <p id="s3-neighbour-context" class="s3-neighbour-context">小店称他们为“街头邻居”：先问是否愿意聊，先问再接近陪伴犬，不替对方擅自联系服务。真实世界的信息可参考 <a href="https://www.crisis.org.uk/ending-homelessness/how-to-help-someone-experiencing-homelessness/" target="_blank" rel="noopener noreferrer">Crisis</a>、<a href="https://thestreetlink.org.uk/start" target="_blank" rel="noopener noreferrer">StreetLink（英格兰与威尔士）</a> 与 <a href="https://www.dogstrusthopeproject.org.uk/" target="_blank" rel="noopener noreferrer">Dogs Trust</a>。
+            </p>
+          </div>
+        </dialog>
+
         ${cashRegisterMarkup()}
 
         <div id="s3-save-banner" class="s3-save-banner" role="alert" hidden><p id="s3-save-warning"></p><button id="s3-dismiss-warning" class="s3-light-button" type="button">知道了</button></div>
@@ -587,6 +634,15 @@ export class App3D {
     click("s3-speak-phrase", () => { if (this.inspecting) this.speak(unitPhrase(this.inspecting)) });
     click("s3-read-customer", () => this.replayCustomer());
     click("s3-repeat-customer", () => this.repeatCustomer());
+    click("s3-neighbour-close", () => this.closeStreetDialogue());
+    click("s3-neighbour-replay", () => this.replayStreetNeighbour());
+    click("s3-neighbour-chat", () => this.showStreetNeighbourScene("chat"));
+    click("s3-neighbour-needs", () => this.showStreetNeighbourScene("needs"));
+    click("s3-neighbour-dog", () => this.showStreetNeighbourScene("dog"));
+    click("s3-neighbour-outreach", () => this.showStreetNeighbourScene("outreach"));
+    click("s3-neighbour-give-one", () => this.supportStreetNeighbour(100));
+    click("s3-neighbour-give-two", () => this.supportStreetNeighbour(200));
+    click("s3-neighbour-no-donation", () => this.showStreetNeighbourScene("noDonation"));
     click("s3-open-supply", () => this.openManagement("supply"));
     click("s3-open-day", () => this.openManagement("day"));
     click("s3-open-upgrade", () => this.openManagement("upgrade"));
@@ -683,6 +739,10 @@ export class App3D {
     click("s3-restart-confirm-button", () => this.restart());
     click("s3-dismiss-warning", () => { this.loadWarning = ""; this.settingsWarning = ""; this.renderSaveStatus() });
     this.el<HTMLDialogElement>("s3-pause").addEventListener("cancel", (event) => { event.preventDefault(); this.resume(false) }, { signal });
+    this.el<HTMLDialogElement>("s3-neighbour-dialog").addEventListener("cancel", (event) => {
+      event.preventDefault();
+      this.closeStreetDialogue();
+    }, { signal });
     for (const id of ["s3-sensitivity", "s3-quality", "s3-reduced-motion", "s3-volume", "s3-auto-speech", "s3-music-enabled", "s3-music-volume", "s3-effects-volume"]) {
       this.el(id).addEventListener("input", () => this.updateSettings(), { signal });
     }
@@ -694,6 +754,7 @@ export class App3D {
       this.syncShopAudio();
       this.stopSpeech();
       if (this.mode === "cashier") this.cashRegister.close();
+      if (this.mode === "street-dialogue") this.closeStreetDialogue(false);
       if (this.mode === "playing") this.pause();
     }, { signal });
     window.addEventListener("focus", () => { this.audioForeground = true; this.syncShopAudio() }, { signal });
@@ -703,6 +764,7 @@ export class App3D {
         this.businessClock.reset();
         this.stopSpeech();
         if (this.mode === "cashier") this.cashRegister.close();
+        if (this.mode === "street-dialogue") this.closeStreetDialogue(false);
         if (this.mode === "playing") this.pause();
       }
     }, { signal });
@@ -716,6 +778,7 @@ export class App3D {
       this.businessClock.reset();
       this.stopSpeech();
       this.initGeneration += 1;
+      this.dismissStreetDialogue();
       this.mode = "readonly";
       this.cashRegister.close();
       this.ready = false;
@@ -728,6 +791,7 @@ export class App3D {
     window.addEventListener("pageshow", (event) => {
       if (event.persisted && !this.disposed) {
         this.el<HTMLDialogElement>("s3-pause").close();
+        this.dismissStreetDialogue();
         this.el("s3-inspection").hidden = true;
         this.el("s3-hud").hidden = true;
         this.inspecting = null;
@@ -769,7 +833,8 @@ export class App3D {
     if (decision.management) {
       if (decision.venueId) this.selectedVenue = decision.venueId;
       this.openManagement(decision.management);
-    } else if (decision.cashRegister) this.openCashRegister();
+    } else if (decision.streetNeighbourId) this.openStreetDialogue(decision.streetNeighbourId);
+    else if (decision.cashRegister) this.openCashRegister();
     else if (decision.command) this.dispatch(decision.command);
     else if (decision.message) this.notify(decision.message);
   }
@@ -792,6 +857,128 @@ export class App3D {
       const clip = cashTenderSpeechFor(this.state);
       if (this.settings.autoSpeech && clip) this.speak(clip);
     }
+  }
+
+  private openStreetDialogue(neighbourId: StreetNeighbourId): void {
+    if (this.mode !== "playing" || !this.ready || !this.saveSession?.canWrite) return;
+    const today = streetNeighbourForDay({ customerSeed: this.state.customerSeed, dayNumber: this.state.day.number });
+    if (today.id !== neighbourId) { this.notify("这位邻居今天不在这段街道上。"); return }
+    this.savePoseAndPersist();
+    if (!this.saveSession.canWrite) return;
+    this.stopSpeech();
+    this.streetNeighbourId = neighbourId;
+    this.mode = "street-dialogue";
+    this.businessClock.reset();
+    this.world?.setActive(false);
+    this.releasePointer();
+    this.renderCaptureHint();
+    this.syncShopAudio();
+    // Populate the accessible name and current dialogue before the modal is
+    // exposed, so Ellis is never announced as Sam by assistive technology.
+    this.showStreetNeighbourScene("consent");
+    const dialog = this.el<HTMLDialogElement>("s3-neighbour-dialog");
+    if (!dialog.open) dialog.showModal();
+    this.el("s3-neighbour-chat").focus();
+  }
+
+  private showStreetNeighbourScene(scene: StreetNeighbourScene): void {
+    const neighbourId = this.streetNeighbourId;
+    if (this.mode !== "street-dialogue" || !neighbourId) return;
+    this.streetNeighbourInteractionNumber += 1;
+    const clip = streetNeighbourSpeechFor(neighbourId, scene, {
+      customerSeed: this.state.customerSeed,
+      dayNumber: this.state.day.number,
+      interactionNumber: this.streetNeighbourInteractionNumber,
+    });
+    if (!clip) {
+      this.text("s3-neighbour-support-status", "这个话题暂时不适用，可以选择其他聊天内容。");
+      return;
+    }
+    this.streetNeighbourClip = clip;
+    this.renderStreetNeighbourDialogue();
+    if (this.settings.autoSpeech) this.speak(clip);
+    else this.text("s3-neighbour-audio-status", "点击重听或按 R 播放，英文与中文字幕始终保留。");
+  }
+
+  private renderStreetNeighbourDialogue(): void {
+    const neighbourId = this.streetNeighbourId;
+    const clip = this.streetNeighbourClip;
+    if (!neighbourId || !clip) return;
+    const profile = STREET_NEIGHBOUR_PROFILES.find((entry) => entry.id === neighbourId);
+    if (!profile) return;
+    this.text("s3-neighbour-title", profile.name);
+    this.text("s3-neighbour-dog-name", profile.dog ? `${profile.dog.name} · companion dog · 陪伴犬` : "今天独自在街边");
+    this.text("s3-neighbour-speaker", `${profile.name.toLocaleUpperCase("en-GB")} SAYS`);
+    this.text("s3-neighbour-line", `“${clip.text}”`);
+    this.text("s3-neighbour-zh", clip.zh);
+    this.el("s3-neighbour-dog").hidden = !profile.dog;
+    const support = this.state.streetSupportRecords.find((record) =>
+      record.dayNumber === this.state.day.number && record.neighbourId === neighbourId);
+    const writable = !!this.saveSession?.canWrite && this.state.day.phase !== "settled";
+    const giveOne = this.el<HTMLButtonElement>("s3-neighbour-give-one");
+    const giveTwo = this.el<HTMLButtonElement>("s3-neighbour-give-two");
+    giveOne.disabled = !writable || !!support || this.state.cashPence < 100;
+    giveTwo.disabled = !writable || !!support || this.state.cashPence < 200;
+    const status = support
+      ? `今天已给 ${profile.name} ${money(support.amountPence)}，已从小店资金扣除并记入营业账本；仍可继续聊天。`
+      : this.state.day.phase === "settled" ? "今天已日结，不再记入现金帮助；仍可聊天。"
+        : `当前小店资金 ${money(this.state.cashPence)} · 每天最多一次 · 不影响经验与成就。`;
+    this.text("s3-neighbour-support-status", status);
+    this.el("s3-neighbour-support-status").setAttribute("data-tone", !support && this.state.cashPence < 100 ? "warning" : "neutral");
+  }
+
+  private supportStreetNeighbour(amountPence: 100 | 200): void {
+    const neighbourId = this.streetNeighbourId;
+    if (this.mode !== "street-dialogue" || !neighbourId) return;
+    const supported = this.state.streetSupportRecords.some((record) =>
+      record.dayNumber === this.state.day.number && record.neighbourId === neighbourId);
+    if (supported) { this.showStreetNeighbourScene("alreadyHelped"); return }
+    if (this.state.day.phase === "settled") {
+      this.text("s3-neighbour-support-status", "今天已日结，本次不会扣款。你仍可继续聊天。");
+      return;
+    }
+    if (this.state.cashPence < amountPence) {
+      this.text("s3-neighbour-support-status", `小店资金不足 ${money(amountPence)}，本次不会扣款。不提供现金没有惩罚。`);
+      this.el("s3-neighbour-support-status").setAttribute("data-tone", "warning");
+      return;
+    }
+    if (this.dispatch({ type: "SUPPORT_STREET_NEIGHBOUR", neighbourId, amountPence }, false)) {
+      this.showStreetNeighbourScene(amountPence === 100 ? "donationOne" : "donationTwo");
+    } else if (this.mode === "street-dialogue") {
+      this.text("s3-neighbour-support-status", "这次没有扣款，请检查小店资金或存档状态。");
+      this.el("s3-neighbour-support-status").setAttribute("data-tone", "warning");
+    }
+  }
+
+  private replayStreetNeighbour(): void {
+    if (this.mode !== "street-dialogue" || !this.streetNeighbourClip) return;
+    this.speak(this.streetNeighbourClip, 1, undefined, true);
+  }
+
+  private dismissStreetDialogue(): void {
+    const dialog = this.root.querySelector<HTMLDialogElement>("#s3-neighbour-dialog");
+    if (dialog?.open) dialog.close();
+    this.streetNeighbourId = null;
+    this.streetNeighbourClip = null;
+  }
+
+  private closeStreetDialogue(resume = true): void {
+    if (this.mode !== "street-dialogue") { this.dismissStreetDialogue(); return }
+    this.stopSpeech();
+    this.dismissStreetDialogue();
+    this.mode = "playing";
+    if (!resume) return;
+    try { this.saveSession?.assertCurrent() }
+    catch (error) { this.enterReadOnly(error instanceof Error ? error.message : "存档写入权限不可用。"); return }
+    if (this.disposed || !this.saveSession?.canWrite) return;
+    this.businessClock.resume(performance.now());
+    this.world?.setActive(true);
+    this.shopAudio.unlock();
+    this.syncShopAudio();
+    this.releasePointer();
+    this.renderCaptureHint();
+    this.el("s3-canvas").focus();
+    this.syncCustomerCue();
   }
 
   private dropHeld(): void {
@@ -975,6 +1162,12 @@ export class App3D {
 
   private onKeyDown(event: KeyboardEvent): void {
     if (event.repeat || event.ctrlKey || event.metaKey || event.altKey || event.isComposing) return;
+    if (this.mode === "street-dialogue" && (event.code === "Escape" || event.code === "KeyR")) {
+      event.preventDefault(); event.stopImmediatePropagation();
+      if (event.code === "Escape") this.closeStreetDialogue();
+      else this.replayStreetNeighbour();
+      return;
+    }
     if (this.mode === "inspecting" && (event.code === "KeyF" || event.code === "Escape")) {
       event.preventDefault(); event.stopImmediatePropagation(); this.closeInspection(); return;
     }
@@ -1226,7 +1419,7 @@ export class App3D {
     this.text("s3-day-title", `第 ${day.dayNumber} 天${this.state.day.phase === "settled" ? " · 日结完成" : " · 营业账本"}`);
     this.text("s3-day-progress", `已收款 ${day.paidCustomers} 单 · 开始时资金 ${money(day.openingCashPence)}`);
     this.renderBusinessClock();
-    for (const [suffix, value] of [["revenue", day.revenuePence], ["cogs", day.costOfGoodsPence], ["profit", day.grossProfitPence], ["recycling", day.recyclingIncomePence], ["procurement", day.procurementPence], ["investment", day.upgradeSpendPence], ["expansion", day.expansionSpendPence], ["cash", day.closingCashPence]] as const) {
+    for (const [suffix, value] of [["revenue", day.revenuePence], ["cogs", day.costOfGoodsPence], ["profit", day.grossProfitPence], ["recycling", day.recyclingIncomePence], ["procurement", day.procurementPence], ["investment", day.upgradeSpendPence], ["expansion", day.expansionSpendPence], ["community", day.communityCashPence], ["cash", day.closingCashPence]] as const) {
       this.text(`s3-day-${suffix}`, money(value));
     }
     const recycling = getRecyclingSummary(this.state);
@@ -1469,6 +1662,7 @@ export class App3D {
     this.writerWarning = message;
     this.lastSaveText = "只读 · 本页已停止写入";
     this.mode = "readonly";
+    this.dismissStreetDialogue();
     this.cashRegister.close();
     this.world?.setActive(false);
     this.world?.inspect(null);
@@ -1555,7 +1749,7 @@ export class App3D {
 
   private syncShopAudio(): void {
     this.shopAudio.setActive(!this.disposed && this.ready && !!this.saveSession?.canWrite
-      && this.audioForeground && !document.hidden && (this.mode === "playing" || this.mode === "inspecting" || this.mode === "cashier"));
+      && this.audioForeground && !document.hidden && (this.mode === "playing" || this.mode === "inspecting" || this.mode === "cashier" || this.mode === "street-dialogue"));
   }
 
   /** Prime this very same audio element in the Start click's user activation. */
@@ -1628,11 +1822,12 @@ export class App3D {
     this.renderBusinessClock();
   }
 
-  private speak(input: string | CustomerSpeechClip, rate = 1, onDone?: () => void, learning = false): void {
+  private speak(input: string | CustomerSpeechClip | StreetNeighbourSpeechClip, rate = 1, onDone?: () => void, learning = false): void {
     const text = typeof input === "string" ? input : input.text;
     const report = (message: string): void => {
       if (this.mode === "inspecting") this.text("s3-speech-status", message);
       else if (this.mode === "cashier") this.text("s3-cash-audio-status", message);
+      else if (this.mode === "street-dialogue") this.text("s3-neighbour-audio-status", message);
       else this.text("s3-customer-audio-status", message);
     };
     this.stopSpeech();
@@ -1907,6 +2102,7 @@ export class App3D {
     this.el("s3-hud").hidden = true;
     this.el("s3-start").hidden = false;
     this.mode = "start";
+    this.dismissStreetDialogue();
     this.cashRegister.close();
     this.stopSpeech();
     this.renderState();
@@ -1922,6 +2118,7 @@ export class App3D {
     this.savePoseAndPersist();
     this.releaseCompletion = this.saveSession?.release() ?? Promise.resolve();
     this.disposed = true;
+    this.dismissStreetDialogue();
     this.cashRegister.close();
     this.initGeneration += 1;
     this.events.abort();

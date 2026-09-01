@@ -1,0 +1,84 @@
+{
+  "version": 1,
+  "profiles": {
+    "sam": {
+      "consent": [
+        { "id": "sam-consent-morning", "text": "Morning. You're welcome to stop for a chat if you like.", "zh": "早上好。如果你愿意，可以停下来聊聊。" },
+        { "id": "sam-consent-hello", "text": "Hello. Would you like to chat for a moment?", "zh": "你好。愿意聊一会儿吗？" },
+        { "id": "sam-consent-no-pressure", "text": "Hi there. No pressure, but I'm happy to talk.", "zh": "嗨。别有压力，不过我很愿意聊聊。" }
+      ],
+      "chat": [
+        { "id": "sam-chat-weather", "text": "The rain has eased off at last.", "zh": "这雨总算小了。" },
+        { "id": "sam-chat-busy-street", "text": "The high street is busy today.", "zh": "今天这条商业街挺热闹的。" },
+        { "id": "sam-chat-shop-window", "text": "Your shop window looks bright today.", "zh": "你的店铺橱窗今天看起来很亮堂。" },
+        { "id": "sam-chat-quiet-corner", "text": "This is a quieter corner when the traffic settles.", "zh": "车流少一点时，这个街角会安静些。" }
+      ],
+      "needs": [
+        { "id": "sam-needs-tea", "text": "A hot tea would be useful, if that's all right.", "zh": "如果方便的话，一杯热茶会很有用。" },
+        { "id": "sam-needs-ask-first", "text": "Thanks for asking. It helps when people ask what I need.", "zh": "谢谢你先问我。大家先问我需要什么，这很有帮助。" }
+      ],
+      "dog": [
+        { "id": "sam-dog-patch", "text": "This is Patch. We look out for each other.", "zh": "这是 Patch。我们互相照顾。" },
+        { "id": "sam-dog-ask-before-petting", "text": "Please ask me before petting Patch.", "zh": "摸 Patch 之前，请先问问我。" },
+        { "id": "sam-dog-let-approach", "text": "Patch is friendly, but please let Patch come to you.", "zh": "Patch 很友好，不过请让 Patch 自己走近你。" }
+      ],
+      "donationOne": [
+        { "id": "sam-donation-one-kind", "text": "That's kind of you. Thank you for the pound.", "zh": "你真好。谢谢你给的一英镑。" },
+        { "id": "sam-donation-one-thanks", "text": "Thank you. That will help today.", "zh": "谢谢你。这对今天很有帮助。" }
+      ],
+      "donationTwo": [
+        { "id": "sam-donation-two-generous", "text": "That's generous. Thank you very much.", "zh": "你很慷慨。非常感谢。" },
+        { "id": "sam-donation-two-help", "text": "Two pounds will really help today. Thank you.", "zh": "两英镑今天会帮上大忙。谢谢你。" }
+      ],
+      "alreadyHelped": [
+        { "id": "sam-already-helped-enough", "text": "You've already helped today. That's more than enough.", "zh": "你今天已经帮过忙了。这已经足够了。" },
+        { "id": "sam-already-helped-chat", "text": "You've helped already, but a chat is always welcome.", "zh": "你已经帮过我了，不过随时欢迎来聊聊。" }
+      ],
+      "noDonation": [
+        { "id": "sam-no-donation-no-worries", "text": "No worries. It was good to chat.", "zh": "没关系。和你聊聊就很好。" },
+        { "id": "sam-no-donation-take-care", "text": "That's all right. Take care today.", "zh": "没事的。今天多保重。" }
+      ],
+      "outreach": [
+        { "id": "sam-outreach-local-team", "text": "The local outreach team knows this area.", "zh": "当地外展服务团队了解这片区域。" },
+        { "id": "sam-outreach-ask-me", "text": "Please ask me before contacting a service for me.", "zh": "在替我联系服务机构前，请先问问我。" }
+      ]
+    },
+    "ellis": {
+      "consent": [
+        { "id": "ellis-consent-morning", "text": "Morning. Would you like to stop and chat?", "zh": "早上好。愿意停下来聊聊吗？" },
+        { "id": "ellis-consent-hello", "text": "Hello. I'm happy to talk if you have a moment.", "zh": "你好。如果你有空，我很愿意聊聊。" },
+        { "id": "ellis-consent-choice", "text": "Hi. A quick chat would be nice, but it's your choice.", "zh": "嗨。能简单聊聊很好，不过由你决定。" }
+      ],
+      "chat": [
+        { "id": "ellis-chat-clouds", "text": "Those clouds look ready for more rain.", "zh": "那些云看着像是还要下雨。" },
+        { "id": "ellis-chat-deliveries", "text": "There have been plenty of deliveries along the street today.", "zh": "今天这条街上送货的车可真不少。" },
+        { "id": "ellis-chat-neighbours", "text": "A familiar face makes the street feel friendlier.", "zh": "看见熟悉的面孔，这条街会显得更亲切。" },
+        { "id": "ellis-chat-shop", "text": "It is good to see the little shop open.", "zh": "看到这家小店开门真好。" }
+      ],
+      "needs": [
+        { "id": "ellis-needs-water", "text": "A bottle of water would be useful, if you have one.", "zh": "如果你有的话，一瓶水会很有用。" },
+        { "id": "ellis-needs-listen", "text": "Thank you for asking instead of guessing.", "zh": "谢谢你先问我，而不是自己猜。" }
+      ],
+      "donationOne": [
+        { "id": "ellis-donation-one-kind", "text": "Thank you for the pound. That's very kind.", "zh": "谢谢你给的一英镑。你真好。" },
+        { "id": "ellis-donation-one-help", "text": "Thank you. That will be useful today.", "zh": "谢谢你。这今天会很有用。" }
+      ],
+      "donationTwo": [
+        { "id": "ellis-donation-two-kind", "text": "Thank you. Two pounds is very kind of you.", "zh": "谢谢你。你愿意给两英镑，真的很好。" },
+        { "id": "ellis-donation-two-appreciate", "text": "I appreciate that. Thank you very much.", "zh": "我很感激。非常感谢你。" }
+      ],
+      "alreadyHelped": [
+        { "id": "ellis-already-helped-enough", "text": "You have already helped today. Please keep the rest.", "zh": "你今天已经帮过忙了。剩下的请自己留着吧。" },
+        { "id": "ellis-already-helped-company", "text": "You have helped already. The company is enough.", "zh": "你已经帮过我了。有人聊聊就足够了。" }
+      ],
+      "noDonation": [
+        { "id": "ellis-no-donation-fine", "text": "That's completely fine. Thanks for stopping.", "zh": "完全没关系。谢谢你愿意停下来。" },
+        { "id": "ellis-no-donation-good-chat", "text": "No problem. It was good to chat.", "zh": "没问题。和你聊聊就很好。" }
+      ],
+      "outreach": [
+        { "id": "ellis-outreach-information", "text": "I know where to find the local outreach information.", "zh": "我知道在哪里能找到当地外展服务的信息。" },
+        { "id": "ellis-outreach-consent", "text": "Please check with me before contacting anyone on my behalf.", "zh": "在代表我联系任何人之前，请先征求我的意见。" }
+      ]
+    }
+  }
+}

@@ -29,6 +29,17 @@ Cori 模型约 63.5 MB，从作者官网给出的直链下载；模型、隔离 
 
 文件完整性/波形检查不等于声音自然度验收；后者由用户试听确认。自动播报、浏览器播放与鼠标点击的本轮结果单列在 [S1 首日验证记录](./S1_FIRST_DAY.md#验证记录)，不挪用 S0 结果。
 
+## 顾客与街头邻居（2026-09-01）
+
+| 文件 / 资产 | 来源与许可 | 处理与用途 |
+| --- | --- | --- |
+| `customer.glb`、`customer-{male-01,female-02,male-02,female-03,male-03,female-04,male-04}.glb` | Microsoft Rocketbox 固定提交，MIT；完整声明见 `customer-LICENSE.txt` | 6 个购物顾客外形与 Sam / Ellis 2 个预留外形；转为自包含 GLB，保留 `idle` / `walk` |
+| `audio/customers/{female,male}/*.wav` | Piper / Cori 女声与 Martin Clifton 男声；模型许可与固定哈希见独立来源记录 | 45 句顾客台词的男女两套离线 WAV，共 90 段；运行时不加载 TTS 模型 |
+| `street-dog-patch.glb` | Quaternius Animated Animals Low Poly，CC0 | Sam 的真实动画陪伴犬 Patch；自包含 GLB，保留 `idle` / `walk` |
+| `audio/street-neighbours/{sam,ellis}/*.wav` | 与顾客配音相同的已审查英国英语 Piper 模型 | 41 句双语街头邻居对话的离线 WAV，角色与声线固定 |
+
+顾客模型来源、输入文件和转换哈希见 [customer-SOURCE.md](../public/assets/sim3d/customer-SOURCE.md)，台词、模型身份和全部 WAV 哈希见 [customer-phrase-SOURCES.md](../public/assets/sim3d/audio/customer-phrase-SOURCES.md)。Patch 的来源、CC0 声明、可重现转换与哈希见 [street-dog-SOURCE.md](../public/assets/sim3d/street-dog-SOURCE.md)；街头邻居配音见 [street-neighbour-SOURCES.md](../public/assets/sim3d/audio/street-neighbour-SOURCES.md)。各文件的许可只覆盖对应第三方资产，不传递给整个游戏或其他素材。
+
 ## 第一人称 3D S0（2026-08-30）
 
 | 文件 / 资产 | 来源与许可 | 处理与用途 |

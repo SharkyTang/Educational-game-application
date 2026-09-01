@@ -106,7 +106,8 @@ describe("read-only v6 migration into the recycling ledger", () => {
     expect(loaded.source).toBe("v6");
     expect(loaded.warning).toContain("不会额外发钱");
     expect(loaded.state).toEqual({
-      ...old, schemaVersion: 10, renovation: createInitialRenovation(), payment: null, recyclingRecords: [],
+      ...old, schemaVersion: 11, renovation: createInitialRenovation(), payment: null, recyclingRecords: [], streetSupportRecords: [],
+      customer: { ...old.customer, contentVersion: 1 },
       day: { ...old.day, targetCustomers: null, elapsedOpenMs: 0, nextCustomerAtMs: null, closeReason: null },
       recyclingBatches: [
         { id: "crate-batch-1", productId: "milk", purchaseIds: ["paid-opening"] },

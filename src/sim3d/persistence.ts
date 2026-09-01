@@ -1,10 +1,13 @@
 import { createFirstDayState, migrateLegacySimState, migrateV4SimState, migrateV5SimState, migrateV6SimState, migrateV7SimState, migrateV8SimState, migrateV9SimState,
-  validateLegacySimState, validateSimState, validateV4SimState, validateV5SimState, validateV6SimState, validateV7SimState, validateV8SimState, validateV9SimState, type SimState } from "./domain";
+  migrateV10SimState, validateLegacySimState, validateSimState, validateV4SimState, validateV5SimState, validateV6SimState, validateV7SimState,
+  validateV8SimState, validateV9SimState, validateV10SimState, type SimState } from "./domain";
 
 /** Deliberately separate from the older 2D storage namespace; never migrate/delete it. */
-export const SIM_STORAGE_KEY = "english-high-street:sim3d:v10";
+export const SIM_STORAGE_KEY = "english-high-street:sim3d:v11";
 export const SIM_BACKUP_KEY = `${SIM_STORAGE_KEY}:backup`;
 /** These old keys are read-only migration sources, never overwritten or removed. */
+export const SIM_V10_STORAGE_KEY = "english-high-street:sim3d:v10";
+export const SIM_V10_BACKUP_KEY = `${SIM_V10_STORAGE_KEY}:backup`;
 export const SIM_V9_STORAGE_KEY = "english-high-street:sim3d:v9";
 export const SIM_V9_BACKUP_KEY = `${SIM_V9_STORAGE_KEY}:backup`;
 export const SIM_V8_STORAGE_KEY = "english-high-street:sim3d:v8";
@@ -17,7 +20,7 @@ export const SIM_V5_STORAGE_KEY = "english-high-street:sim3d:v5";
 export const SIM_V5_BACKUP_KEY = `${SIM_V5_STORAGE_KEY}:backup`;
 export const SIM_V4_STORAGE_KEY = "english-high-street:sim3d:v4";
 export const SIM_V4_BACKUP_KEY = `${SIM_V4_STORAGE_KEY}:backup`;
-/** v4–v10 share one writer lock so an older open page cannot mutate a migration source. */
+/** v4–v11 share one writer lock so an older open page cannot mutate a migration source. */
 export const SIM_WRITER_LOCK = `${SIM_V4_STORAGE_KEY}:writer`;
 export const SIM_LEGACY_STORAGE_KEY = "english-high-street:sim3d:v3";
 export const SIM_LEGACY_BACKUP_KEY = `${SIM_LEGACY_STORAGE_KEY}:backup`;
@@ -30,7 +33,7 @@ export interface StorageLike {
 
 export interface SimLoadResult {
   state: SimState;
-  source: "primary" | "backup" | "v9" | "v9-backup" | "v8" | "v8-backup" | "v7" | "v7-backup" | "v6" | "v6-backup" | "v5" | "v5-backup" | "v4" | "v4-backup" | "legacy" | "legacy-backup" | "new";
+  source: "primary" | "backup" | "v10" | "v10-backup" | "v9" | "v9-backup" | "v8" | "v8-backup" | "v7" | "v7-backup" | "v6" | "v6-backup" | "v5" | "v5-backup" | "v4" | "v4-backup" | "legacy" | "legacy-backup" | "new";
   warning?: string;
 }
 
@@ -125,10 +128,19 @@ function parseV9Snapshot(raw: string | null): SimState | undefined {
   } catch { return undefined }
 }
 
-const PREVIOUS_KEYS = [SIM_V9_STORAGE_KEY, SIM_V9_BACKUP_KEY, SIM_V8_STORAGE_KEY, SIM_V8_BACKUP_KEY, SIM_V7_STORAGE_KEY, SIM_V7_BACKUP_KEY, SIM_V6_STORAGE_KEY, SIM_V6_BACKUP_KEY, SIM_V5_STORAGE_KEY, SIM_V5_BACKUP_KEY, SIM_V4_STORAGE_KEY, SIM_V4_BACKUP_KEY, SIM_LEGACY_STORAGE_KEY, SIM_LEGACY_BACKUP_KEY] as const;
+function parseV10Snapshot(raw: string | null): SimState | undefined {
+  if (raw === null) return undefined;
+  try {
+    const value: unknown = JSON.parse(raw);
+    return validateV10SimState(value) ? migrateV10SimState(value) : undefined;
+  } catch { return undefined }
+}
+
+const PREVIOUS_KEYS = [SIM_V10_STORAGE_KEY, SIM_V10_BACKUP_KEY, SIM_V9_STORAGE_KEY, SIM_V9_BACKUP_KEY, SIM_V8_STORAGE_KEY, SIM_V8_BACKUP_KEY, SIM_V7_STORAGE_KEY, SIM_V7_BACKUP_KEY, SIM_V6_STORAGE_KEY, SIM_V6_BACKUP_KEY, SIM_V5_STORAGE_KEY, SIM_V5_BACKUP_KEY, SIM_V4_STORAGE_KEY, SIM_V4_BACKUP_KEY, SIM_LEGACY_STORAGE_KEY, SIM_LEGACY_BACKUP_KEY] as const;
 type PreviousSnapshots = Record<(typeof PREVIOUS_KEYS)[number], string | null>;
 function readPreviousSnapshots(storage: StorageLike): PreviousSnapshots {
   return {
+    [SIM_V10_STORAGE_KEY]: storage.getItem(SIM_V10_STORAGE_KEY), [SIM_V10_BACKUP_KEY]: storage.getItem(SIM_V10_BACKUP_KEY),
     [SIM_V9_STORAGE_KEY]: storage.getItem(SIM_V9_STORAGE_KEY), [SIM_V9_BACKUP_KEY]: storage.getItem(SIM_V9_BACKUP_KEY),
     [SIM_V8_STORAGE_KEY]: storage.getItem(SIM_V8_STORAGE_KEY), [SIM_V8_BACKUP_KEY]: storage.getItem(SIM_V8_BACKUP_KEY),
     [SIM_V7_STORAGE_KEY]: storage.getItem(SIM_V7_STORAGE_KEY), [SIM_V7_BACKUP_KEY]: storage.getItem(SIM_V7_BACKUP_KEY),
@@ -157,14 +169,21 @@ function loadSnapshot(primaryRaw: string | null, backupRaw: string | null, previ
     warning: "当前存档不可用，已恢复上一份有效快照；最近的装修或其他操作可能需要重做。",
   };
   const currentProgressExists = primaryRaw !== null || backupRaw !== null;
+  const v10 = parseV10Snapshot(previous[SIM_V10_STORAGE_KEY]);
+  const v10Backup = v10 ? undefined : parseV10Snapshot(previous[SIM_V10_BACKUP_KEY]);
+  if (v10 || v10Backup) return {
+    state: (v10 ?? v10Backup)!, source: v10 ? "v10" : "v10-backup",
+    warning: `${currentProgressExists ? "当前社区存档不可恢复，已回到保留的 v10 进度；最近的街头邻居帮助或营业进度可能丢失。" : v10Backup ? "旧 v10 主存档不可用，已从旧备份迁移；最近一次操作可能需要重做。" : "已迁移原有装修与经营进度。"}v10 中的资金、装修、库存、订单、顾客及日结保持原样；当前顾客保留旧版内容，下一位访客使用新内容。社区帮助记录从空开始，不会补扣资金，旧档未修改。`,
+  };
+  const v10ProgressExists = currentProgressExists || previous[SIM_V10_STORAGE_KEY] !== null || previous[SIM_V10_BACKUP_KEY] !== null;
   const renovationFallbackWarning = currentProgressExists ? "最近的装修和扩建进度可能丢失。" : "";
   const v9 = parseV9Snapshot(previous[SIM_V9_STORAGE_KEY]);
   const v9Backup = v9 ? undefined : parseV9Snapshot(previous[SIM_V9_BACKUP_KEY]);
   if (v9 || v9Backup) return {
     state: (v9 ?? v9Backup)!, source: v9 ? "v9" : "v9-backup",
-    warning: `${currentProgressExists ? "当前装修存档不可恢复，已回到保留的 v9 进度；最近的装修、扩建与营业进度可能丢失。" : v9Backup ? "旧 v9 主存档不可用，已从旧备份迁移；最近一次操作可能需要重做。" : "已迁移原有营业时间进度。"}v9 中的营业时间、资金、现金暂收与找零选择、库存、订单及日结保持原样；装修从默认小店开始，不额外发钱或扣款，旧档未修改。`,
+    warning: `${v10ProgressExists ? "当前社区或装修存档不可恢复，已回到保留的 v9 进度；最近的装修、扩建与营业进度可能丢失，社区帮助记录也可能丢失。" : v9Backup ? "旧 v9 主存档不可用，已从旧备份迁移；最近一次操作可能需要重做。" : "已迁移原有营业时间进度。"}v9 中的营业时间、资金、现金暂收与找零选择、库存、订单及日结保持原样；装修从默认小店开始，社区记录从空开始，不额外发钱或扣款，旧档未修改。`,
   };
-  const v9ProgressExists = currentProgressExists || previous[SIM_V9_STORAGE_KEY] !== null || previous[SIM_V9_BACKUP_KEY] !== null;
+  const v9ProgressExists = v10ProgressExists || previous[SIM_V9_STORAGE_KEY] !== null || previous[SIM_V9_BACKUP_KEY] !== null;
   const v8 = parseV8Snapshot(previous[SIM_V8_STORAGE_KEY]);
   const v8Backup = v8 ? undefined : parseV8Snapshot(previous[SIM_V8_BACKUP_KEY]);
   if (v8 || v8Backup) return {
@@ -221,6 +240,7 @@ export function parseImportedSimState(raw: string): SimState {
   try { value = JSON.parse(raw) }
   catch { throw new Error("文件不是可读取的 JSON，当前进度未改变。") }
   if (validateSimState(value)) return value;
+  if (validateV10SimState(value)) return migrateV10SimState(value);
   if (validateV9SimState(value)) return migrateV9SimState(value);
   if (validateV8SimState(value)) return migrateV8SimState(value);
   if (validateV7SimState(value)) return migrateV7SimState(value);
@@ -301,7 +321,7 @@ export class SimSaveSession {
     const previous = readPreviousSnapshots(this.storage);
     const result = loadSnapshot(raw, this.storage.getItem(SIM_BACKUP_KEY), previous);
     this.expectedRaw = raw;
-    this.expectedMigrationSources = ["v9", "v9-backup", "v8", "v8-backup", "v7", "v7-backup", "v6", "v6-backup", "v5", "v5-backup", "v4", "v4-backup", "legacy", "legacy-backup"].includes(result.source) ? previous : null;
+    this.expectedMigrationSources = ["v10", "v10-backup", "v9", "v9-backup", "v8", "v8-backup", "v7", "v7-backup", "v6", "v6-backup", "v5", "v5-backup", "v4", "v4-backup", "legacy", "legacy-backup"].includes(result.source) ? previous : null;
     this.loaded = true;
     return result;
   }

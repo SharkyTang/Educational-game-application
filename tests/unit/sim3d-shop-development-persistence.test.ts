@@ -82,10 +82,10 @@ function asV8(state: SimState): SimStateV8 {
   return previous;
 }
 
-describe("v10 renovation migration without rewriting old cash or clocks", () => {
+describe("renovation migration into v11 without rewriting old cash or clocks", () => {
   it("uses a separate current key and retains the shared writer lock", () => {
-    expect(SIM_STORAGE_KEY).toBe("english-high-street:sim3d:v10");
-    expect(SIM_BACKUP_KEY).toBe("english-high-street:sim3d:v10:backup");
+    expect(SIM_STORAGE_KEY).toBe("english-high-street:sim3d:v11");
+    expect(SIM_BACKUP_KEY).toBe("english-high-street:sim3d:v11:backup");
     expect(SIM_V9_STORAGE_KEY).toBe("english-high-street:sim3d:v9");
     expect(SIM_WRITER_LOCK).toBe("english-high-street:sim3d:v4:writer");
   });
@@ -94,7 +94,8 @@ describe("v10 renovation migration without rewriting old cash or clocks", () => 
     const original = pendingCash(); const old = asV9(original); const before = structuredClone(old);
     const current = migrateV9SimState(old);
     expect(old).toEqual(before);
-    expect(current).toEqual({ ...old, schemaVersion: 10, renovation: createInitialRenovation(), settlements: [] });
+    expect(current).toEqual({ ...old, schemaVersion: 11, renovation: createInitialRenovation(), streetSupportRecords: [],
+      customer: { ...old.customer, contentVersion: 1 }, settlements: [] });
     expect(current.day.elapsedOpenMs).toBe(34_567.25);
     expect(current.payment).toEqual({ method: "cash", tenderedPence: 500, received: true, selectedChange: [50] });
     expect(current.cashPence).toBe(910);
@@ -155,7 +156,7 @@ describe("v10 renovation migration without rewriting old cash or clocks", () => 
       const raw = JSON.stringify(previous);
       expect(() => parseImportedSimState(raw), `v${previous.schemaVersion} import`).not.toThrow();
       const migrated = parseImportedSimState(raw);
-      expect(migrated.schemaVersion).toBe(10);
+      expect(migrated.schemaVersion).toBe(11);
       expect(migrated.renovation).toEqual(createInitialRenovation());
       expect(migrated.cashPence).toBe(previous.cashPence);
       expect(migrated.items).toEqual(previous.items);
@@ -180,7 +181,7 @@ describe("v10 renovation migration without rewriting old cash or clocks", () => 
   });
 });
 
-describe("v10 current saves, read-only recovery and cross-version conflicts", () => {
+describe("v11 current saves, read-only recovery and cross-version conflicts", () => {
   it("round-trips a paid extension, moved equipment and a player standing in the new area", () => {
     let state = act(earned(), { type: "BUY_SPACE_EXPANSION" });
     const layout = structuredClone(state.renovation.layout);
@@ -192,7 +193,7 @@ describe("v10 current saves, read-only recovery and cross-version conflicts", ()
     expect(parseImportedSimState(storage.getItem(SIM_STORAGE_KEY)!)).toEqual(state);
   });
 
-  it("retains previous v10 snapshots as backup and never overwrites good recovery with a corrupt primary", () => {
+  it("retains previous v11 snapshots as backup and never overwrites good recovery with a corrupt primary", () => {
     const before = earned(); const after = act(before, { type: "BUY_SPACE_EXPANSION" });
     const storage = new MemoryStorage(); saveSimState(before, storage); saveSimState(after, storage);
     expect(JSON.parse(storage.getItem(SIM_BACKUP_KEY)!)).toEqual(before);
@@ -209,7 +210,7 @@ describe("v10 current saves, read-only recovery and cross-version conflicts", ()
   it("prefers a v9 backup over older versions, warns about lost renovation and keeps all old keys untouched", () => {
     const old = asV9(pendingCash()); const raw = JSON.stringify(old);
     const storage = new MemoryStorage();
-    storage.data.set(SIM_STORAGE_KEY, "{broken-v10"); storage.data.set(SIM_BACKUP_KEY, "null");
+    storage.data.set(SIM_STORAGE_KEY, "{broken-v11"); storage.data.set(SIM_BACKUP_KEY, "null");
     storage.data.set(SIM_V9_STORAGE_KEY, "{broken-v9"); storage.data.set(SIM_V9_BACKUP_KEY, raw);
     storage.data.set("english-high-street:sim3d:v8", JSON.stringify(asV8(stocked())));
     storage.data.set("english-high-street:save:v2", "untouched 2D data");
@@ -224,7 +225,7 @@ describe("v10 current saves, read-only recovery and cross-version conflicts", ()
     expect(parseImportedSimState(raw)).toEqual(restored.state);
   });
 
-  it("does not reset a valid v9 clock when no v10 save exists", () => {
+  it("does not reset a valid v9 clock when no v11 save exists", () => {
     const old = asV9(pendingCash()); const storage = new MemoryStorage();
     storage.data.set(SIM_V9_STORAGE_KEY, JSON.stringify(old));
     const restored = loadSimState(storage);

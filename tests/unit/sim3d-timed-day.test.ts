@@ -97,7 +97,7 @@ function v8Snapshot(state: SimState): SimStateV8 {
 describe("v9 active-time days and a lightweight clock path", () => {
   it("starts preparation at 08:30 with no customer-count target or running timer", () => {
     const state = createFirstDayState();
-    expect(state.schemaVersion).toBe(10);
+    expect(state.schemaVersion).toBe(11);
     expect(state.day).toMatchObject({ phase: "preparing", elapsedOpenMs: 0, nextCustomerAtMs: null, closeReason: null, targetCustomers: null });
     expect(getBusinessClock(state.day).timeLabel).toBe("08:30");
     expect(getDaySummary(state).targetCustomers).toBeNull();
@@ -310,7 +310,7 @@ describe("strict v8 migration and persisted business time", () => {
     state = act(state, { type: "ADVANCE_BUSINESS_TIME", elapsedMs: 2345.75 });
     const storage = new MemoryStorage();
     saveSimState(state, storage);
-    expect(SIM_STORAGE_KEY).toBe("english-high-street:sim3d:v10");
+    expect(SIM_STORAGE_KEY).toBe("english-high-street:sim3d:v11");
     expect(SIM_WRITER_LOCK).toBe("english-high-street:sim3d:v4:writer");
     expect(loadSimState(storage)).toEqual({ source: "primary", state });
     expect(parseImportedSimState(JSON.stringify(state))).toEqual(state);

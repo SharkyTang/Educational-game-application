@@ -1,8 +1,9 @@
 # Customer corpus: local female and male speech
 
-The 70 WAV files under `customers/female/` and `customers/male/` are **synthetic
-speech**, generated locally on 2026-08-31 from the game's 35 original everyday
-shop phrases. They are not human recordings of those lines, not macOS system
+The 90 WAV files under `customers/female/` and `customers/male/` are **synthetic
+speech**. The original 70 were generated locally on 2026-08-31; 20 clips for ten
+additional everyday British-shop phrases were generated on 2026-09-01. They are
+not human recordings of those lines, not macOS system
 voices, and not output from an online or paid speech service. The female and
 male sets use distinct pretrained neural speaker identities, not pitch-shifted
 or speed-adjusted copies of one voice.
@@ -35,8 +36,8 @@ legacy WAV files and `phrase-manifest.json` are unchanged.
 
 ## Shipped files and authoring dependencies
 
-`src/sim3d/customerCorpus.json` is the single editable text source. It contains
-8 greetings, 12 card-payment lines, 8 post-payment thanks, 4 cash-payment
+`src/sim3d/customerCorpus.json` is the single editable text source. Version 2
+contains 11 greetings, 14 card-payment lines, 11 post-payment thanks, 6 cash-payment
 requests and 3 cash-tender lines, each with an English caption, Chinese
 translation and stable kebab-case ID. The cash request pool is selected only
 for visitors with a saved cash payment. Tender lines describe the saved £5 or
@@ -82,8 +83,9 @@ To add phrases, edit the appropriate scene in `customerCorpus.json` and rerun
 the generator for **both** voices. `--reuse-existing` checks existing clip text,
 voice settings, size and hash against the previous manifest, then generates
 only new clips. Translation-only changes refresh the Chinese manifest caption
-without changing the English recording. The cash extension added 14 clips
-while leaving all 56 existing customer WAV files byte-for-byte unchanged.
+without changing the English recording. The v2 extension added 20 clips while
+leaving all 70 v1 customer WAV files byte-for-byte unchanged (the hash-record
+digest is `3786fd43670819f5d6745084311d0cf08f6c8195e16dd8acbaf4eef05a79a02d`).
 The eight legacy phrase WAV files
 and their separate `phrase-manifest.json` also remain untouched.
 
@@ -98,7 +100,8 @@ explicit, reviewed change and orphaned assets are not silently lost.
 
 ## Audio preparation and verification limits
 
-Output is RIFF/WAVE, mono 22,050 Hz signed 16-bit PCM. Synthesis uses seed 31,
+Output is RIFF/WAVE, mono 22,050 Hz signed 16-bit PCM. The current 90 clips total
+7,833,246 bytes, below the enforced 8,000,000-byte budget. Synthesis uses seed 31,
 length scale 1.18 for Cori and 1.12 for ManyVoice, noise scale 0.667 and noise
 width 0.8. A 0.18-second gap separates sentences. Conservative edge-silence
 trimming, 4 ms fades, at most 2.5x gain and a -3 dBFS peak ceiling follow the

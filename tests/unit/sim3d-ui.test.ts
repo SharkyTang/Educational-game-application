@@ -164,6 +164,20 @@ describe("3D accessible interaction decisions", () => {
     expect(inspectableProduct(createFirstDayState(), sign)).toBeNull();
   });
 
+  it("opens only the named, nearby street neighbour and rejects distant or untagged actors", () => {
+    const sam = target({
+      id: "street-neighbour-sam", kind: "street-neighbour", streetNeighbourId: "sam", inspectable: false,
+    });
+    expect(commandForInteraction(createFirstDayState(), sam)).toEqual({ streetNeighbourId: "sam" });
+    expect(commandForInteraction(createFirstDayState(), { ...sam, distance: 2.61 })).toEqual({
+      message: "再走近一点，才能操作这件物品。",
+    });
+    expect(commandForInteraction(createFirstDayState(), { ...sam, streetNeighbourId: undefined })).toEqual({
+      message: "这位街头邻居暂时不能交谈。",
+    });
+    expect(inspectableProduct(createFirstDayState(), sam)).toBeNull();
+  });
+
   it("recycles only a held empty box through the real, nearby recycling target", () => {
     let state = reduceSim(createFirstDayState(), { type: "PURCHASE_STOCK", orderId: "recycling-ui", lines: [{ productId: "milk", quantity: 1 }] }).state;
     state = reduceSim(state, { type: "RECEIVE_DELIVERY" }).state;

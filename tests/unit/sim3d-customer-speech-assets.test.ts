@@ -38,13 +38,13 @@ function readWaveChunks(data: Buffer): Map<string, Buffer> {
 /** File/data checks, not a claim of subjective naturalness or browser playback. */
 describe("scene-based customer corpus and two bundled voice sets", () => {
   it("keeps one versioned, bilingual source with unique stable phrase IDs and texts", () => {
-    expect(corpus.version).toBe(1);
+    expect(corpus.version).toBe(2);
     expect(Object.keys(corpus).sort()).toEqual(["scenes", "version"]);
     expect(Object.keys(corpus.scenes).sort()).toEqual([...SCENES].sort());
-    expect(corpus.scenes.greeting.length).toBeGreaterThanOrEqual(8);
-    expect(corpus.scenes.checkout.length).toBeGreaterThanOrEqual(12);
-    expect(corpus.scenes.thanks.length).toBeGreaterThanOrEqual(8);
-    expect(corpus.scenes.checkoutCash.length).toBeGreaterThanOrEqual(4);
+    expect(corpus.scenes.greeting).toHaveLength(11);
+    expect(corpus.scenes.checkout).toHaveLength(14);
+    expect(corpus.scenes.thanks).toHaveLength(11);
+    expect(corpus.scenes.checkoutCash).toHaveLength(6);
     expect(corpus.scenes.tenderCash).toHaveLength(3);
     expect(new Set(PHRASES.map((phrase) => phrase.id)).size).toBe(PHRASES.length);
     const normalTexts = PHRASES.map((phrase) => phrase.text.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim());
@@ -84,7 +84,7 @@ describe("scene-based customer corpus and two bundled voice sets", () => {
   });
 
   it("maps every phrase to exactly one female and one male local clip", () => {
-    expect(manifest.version).toBe(1);
+    expect(manifest.version).toBe(2);
     expect(manifest.corpusSource).toBe("src/sim3d/customerCorpus.json");
     expect(manifest.corpusVersion).toBe(corpus.version);
     const corpusFile = readFileSync(new URL("../../src/sim3d/customerCorpus.json", import.meta.url));
@@ -195,11 +195,26 @@ describe("scene-based customer corpus and two bundled voice sets", () => {
   });
 
   it("preserves all 56 original customer recordings byte-for-byte when extending the corpus", () => {
-    const originalScenes = new Set(["greeting", "checkout", "thanks"]);
-    const original = manifest.clips.filter((clip) => originalScenes.has(clip.scene));
+    const originalIds = new Set([
+      ...corpus.scenes.greeting.slice(0, 8),
+      ...corpus.scenes.checkout.slice(0, 12),
+      ...corpus.scenes.thanks.slice(0, 8),
+    ].map((phrase) => phrase.id));
+    const original = manifest.clips.filter((clip) => originalIds.has(clip.id));
     expect(original).toHaveLength(56);
     const records = original.map(({ voiceId, id, file }) => ({ voiceId, id, sha256: sha256(readFileSync(new URL(file, AUDIO_ROOT))) }))
       .sort((a, b) => `${a.voiceId}/${a.id}`.localeCompare(`${b.voiceId}/${b.id}`));
     expect(sha256(Buffer.from(JSON.stringify(records)))).toBe("c7703f3aa6d83e28b813481684e49edd272c238fa725c5f5320aafec23eda37f");
+  });
+
+  it("preserves all 70 v1 customer recordings while adding exactly 20 v2 clips", () => {
+    const originalLengths = { greeting: 8, checkout: 12, thanks: 8, checkoutCash: 4, tenderCash: 3 } as const;
+    const originalIds = new Set(SCENES.flatMap((scene) => corpus.scenes[scene].slice(0, originalLengths[scene]).map((phrase) => phrase.id)));
+    const original = manifest.clips.filter((clip) => originalIds.has(clip.id));
+    expect(original).toHaveLength(70);
+    expect(manifest.clips).toHaveLength(90);
+    const records = original.map(({ voiceId, id, file }) => ({ voiceId, id, sha256: sha256(readFileSync(new URL(file, AUDIO_ROOT))) }))
+      .sort((a, b) => `${a.voiceId}/${a.id}`.localeCompare(`${b.voiceId}/${b.id}`));
+    expect(sha256(Buffer.from(JSON.stringify(records)))).toBe("3786fd43670819f5d6745084311d0cf08f6c8195e16dd8acbaf4eef05a79a02d");
   });
 });

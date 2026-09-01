@@ -85,10 +85,10 @@ function v7Snapshot(state: SimState = partialCash()): SimStateV7 {
   };
 }
 
-describe("v10 read-only migration of cash and pre-cash save sources", () => {
-  it("uses a new v10 namespace, preserving the cross-version writer lock", () => {
-    expect(SIM_STORAGE_KEY).toBe("english-high-street:sim3d:v10");
-    expect(SIM_BACKUP_KEY).toBe("english-high-street:sim3d:v10:backup");
+describe("v11 read-only migration of cash and pre-cash save sources", () => {
+  it("uses the current v11 namespace, preserving the cross-version writer lock", () => {
+    expect(SIM_STORAGE_KEY).toBe("english-high-street:sim3d:v11");
+    expect(SIM_BACKUP_KEY).toBe("english-high-street:sim3d:v11:backup");
     expect(SIM_WRITER_LOCK).toBe("english-high-street:sim3d:v4:writer");
   });
 
@@ -109,8 +109,9 @@ describe("v10 read-only migration of cash and pre-cash save sources", () => {
     const before = [...storage.data];
     const loaded = loadSimState(storage);
     expect(loaded.source).toBe("v8");
-    expect(loaded.state).toEqual(current);
-    expect(parseImportedSimState(original)).toEqual(current);
+    const expected = { ...current, customer: { ...current.customer, contentVersion: 1 as const } };
+    expect(loaded.state).toEqual(expected);
+    expect(parseImportedSimState(original)).toEqual(expected);
     expect(loaded.state.payment).toEqual(old.payment);
     expect(loaded.state.transactions).toEqual(old.transactions);
     expect(loaded.state.cashPence).toBe(old.cashPence);
@@ -130,7 +131,7 @@ describe("v10 read-only migration of cash and pre-cash save sources", () => {
     const before = [...storage.data];
     const loaded = loadSimState(storage);
     expect(loaded.source).toBe("v8-backup");
-    expect(loaded.state).toEqual(cash);
+    expect(loaded.state).toEqual({ ...cash, customer: { ...cash.customer, contentVersion: 1 } });
     expect(loaded.warning).toBeTruthy();
     expect([...storage.data]).toEqual(before);
   });
@@ -161,7 +162,8 @@ describe("v10 read-only migration of cash and pre-cash save sources", () => {
     const loaded = loadSimState(storage);
     expect(loaded.source).toBe("v7");
     expect(loaded.state).toEqual({
-      ...old, schemaVersion: 10, renovation: createInitialRenovation(), payment: { method: "card" },
+      ...old, schemaVersion: 11, renovation: createInitialRenovation(), payment: { method: "card" }, streetSupportRecords: [],
+      customer: { ...old.customer, contentVersion: 1 },
       day: { ...old.day, targetCustomers: null, elapsedOpenMs: 0, nextCustomerAtMs: null, closeReason: null },
       transactions: old.transactions.map((transaction) => ({ ...transaction, paymentMethod: "card", tenderedPence: transaction.amountPence, changePence: 0 })),
     });

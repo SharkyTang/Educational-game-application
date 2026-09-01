@@ -249,14 +249,14 @@ describe("safe crate placement around the player", () => {
   });
 });
 
-describe("v10 snapshot persistence and read-only v3 migration", () => {
+describe("v11 snapshot persistence and read-only v3 migration", () => {
   it("starts the new namespace with £12 and empty crates without rewriting unrelated 2D data", () => {
     const storage = new MemoryStorage();
     storage.data.set("english-high-street:save:v2", "legacy-2d-content");
     const before = [...storage.data];
     expect(loadSimState(storage)).toEqual({ state: createFirstDayState(), source: "new" });
     expect([...storage.data]).toEqual(before);
-    expect(SIM_STORAGE_KEY).toBe("english-high-street:sim3d:v10");
+    expect(SIM_STORAGE_KEY).toBe("english-high-street:sim3d:v11");
   });
 
   it("migrates the valid v3 world once and leaves both original v3 keys byte-for-byte intact", () => {
@@ -270,7 +270,7 @@ describe("v10 snapshot persistence and read-only v3 migration", () => {
     expect(migrated.source).toBe("legacy");
     expect(migrated.warning).toContain("不会额外发放");
     expect(migrated.state.cashPence).toBe(400);
-    expect(migrated.state.schemaVersion).toBe(10);
+    expect(migrated.state.schemaVersion).toBe(11);
     expect(migrated.state.transactions).toEqual(oldSnapshot().transactions.map((transaction) => ({ ...transaction, paymentMethod: "card", tenderedPence: transaction.amountPence, changePence: 0 })));
     expect([...storage.data]).toEqual(before);
     saveSimState(migrated.state, storage);
@@ -341,7 +341,7 @@ describe("v10 snapshot persistence and read-only v3 migration", () => {
     expect(validateSimState(imported)).toBe(true);
     expect(imported.cashPence).toBe(old.cashPence);
     expect(imported.items).toEqual(old.items);
-    expect(imported.customer).toEqual({ ...old.customer, shoppingList: ["milk", "bread"] });
+    expect(imported.customer).toEqual({ ...old.customer, shoppingList: ["milk", "bread"], contentVersion: 1 });
     expect(imported.scannedIds).toEqual(old.scannedIds);
     expect(imported.day.openingCashPence).toBe(0);
   });
@@ -517,7 +517,7 @@ describe("strict v5 selected-stock migration to the current schema", () => {
     expect(migrated.items).toEqual(old.items);
     expect(migrated.items).toHaveLength(6);
     expect(migrated.crates).toEqual(old.crates);
-    expect(migrated.customer).toEqual({ phase: "outside", number: 1, shoppingList: [] });
+    expect(migrated.customer).toEqual({ phase: "outside", number: 1, shoppingList: [], contentVersion: 1 });
     expect(getDeliverySummary(migrated)).toMatchObject({ pendingOrders: 0, pendingUnits: 0, receivedToday: 1 });
     expect(reduceSim(migrated, { type: "RECEIVE_DELIVERY" }).state).toBe(migrated);
   });
@@ -537,7 +537,7 @@ describe("strict v5 selected-stock migration to the current schema", () => {
     const untouched = [...storage.data];
     const result = loadSimState(storage);
     expect(result.source).toBe("v5");
-    expect(result.state.schemaVersion).toBe(10);
+    expect(result.state.schemaVersion).toBe(11);
     expect(validateSimState(result.state)).toBe(true);
     expect(result.state.cashPence).toBe(old.cashPence);
     expect(result.state.items).toEqual(old.items);
@@ -545,7 +545,7 @@ describe("strict v5 selected-stock migration to the current schema", () => {
     expect(result.state.crates).toEqual(old.crates);
     expect(result.state.playerPose).toEqual(old.playerPose);
     expect(result.state.customerSeed).toBe(old.customerSeed);
-    expect(result.state.customer).toEqual({ ...old.customer, shoppingList: ["milk", "bread"] });
+    expect(result.state.customer).toEqual({ ...old.customer, shoppingList: ["milk", "bread"], contentVersion: 1 });
     expect(result.state.purchases[0]).toEqual({ ...old.purchases[0], lines: [{ productId: "milk", quantity: 1 }, { productId: "bread", quantity: 1 }] });
     expect(getDeliverySummary(result.state)).toMatchObject({ pendingOrders: 1, pendingUnits: 2 });
     expect([...storage.data]).toEqual(untouched);

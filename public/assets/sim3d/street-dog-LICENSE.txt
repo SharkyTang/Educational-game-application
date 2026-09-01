@@ -1,0 +1,13 @@
+Patch's source model is dedicated to the public domain under:
+
+Creative Commons Zero v1.0 Universal (CC0-1.0)
+https://creativecommons.org/publicdomain/zero/1.0/
+
+Title: Dog, from Animal Pack Vol.2
+Creator: Quaternius
+Source: https://opengameart.org/content/animated-animales-low-poly
+
+The runtime GLB is a format conversion with renamed animation labels and a
+non-metallic material setting. See street-dog-SOURCE.md for hashes, provenance,
+modifications and reproduction details. Attribution is not required by CC0;
+this notice is retained voluntarily.

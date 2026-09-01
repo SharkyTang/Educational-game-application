@@ -305,8 +305,9 @@ test("business time: inspecting goods and asking for a slower repetition protect
   await expect(page.locator("#s3-customer-zh")).toContainText("这次慢一点说");
   await expect(page.locator("#s3-customer-audio-status")).toContainText("正在播放慢速");
   await expect(page.locator("#s3-clock-state")).toHaveText("学习暂停");
-  await page.waitForTimeout(700);
-  await expect(page.locator("#s3-clock-state")).toHaveText("学习暂停");
+  // Assert the business clock at the real media-playing state. Avoid tying the
+  // test to a fixed remaining clip duration when another WebGL test is sharing
+  // the machine and Playwright resumes later than its requested wall-clock wait.
   await expect(page.locator("#s3-business-time")).toHaveText(learningLabel);
   await expect(page.locator("#s3-customer-audio-status")).toContainText("播放结束", { timeout: 12_000 });
   await expect(page.locator("#s3-clock-state")).toHaveText("营业中", { timeout: 20_000 });

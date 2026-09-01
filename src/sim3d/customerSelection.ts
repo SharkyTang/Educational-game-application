@@ -16,15 +16,28 @@ export interface CustomerSpeechClip {
   src: string;
 }
 
-/** Four separate adult meshes, not colour variants of the original woman. */
+export const CUSTOMER_CONTENT_VERSION = 2;
+
+/** Six separate shopping-customer meshes, not colour variants of one avatar. */
 export const CUSTOMER_PROFILES: readonly CustomerProfile[] = [
   { id: "female-01", name: "Clara", voice: "female", model: "customer.glb", height: 1.68 },
   { id: "male-01", name: "Oliver", voice: "male", model: "customer-male-01.glb", height: 1.79 },
   { id: "female-02", name: "Amara", voice: "female", model: "customer-female-02.glb", height: 1.65 },
   { id: "male-02", name: "George", voice: "male", model: "customer-male-02.glb", height: 1.75 },
+  { id: "female-03", name: "Mei", voice: "female", model: "customer-female-03.glb", height: 1.67 },
+  { id: "male-03", name: "Arthur", voice: "male", model: "customer-male-03.glb", height: 1.78 },
 ];
 
 export const CUSTOMER_CORPUS = corpus.scenes;
+/** v1 snapshots must retain the exact model and shuffle-bag sizes they saved. */
+export const LEGACY_CUSTOMER_PROFILES: readonly CustomerProfile[] = CUSTOMER_PROFILES.slice(0, 4);
+export const LEGACY_CUSTOMER_CORPUS_LENGTHS = {
+  greeting: 8,
+  checkout: 12,
+  thanks: 8,
+  checkoutCash: 4,
+  tenderCash: 3,
+} as const;
 export const CUSTOMER_WALK_SPEED = 1.41; // Was .94 m/s; +50%, independent of frame rate.
 export const CUSTOMER_WALK_ANIMATION_RATE = 1.575; // Keep stride cadence with translation.
 export const CUSTOMER_STOP_SECONDS = .35; // Was 1.1 s at every stage.
@@ -33,7 +46,7 @@ export const CUSTOMER_EXIT_STOP_SECONDS = .1;
 const LEGACY_CUSTOMER_SEED = 31;
 // Appearance and dialogue depend on visit identity, never on the shopping basket.
 type VisitState = {
-  customer: { number: number };
+  customer: { number: number; contentVersion?: 1 | 2 };
   customerSeed?: number;
   /** Older saves without a payment choice keep their original card dialogue. */
   payment?: { method: "card" | "cash"; tenderedPence?: number } | null;
@@ -92,12 +105,16 @@ export function pickCustomerEntry<T>(values: readonly T[], seed: number, custome
 }
 
 export function customerProfileFor(state: VisitState): CustomerProfile {
-  return pickCustomerEntry(CUSTOMER_PROFILES, state.customerSeed ?? LEGACY_CUSTOMER_SEED, state.customer.number, "appearance");
+  const profiles = state.customer.contentVersion === CUSTOMER_CONTENT_VERSION ? CUSTOMER_PROFILES : LEGACY_CUSTOMER_PROFILES;
+  return pickCustomerEntry(profiles, state.customerSeed ?? LEGACY_CUSTOMER_SEED, state.customer.number, "appearance");
 }
 
 export function customerSpeechFor(state: VisitState, scene: CustomerScene): CustomerSpeechClip {
   const pool = scene === "checkout" && state.payment?.method === "cash" ? "checkoutCash" : scene;
-  const entry = pickCustomerEntry(CUSTOMER_CORPUS[pool], state.customerSeed ?? LEGACY_CUSTOMER_SEED, state.customer.number, pool);
+  const allEntries = CUSTOMER_CORPUS[pool];
+  const entries = state.customer.contentVersion === CUSTOMER_CONTENT_VERSION
+    ? allEntries : allEntries.slice(0, LEGACY_CUSTOMER_CORPUS_LENGTHS[pool]);
+  const entry = pickCustomerEntry(entries, state.customerSeed ?? LEGACY_CUSTOMER_SEED, state.customer.number, pool);
   return withCustomerVoice(state, entry);
 }
 

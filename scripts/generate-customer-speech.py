@@ -58,6 +58,8 @@ VOICE_SPECS = (
         "licenseUrl": "https://brycebeattie.com/files/tts/",
     },
 )
+CORPUS_VERSION = 2
+MANIFEST_VERSION = 2
 
 
 def sha256(data: bytes) -> str:
@@ -75,8 +77,8 @@ def file_sha256(path: Path) -> str:
 def read_phrases() -> tuple[dict, list[dict[str, str]]]:
     """JSON is canonical for captions and synthesis; no second text list."""
     corpus = json.loads(CORPUS.read_text(encoding="utf-8"))
-    if corpus.get("version") != 1 or set(corpus.get("scenes", {})) != set(SCENES):
-        raise ValueError(f"Expected corpus v1 with exactly these scenes: {', '.join(SCENES)}.")
+    if corpus.get("version") != CORPUS_VERSION or set(corpus.get("scenes", {})) != set(SCENES):
+        raise ValueError(f"Expected corpus v{CORPUS_VERSION} with exactly these scenes: {', '.join(SCENES)}.")
     phrases = []
     ids: set[str] = set()
     texts: set[str] = set()
@@ -174,7 +176,8 @@ def synthesize(voice: PiperVoice, phrase: dict, spec: dict) -> tuple[bytes, dict
 def reusable_clips(output: Path, phrases: list[dict[str, str]]) -> dict[tuple[str, str], dict]:
     """Preserve reviewed clips byte-for-byte; refuse stale text or changed files."""
     source = json.loads((output / "customer-phrase-manifest.json").read_text(encoding="utf-8"))
-    if (source.get("version") != 1 or source.get("corpusVersion") != 1
+    version_pair = (source.get("version"), source.get("corpusVersion"))
+    if (version_pair not in ((1, 1), (MANIFEST_VERSION, CORPUS_VERSION))
             or source.get("voices") != list(VOICE_SPECS) or source.get("seed") != SEED
             or source.get("sentencePauseSeconds") != SENTENCE_PAUSE_SECONDS
             or source.get("piperVersion") != importlib.metadata.version("piper-tts")
@@ -252,7 +255,7 @@ def main() -> None:
                 raise ValueError("Customer speech exceeded the 8 MB download budget; review the corpus/settings.")
             print(f"{action} {record['file']}: {record['durationSeconds']:.3f}s, {record['bytes']} bytes", flush=True)
     manifest = {
-        "version": 1,
+        "version": MANIFEST_VERSION,
         "generatedBy": "scripts/generate-customer-speech.py",
         "corpusSource": "src/sim3d/customerCorpus.json",
         "corpusVersion": corpus["version"],
