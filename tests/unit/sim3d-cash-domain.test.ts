@@ -124,7 +124,7 @@ function changeShortageCheckout(): SimState {
 describe("cash payment domain lifecycle and atomic settlement", () => {
   it("freezes the method on entry while keeping the original shopping list, models and inventory choice independent", () => {
     let state = stocked();
-    expect(state.schemaVersion).toBe(12);
+    expect(state.schemaVersion).toBe(13);
     expect(state.payment).toBeNull();
     state = act(state, { type: "OPEN_STORE" });
     expect(state.payment).toEqual({ method: "card" });
@@ -412,7 +412,7 @@ describe("payment state and ledger tamper rejection", () => {
     expect(validateSimState(paid)).toBe(false);
   });
 
-  it("rejects a forged derived tender and over-reserved change in a new v12 payment", () => {
+  it("rejects a forged derived tender and over-reserved change in a new v13 payment", () => {
     const derived = scan(cashCheckout());
     derived.payment = {
       method: "cash", tenderedPence: 500, tenderedCash: [200, 200, 100], tenderedCashRecorded: false,

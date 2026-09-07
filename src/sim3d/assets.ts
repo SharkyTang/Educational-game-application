@@ -521,16 +521,20 @@ export function createCrate(scene: Scene, productId: ProductAssetId, name: strin
 function wallPanels(scene: Scene, root: TransformNode): (extension: number) => void {
   const stretched: { mesh: Mesh; depth: number }[] = [];
   const rear: Mesh[] = [];
-  const extraPanels = new TransformNode("expanded-wall-details", scene);
-  extraPanels.parent = root;
-  extraPanels.setEnabled(false);
+  const firstExtraPanels = new TransformNode("expanded-wall-details", scene);
+  firstExtraPanels.parent = root;
+  firstExtraPanels.setEnabled(false);
+  const secondExtraPanels = new TransformNode("second-expanded-wall-details", scene);
+  secondExtraPanels.parent = root;
+  secondExtraPanels.setEnabled(false);
   for (const side of [-1, 1]) {
     stretched.push({ mesh: box(scene, root, `wall-${side}`, new Vector3(0.18, 3, 9.35), new Vector3(side * 3.49, 1.5, 0), "plaster"), depth: 9.35 });
     stretched.push({ mesh: box(scene, root, `wainscot-${side}`, new Vector3(0.038, 1.05, 9.2), new Vector3(side * 3.389, 0.525, 0), "sage"), depth: 9.2 });
     stretched.push({ mesh: box(scene, root, `dado-${side}`, new Vector3(0.065, 0.052, 9.2), new Vector3(side * 3.37, 1.075, 0), "sageLight"), depth: 9.2 });
     stretched.push({ mesh: box(scene, root, `skirting-${side}`, new Vector3(0.067, 0.14, 9.2), new Vector3(side * 3.368, 0.07, 0), "sageDark"), depth: 9.2 });
-    for (let panel = 0; panel < 20; panel += 1) {
-      box(scene, panel < 15 ? root : extraPanels, `wainscot-stile-${side}-${panel}`, new Vector3(0.04, 0.91, 0.038), new Vector3(side * 3.355, 0.575, -4.4 + panel * 0.625), "sageLight");
+    for (let panel = 0; panel < 25; panel += 1) {
+      const parent = panel < 15 ? root : panel < 20 ? firstExtraPanels : secondExtraPanels;
+      box(scene, parent, `wainscot-stile-${side}-${panel}`, new Vector3(0.04, 0.91, 0.038), new Vector3(side * 3.355, 0.575, -4.4 + panel * 0.625), "sageLight");
     }
   }
   rear.push(box(scene, root, "back-plaster", new Vector3(6.8, 3, 0.18), new Vector3(0, 1.5, 4.69), "plaster"));
@@ -553,7 +557,8 @@ function wallPanels(scene: Scene, root: TransformNode): (extension: number) => v
       mesh.position.z = z + extension;
       mesh.computeWorldMatrix(true);
     }
-    extraPanels.setEnabled(extension > 0);
+    firstExtraPanels.setEnabled(extension >= 3);
+    secondExtraPanels.setEnabled(extension >= 6);
   };
 }
 
@@ -740,8 +745,11 @@ export function createShop(scene: Scene, options: { catalogFixtures?: boolean; l
   const extraLighting = new TransformNode("expanded-shop-lighting", scene);
   extraLighting.parent = root;
   extraLighting.setEnabled(false);
-  for (const z of [-1.5, 2.0, 5.5]) {
-    const parent = z > 4.6 ? extraLighting : root;
+  const secondExtraLighting = new TransformNode("second-expanded-shop-lighting", scene);
+  secondExtraLighting.parent = root;
+  secondExtraLighting.setEnabled(false);
+  for (const z of [-1.5, 2.0, 5.5, 8.5]) {
+    const parent = z > 7.6 ? secondExtraLighting : z > 4.6 ? extraLighting : root;
     cylinder(scene, parent, `pendant-cable-${z}`, 0.008, 0.008, 0.36, new Vector3(0, 2.83, z), "black", 8);
     cylinder(scene, parent, `pendant-shade-${z}`, 0.47, 0.11, 0.19, new Vector3(0, 2.58, z), "sageDark", 40);
     cylinder(scene, parent, `pendant-inner-${z}`, 0.425, 0.10, 0.16, new Vector3(0, 2.567, z), "milkPaper", 40);
@@ -788,7 +796,8 @@ export function createShop(scene: Scene, options: { catalogFixtures?: boolean; l
     door.computeWorldMatrix(true);
     backMark.position.z = 4.576 + extension;
     backMark.computeWorldMatrix(true);
-    extraLighting.setEnabled(extension > 0);
+    extraLighting.setEnabled(extension >= 3);
+    secondExtraLighting.setEnabled(extension >= 6);
     colliders[0]!.maxZ = 4.8 + extension;
     colliders[1]!.maxZ = 4.8 + extension;
     colliders[2]!.minZ = 4.56 + extension;

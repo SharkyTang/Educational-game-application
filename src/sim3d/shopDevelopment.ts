@@ -1,20 +1,41 @@
 import { createDefaultShopLayout, validateShopLayout, type ShopLayout } from "./shopLayout";
 import type { ProductAssetId } from "./product-library/catalog";
 
-/** First release opens one real 3 m extension. Later stages are previews, never purchasable. */
+/** The small shop grows in 3 m physical stages before a later supermarket conversion. */
 export const SHOP_EXPANSION_COST_PENCE = 1500;
+export const SECOND_SHOP_EXPANSION_COST_PENCE = 3000;
 export const SMALL_SHOP_EXPANSION_STAGES = 3;
-export const AVAILABLE_EXPANSION_STAGES = 1;
+export const AVAILABLE_EXPANSION_STAGES = 2;
 
-export interface ShopRenovation {
-  layout: ShopLayout;
+export interface LegacyShopRenovation {
+  layout: ShopLayout & { expansion: 0 | 1 };
   expansionDay: number | null;
-  /** Accepted changes only; cancelling or repeatedly applying the same plan earns nothing. */
   layoutRevision: number;
 }
 
+export interface ShopRenovation extends Omit<LegacyShopRenovation, "layout"> {
+  layout: ShopLayout;
+  /** Day of the second paid 3 m extension; absent only in v10-v11 legacy data. */
+  secondExpansionDay: number | null;
+}
+
 export function createInitialRenovation(): ShopRenovation {
-  return { layout: createDefaultShopLayout(), expansionDay: null, layoutRevision: 0 };
+  return { layout: createDefaultShopLayout(), expansionDay: null, secondExpansionDay: null, layoutRevision: 0 };
+}
+
+function validDay(value: unknown, dayNumber: number): value is number {
+  return Number.isSafeInteger(value) && (value as number) >= 1 && (value as number) <= dayNumber;
+}
+
+/** Validate the exact one-extension renovation shape persisted by v10-v11. */
+export function validateLegacyRenovation(value: unknown, dayNumber: number): value is LegacyShopRenovation {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+  const record = value as Record<string, unknown>;
+  if (!Number.isSafeInteger(record.layoutRevision) || (record.layoutRevision as number) < 0
+    || !validateShopLayout(record.layout).valid) return false;
+  const layout = record.layout as ShopLayout;
+  return layout.expansion === 0 ? record.expansionDay === null
+    : layout.expansion === 1 && validDay(record.expansionDay, dayNumber);
 }
 
 export function validateRenovation(value: unknown, dayNumber: number): value is ShopRenovation {
@@ -23,9 +44,11 @@ export function validateRenovation(value: unknown, dayNumber: number): value is 
   if (!Number.isSafeInteger(record.layoutRevision) || (record.layoutRevision as number) < 0
     || !validateShopLayout(record.layout).valid) return false;
   const layout = record.layout as ShopLayout;
-  return layout.expansion === 0 ? record.expansionDay === null
-    : Number.isSafeInteger(record.expansionDay) && (record.expansionDay as number) >= 1
-      && (record.expansionDay as number) <= dayNumber;
+  if (layout.expansion === 0) return record.expansionDay === null && record.secondExpansionDay === null;
+  if (!validDay(record.expansionDay, dayNumber)) return false;
+  if (layout.expansion === 1) return record.secondExpansionDay === null;
+  return validDay(record.secondExpansionDay, dayNumber)
+    && (record.secondExpansionDay as number) >= (record.expansionDay as number);
 }
 
 interface RenovationContext {
@@ -46,19 +69,30 @@ export function shopRenovationReason(state: RenovationContext): string | undefin
   return undefined;
 }
 
-export interface ExpansionOffer { allowed: boolean; costPence: number; reason?: string }
+export interface ExpansionOffer {
+  allowed: boolean;
+  costPence: number;
+  targetStage: 1 | 2 | null;
+  title: string;
+  reason?: string;
+}
 export function getShopExpansionOffer(state: RenovationContext & { cashPence: number; renovation: ShopRenovation }): ExpansionOffer {
-  const costPence = SHOP_EXPANSION_COST_PENCE;
+  const current = state.renovation.layout.expansion;
+  const targetStage = current < AVAILABLE_EXPANSION_STAGES ? (current + 1) as 1 | 2 : null;
+  const costPence = targetStage === 2 ? SECOND_SHOP_EXPANSION_COST_PENCE : SHOP_EXPANSION_COST_PENCE;
+  const title = targetStage === 1 ? "第一次扩建 · 打开后方空间"
+    : targetStage === 2 ? "第二次扩建 · 继续向后延伸" : "本版小卖铺空间已扩满";
   if (state.renovation.layout.expansion >= AVAILABLE_EXPANSION_STAGES) {
-    return { allowed: false, costPence, reason: "第一次店面扩建已完成。后续扩建与升级超市尚未开放，不会再次扣款。" };
+    return { allowed: false, costPence, targetStage, title,
+      reason: "两次实体扩建已完成。第三次扩建与升级社区超市将在后续版本开放，不会再次扣款。" };
   }
   const reason = shopRenovationReason(state);
-  if (reason) return { allowed: false, costPence, reason };
+  if (reason) return { allowed: false, costPence, targetStage, title, reason };
   if (state.cashPence < costPence) return {
-    allowed: false, costPence,
+    allowed: false, costPence, targetStage, title,
     reason: `扩建需要 £${(costPence / 100).toFixed(2)}，还差 £${((costPence - state.cashPence) / 100).toFixed(2)}。没有等级或英语门槛。`,
   };
-  return { allowed: true, costPence };
+  return { allowed: true, costPence, targetStage, title };
 }
 
 interface AchievementContext {
@@ -90,6 +124,7 @@ export function getShopAchievements(state: AchievementContext): ShopAchievement[
     { id: "five-products", name: "丰富货架", description: "实际售出 5 种不同商品", category: "经营", current: soldKinds, target: 5 },
     { id: "shelf-capacity", name: "多一层空间", description: "购买原有的货架容量升级", category: "建设", current: Number(state.upgraded), target: 1 },
     { id: "first-extension", name: "小店长大了", description: "完成第一次实体店面扩建", category: "建设", current: state.renovation.layout.expansion, target: 1 },
+    { id: "second-extension", name: "宽敞小卖铺", description: "完成第二次实体店面扩建", category: "建设", current: Math.max(0, state.renovation.layout.expansion - 1), target: 1 },
     { id: "first-layout", name: "我的店我来摆", description: "保存一次实际改变设备位置或朝向的布局", category: "建设", current: state.renovation.layoutRevision, target: 1 },
     { id: "ten-recycled", name: "整洁小店", description: "回收 10 个用过的空纸箱", category: "建设", current: state.recyclingRecords.length, target: 10 },
   ];

@@ -220,6 +220,62 @@ describe("App renovation commits wait for a durable complete snapshot", () => {
     expect(app.renderState).toHaveBeenCalledTimes(1);
   });
 
+  it.each(quotaCases)("does not spend equipment money on $label write failure and creates exactly one owned device after retry", async ({ key }) => {
+    const { app, storage } = await harness();
+    const before = app.state;
+    const original = structuredClone(before);
+    const previousRaw = storage.getItem(SIM_STORAGE_KEY);
+    const previousBackup = storage.getItem(SIM_BACKUP_KEY);
+    const command: SimCommand = {
+      type: "BUY_EQUIPMENT",
+      purchaseId: "equipment-durable-commit",
+      assetId: "wall-shelf-narrow",
+      productId: "cereal",
+    };
+    storage.failKey = key;
+
+    expect(app.dispatch(command)).toBe(false);
+    expectUncommitted(app, before, original);
+    expect(app.state.cashPence).toBe(1710);
+    expect(app.state.equipment).toEqual({ instances: [], purchases: [], nextSequence: 1 });
+    expect(getDaySummary(app.state).equipmentSpendPence).toBe(0);
+    expect(storage.failedWrites).toEqual([key]);
+    expect(storage.getItem(SIM_STORAGE_KEY)).toBe(previousRaw);
+    expect(storage.getItem(SIM_BACKUP_KEY)).toBe(key === SIM_BACKUP_KEY ? previousBackup : previousRaw);
+    expect(app.saveSession.canWrite).toBe(true);
+    expect(app.saveError).toContain("尚未保存");
+
+    storage.failKey = null;
+    expect(app.dispatch(command)).toBe(true);
+    const committed = app.state;
+    expect(committed.cashPence).toBe(1110);
+    expect(committed.equipment.instances).toEqual([{
+      id: "shop-equipment-1", assetId: "wall-shelf-narrow", productId: "cereal", purchasedDay: before.day.number,
+    }]);
+    expect(committed.equipment.purchases).toEqual([{
+      id: "equipment-durable-commit", instanceId: "shop-equipment-1", assetId: "wall-shelf-narrow",
+      productId: "cereal", purchasedDay: before.day.number, amountPence: 600,
+    }]);
+    expect(committed.equipment.nextSequence).toBe(2);
+    expect(getDaySummary(committed).equipmentSpendPence).toBe(600);
+    expect(committed.items).toEqual(before.items);
+    expect(committed.transactions).toEqual(before.transactions);
+    expect(committed.revision).toBe(before.revision + 1);
+    expect(app.saveError).toBe("");
+    expect(JSON.parse(storage.getItem(SIM_STORAGE_KEY)!)).toEqual(committed);
+    expect(storage.getItem(SIM_BACKUP_KEY)).toBe(previousRaw);
+    expect(app.world.setState).toHaveBeenCalledExactlyOnceWith(committed);
+    expect(app.renderState).toHaveBeenCalledTimes(1);
+
+    expect(app.dispatch(command)).toBe(false);
+    expect(app.state).toBe(committed);
+    expect(app.state.cashPence).toBe(1110);
+    expect(app.state.equipment.instances).toHaveLength(1);
+    expect(storage.writes.filter((written) => written === SIM_STORAGE_KEY)).toHaveLength(1);
+    expect(app.world.setState).toHaveBeenCalledTimes(1);
+    expect(app.renderState).toHaveBeenCalledTimes(1);
+  });
+
   it.each(["before dispatch", "after the first CAS check"])("retains the local layout when another real session saves %s", async (timing) => {
     const { app, storage } = await harness();
     const before = app.state;

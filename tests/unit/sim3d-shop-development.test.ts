@@ -3,7 +3,8 @@ import {
   createFirstDayState, getDaySummary, getShopLayoutObstacles, isWalkablePosition, reduceSim, validateSimState,
   type SimCommand, type SimState,
 } from "../../src/sim3d/domain";
-import { createInitialRenovation, getShopAchievements, getShopExpansionOffer, SHOP_EXPANSION_COST_PENCE } from "../../src/sim3d/shopDevelopment";
+import { createInitialRenovation, getShopAchievements, getShopExpansionOffer,
+  SECOND_SHOP_EXPANSION_COST_PENCE, SHOP_EXPANSION_COST_PENCE } from "../../src/sim3d/shopDevelopment";
 import { validateShopLayout, type ShopLayout } from "../../src/sim3d/shopLayout";
 import { payScannedCheckout } from "../helpers/sim3dPayment";
 
@@ -63,13 +64,14 @@ function movedMilk(state: SimState, rotation: 1 | 3 = 1): ShopLayout {
   return layout;
 }
 
-describe("shop expansion as a separate audited investment", () => {
+describe("v13 staged shop expansion as a separate audited investment", () => {
   it("starts with the same capital and stock, with no purchased floor or layout achievement", () => {
     const state = createFirstDayState();
-    expect(state.schemaVersion).toBe(12);
+    expect(state.schemaVersion).toBe(13);
     expect(state.cashPence).toBe(1200);
     expect(state.items).toEqual([]);
-    expect(state.renovation).toEqual(createInitialRenovation());
+    expect(state.renovation).toMatchObject(createInitialRenovation());
+    expect(state.renovation.layout.equipment).toEqual([]);
     expect(getDaySummary(state).expansionSpendPence).toBe(0);
     expect(getShopLayoutObstacles(state)).toEqual([]);
     expect(getShopExpansionOffer(state)).toMatchObject({ allowed: false, costPence: 1500 });
@@ -84,7 +86,7 @@ describe("shop expansion as a separate audited investment", () => {
     expect(before.cashPence).toBe(1710);
   });
 
-  it("buys once after closing and updates the same day's ledger without changing merchandise profit", () => {
+  it("buys the first stage after closing and offers the £30 second stage without changing merchandise profit", () => {
     const before = earned();
     expect(before.cashPence).toBe(1710);
     const state = act(before, { type: "BUY_SPACE_EXPANSION" });
@@ -97,13 +99,32 @@ describe("shop expansion as a separate audited investment", () => {
     expect(state.settlements).toHaveLength(1);
     expect(state.settlements[0]).toMatchObject({ targetCustomers: null, grossProfitPence: 510, upgradeSpendPence: 0, expansionSpendPence: 1500, closingCashPence: 210 });
     expect(getDaySummary(state).grossProfitPence).toBe(getDaySummary(before).grossProfitPence);
-    expect(rejected(state, { type: "BUY_SPACE_EXPANSION" })).toContain("不会再次扣款");
+    expect(getShopExpansionOffer(state)).toMatchObject({ allowed: false, costPence: 3000, targetStage: 2 });
+    expect(rejected(state, { type: "BUY_SPACE_EXPANSION" })).toContain("£30.00");
     rejected(state, { type: "SETTLE_DAY" });
     const tomorrow = act(state, { type: "START_NEXT_DAY" });
     expect(tomorrow.day.openingCashPence).toBe(210);
     expect(tomorrow.cashPence).toBe(210);
     expect(getDaySummary(tomorrow).expansionSpendPence).toBe(0);
     expect(tomorrow.renovation).toEqual(state.renovation);
+  });
+
+  it("purchases the second real 3 m floor once and audits both stages paid on the same day", () => {
+    const before = earned(7);
+    expect(before.cashPence).toBe(4770);
+    const first = act(before, { type: "BUY_SPACE_EXPANSION" });
+    expect(getShopExpansionOffer(first)).toMatchObject({ allowed: true, costPence: SECOND_SHOP_EXPANSION_COST_PENCE, targetStage: 2 });
+    const second = act(first, { type: "BUY_SPACE_EXPANSION" });
+    expect(second.cashPence).toBe(270);
+    expect(second.renovation).toMatchObject({
+      layout: { expansion: 2 }, expansionDay: 7, secondExpansionDay: 7, layoutRevision: 0,
+    });
+    expect(second.settlements[6]).toMatchObject({ expansionSpendPence: 4500, closingCashPence: 270 });
+    expect(getShopAchievements(second).find((entry) => entry.id === "second-extension"))
+      .toMatchObject({ current: 1, completed: true });
+    expect(isWalkablePosition({ x: 0, z: 10.2 }, .26, 2)).toBe(true);
+    expect(isWalkablePosition({ x: 0, z: 10.5 }, .26, 2)).toBe(false);
+    expect(rejected(second, { type: "BUY_SPACE_EXPANSION" })).toContain("两次实体扩建已完成");
   });
 
   it("allows construction before opening without levels, English evidence or free stock", () => {
@@ -220,7 +241,7 @@ describe("renovation layout acceptance and save safety", () => {
     }
     const unpaid = structuredClone(original); unpaid.renovation.layout.expansion = 1; unpaid.renovation.expansionDay = 1;
     expect(validateSimState(unpaid)).toBe(false);
-    const invalidStage = JSON.parse(JSON.stringify(expanded)); invalidStage.renovation.layout.expansion = 2;
+    const invalidStage = JSON.parse(JSON.stringify(expanded)); invalidStage.renovation.layout.expansion = 3;
     expect(validateSimState(invalidStage)).toBe(false);
   });
 });

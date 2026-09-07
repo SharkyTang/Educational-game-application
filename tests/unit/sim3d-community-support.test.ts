@@ -37,6 +37,8 @@ function asV10(state: SimState): SimStateV10 {
     cashDrawer: _cashDrawer,
     cashDrawerOpening: _cashDrawerOpening,
     cashDrawerTransactionStart: _cashDrawerTransactionStart,
+    equipment: _equipment,
+    renovation,
     customer,
     payment,
     transactions,
@@ -44,6 +46,9 @@ function asV10(state: SimState): SimStateV10 {
     ...base
   } = structuredClone(state);
   if (_support.length) throw new Error("v10 fixtures cannot contain community support");
+  const { layout, secondExpansionDay: _secondExpansionDay, ...renovationRecord } = renovation;
+  const { equipment: _placements, ...legacyLayout } = layout;
+  if (legacyLayout.expansion > 1) throw new Error("v10 fixtures cannot contain a second expansion");
   const { contentVersion: _content, ...oldCustomer } = customer;
   const oldPayment: SimStateV10["payment"] = payment?.method === "cash"
     ? { method: "cash", tenderedPence: payment.tenderedPence, received: payment.received, selectedChange: [...payment.selectedChange] }
@@ -51,6 +56,7 @@ function asV10(state: SimState): SimStateV10 {
   const previous: SimStateV10 = {
     ...base,
     schemaVersion: 10,
+    renovation: { ...renovationRecord, layout: { ...legacyLayout, expansion: legacyLayout.expansion as 0 | 1 } },
     customer: oldCustomer,
     payment: oldPayment,
     transactions: transactions.map(({
@@ -61,7 +67,8 @@ function asV10(state: SimState): SimStateV10 {
       cashDrawerTracked: _cashDrawerTracked,
       ...transaction
     }) => transaction),
-    settlements: settlements.map(({ communitySupportCount: _count, communityCashPence: _cash, ...record }) => record),
+    settlements: settlements.map(({ communitySupportCount: _count, communityCashPence: _cash,
+      equipmentSpendPence: _equipmentSpend, ...record }) => record),
   };
   expect(validateV10SimState(previous)).toBe(true);
   return previous;
@@ -137,10 +144,10 @@ describe("community cash-support ledger introduced in v11", () => {
   });
 });
 
-describe("read-only v10 to current v12 migration", () => {
+describe("read-only v10 to current v13 migration", () => {
   it("uses a new key, retains the writer lock and migrates v10 without changing cash or the old source", () => {
-    expect(SIM_STORAGE_KEY).toBe("english-high-street:sim3d:v12");
-    expect(SIM_BACKUP_KEY).toBe("english-high-street:sim3d:v12:backup");
+    expect(SIM_STORAGE_KEY).toBe("english-high-street:sim3d:v13");
+    expect(SIM_BACKUP_KEY).toBe("english-high-street:sim3d:v13:backup");
     expect(SIM_V10_STORAGE_KEY).toBe("english-high-street:sim3d:v10");
     expect(SIM_V10_BACKUP_KEY).toBe("english-high-street:sim3d:v10:backup");
     expect(SIM_WRITER_LOCK).toBe("english-high-street:sim3d:v4:writer");
@@ -150,7 +157,7 @@ describe("read-only v10 to current v12 migration", () => {
     storage.data.set(SIM_V10_STORAGE_KEY, raw);
     const loaded = loadSimState(storage);
     expect(loaded.source).toBe("v10");
-    expect(loaded.state).toMatchObject({ schemaVersion: 12, cashPence: old.cashPence, streetSupportRecords: [],
+    expect(loaded.state).toMatchObject({ schemaVersion: 13, cashPence: old.cashPence, streetSupportRecords: [],
       customer: { ...old.customer, contentVersion: 1 } });
     expect(loaded.state.settlements).toEqual([]);
     expect(storage.getItem(SIM_V10_STORAGE_KEY)).toBe(raw);
@@ -202,15 +209,15 @@ describe("read-only v10 to current v12 migration", () => {
   it("uses a valid v10 backup before older schemas and detects a v10 writer changing the migration source", async () => {
     const old = asV10(createFirstDayState()); const raw = JSON.stringify(old);
     const storage = new MemoryStorage();
-    storage.data.set(SIM_STORAGE_KEY, "{broken-v12");
+    storage.data.set(SIM_STORAGE_KEY, "{broken-v13");
     storage.data.set(SIM_BACKUP_KEY, "null");
     storage.data.set(SIM_V10_STORAGE_KEY, "{broken-v10");
     storage.data.set(SIM_V10_BACKUP_KEY, raw);
     storage.data.set("english-high-street:sim3d:v9", "retained older source");
     const before = [...storage.data];
     const restored = loadSimState(storage);
-    expect(restored).toMatchObject({ source: "v10-backup", state: { schemaVersion: 12, cashPence: old.cashPence } });
-    expect(restored.warning).toContain("当前有限钱箱或社区存档不可恢复");
+    expect(restored).toMatchObject({ source: "v10-backup", state: { schemaVersion: 13, cashPence: old.cashPence } });
+    expect(restored.warning).toContain("当前设备、有限钱箱或社区存档不可恢复");
     expect([...storage.data]).toEqual(before);
 
     const cleanStorage = new MemoryStorage(); cleanStorage.data.set(SIM_V10_STORAGE_KEY, raw);

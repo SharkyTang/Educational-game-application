@@ -1,4 +1,3 @@
-import { createInitialRenovation } from "../../src/sim3d/shopDevelopment";
 import { describe, expect, it } from "vitest";
 import {
   createFirstDayState, getCheckoutTotal, getDaySummary, reduceSim, validateSimState, validateV7SimState, validateV8SimState,
@@ -100,10 +99,10 @@ function v7Snapshot(state: SimState = partialCash()): SimStateV7 {
   };
 }
 
-describe("v12 read-only migration of cash and pre-cash save sources", () => {
-  it("uses the current v12 namespace, preserving the cross-version writer lock", () => {
-    expect(SIM_STORAGE_KEY).toBe("english-high-street:sim3d:v12");
-    expect(SIM_BACKUP_KEY).toBe("english-high-street:sim3d:v12:backup");
+describe("v13 read-only migration of cash and pre-cash save sources", () => {
+  it("uses the current v13 namespace, preserving the cross-version writer lock", () => {
+    expect(SIM_STORAGE_KEY).toBe("english-high-street:sim3d:v13");
+    expect(SIM_BACKUP_KEY).toBe("english-high-street:sim3d:v13:backup");
     expect(SIM_WRITER_LOCK).toBe("english-high-street:sim3d:v4:writer");
   });
 
@@ -127,7 +126,7 @@ describe("v12 read-only migration of cash and pre-cash save sources", () => {
     const expectedPayment = old.payment?.method === "cash"
       ? { ...old.payment, tenderedCash: cashPiecesForAmount(old.payment.tenderedPence), tenderedCashRecorded: false } : old.payment;
     expect(loaded.state).toMatchObject({
-      schemaVersion: 12, customer: { ...current.customer, contentVersion: 1 }, payment: expectedPayment,
+      schemaVersion: 13, customer: { ...current.customer, contentVersion: 1 }, payment: expectedPayment,
       cashDrawer: createDefaultCashDrawer(), cashDrawerOpening: createDefaultCashDrawer(),
       cashDrawerTransactionStart: old.transactions.length,
     });
@@ -143,7 +142,7 @@ describe("v12 read-only migration of cash and pre-cash save sources", () => {
     for (const [key, value] of before) expect(storage.getItem(key)).toBe(value);
   });
 
-  it("keeps a migrated in-progress tender labelled as derived when it is confirmed in v12", () => {
+  it("keeps a migrated in-progress tender labelled as derived when it is confirmed in v13", () => {
     const migrated = parseImportedSimState(JSON.stringify(v8Snapshot(readyCash())));
     expect(migrated.payment).toMatchObject({ method: "cash", tenderedCashRecorded: false, selectedChange: [50, 50] });
     const paid = act(migrated, { type: "CONFIRM_CASH" });
@@ -195,7 +194,7 @@ describe("v12 read-only migration of cash and pre-cash save sources", () => {
     const loaded = loadSimState(storage);
     expect(loaded.source).toBe("v7");
     expect(loaded.state).toEqual({
-      ...old, schemaVersion: 12, renovation: createInitialRenovation(), payment: { method: "card" }, streetSupportRecords: [],
+      ...old, schemaVersion: 13, renovation: createFirstDayState().renovation, payment: { method: "card" }, streetSupportRecords: [],
       cashDrawer: createDefaultCashDrawer(), cashDrawerOpening: createDefaultCashDrawer(), cashDrawerTransactionStart: old.transactions.length,
       customer: { ...old.customer, contentVersion: 1 },
       day: { ...old.day, targetCustomers: null, elapsedOpenMs: 0, nextCustomerAtMs: null, closeReason: null },
@@ -261,7 +260,7 @@ describe("v12 read-only migration of cash and pre-cash save sources", () => {
     expect(storage.getItem(SIM_STORAGE_KEY)).toBeNull();
   });
 
-  it("detects an old page changing the v7 migration source before this page can write v12", async () => {
+  it("detects an old page changing the v7 migration source before this page can write v13", async () => {
     const storage = new MemoryStorage();
     const old = v7Snapshot();
     storage.data.set(V7_PRIMARY, JSON.stringify(old));
@@ -337,7 +336,7 @@ describe("cash selection recovery, write failure and exactly-once saves", () => 
     await session.release();
   });
 
-  it("keeps the original v7 source intact if the initial migrated v12 write fails", async () => {
+  it("keeps the original v7 source intact if the initial migrated v13 write fails", async () => {
     const storage = new MemoryStorage();
     const raw = JSON.stringify(v7Snapshot());
     storage.data.set(V7_PRIMARY, raw);

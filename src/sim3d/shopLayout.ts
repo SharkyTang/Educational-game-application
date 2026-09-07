@@ -13,7 +13,8 @@ export const FURNITURE_IDS = [
 export type FurnitureId = (typeof FURNITURE_IDS)[number];
 export type FurnitureRotation = 0 | 1 | 2 | 3;
 export interface FurniturePlacement extends FloorPoint { id: FurnitureId; rotation: FurnitureRotation }
-export interface ShopLayout { expansion: 0 | 1; placements: FurniturePlacement[] }
+export type ShopExpansionStage = 0 | 1 | 2;
+export interface ShopLayout { expansion: ShopExpansionStage; placements: FurniturePlacement[] }
 export interface FurnitureDefinition {
   readonly id: FurnitureId;
   readonly name: string;
@@ -91,13 +92,13 @@ export function createDefaultShopLayout(): ShopLayout {
   return { expansion: 0, placements: FURNITURE_DEFINITIONS.map(({ id, origin }) => ({ id, ...origin, rotation: 0 })) };
 }
 
-export function shopBounds(expansion: 0 | 1): LayoutCollider {
-  return { minX: -3.4, maxX: 3.4, minZ: -4.6, maxZ: expansion === 1 ? 7.6 : 4.6 };
+export function shopBounds(expansion: ShopExpansionStage): LayoutCollider {
+  return { minX: -3.4, maxX: 3.4, minZ: -4.6, maxZ: 4.6 + expansion * 3 };
 }
 
 /** Match the real five wall collision rectangles, including the open doorway. */
-export function shopWallColliders(expansion: 0 | 1): LayoutCollider[] {
-  const extension = expansion === 1 ? 3 : 0;
+export function shopWallColliders(expansion: ShopExpansionStage): LayoutCollider[] {
+  const extension = expansion * 3;
   return [
     { minX: -3.6, maxX: -3.39, minZ: -4.8, maxZ: 4.8 + extension },
     { minX: 3.39, maxX: 3.6, minZ: -4.8, maxZ: 4.8 + extension },
@@ -170,7 +171,7 @@ function pointClear(point: FloorPoint, colliders: readonly LayoutCollider[], rad
 
 /** Cheap save-shape check. Does not confuse a temporary carton obstruction with corrupt data. */
 export function validateShopLayoutStructure(value: unknown): value is ShopLayout {
-  if (!record(value) || (value.expansion !== 0 && value.expansion !== 1)
+  if (!record(value) || (value.expansion !== 0 && value.expansion !== 1 && value.expansion !== 2)
     || !Array.isArray(value.placements) || value.placements.length !== FURNITURE_IDS.length) return false;
   const seen = new Set<string>();
   for (const placement of value.placements as unknown[]) {
@@ -270,7 +271,8 @@ export function layoutRoute(from: FloorPoint, destination: FloorPoint, colliders
   return route;
 }
 
-function validateReachability(layout: ShopLayout, obstacles: readonly LayoutCollider[]): LayoutValidation {
+/** Revalidates every built-in shelf and both checkout sides against one composed obstacle set. */
+export function validateShopLayoutReachability(layout: ShopLayout, obstacles: readonly LayoutCollider[]): LayoutValidation {
   const bounds = shopBounds(layout.expansion);
   const targets = PRODUCT_ASSET_IDS.map((productId) => {
     const id = furnitureForProduct(productId);
@@ -313,7 +315,7 @@ function validateGeometry(layout: ShopLayout, extraObstacles: readonly LayoutCol
     if (extraObstacles.some((obstacle) => overlaps(fixture.bounds, obstacle))) return fail(`${name}与地上的货箱重叠，请先移开货箱。`);
   }
   if (extraObstacles.some((obstacle) => overlaps(obstacle, SHOP_ENTRANCE))) return { valid: false, reason: "货箱挡住了店门，请先清理入口。" };
-  return validateReachability(layout, [...layoutColliders(layout), ...shopWallColliders(layout.expansion), ...extraObstacles]);
+  return validateShopLayoutReachability(layout, [...layoutColliders(layout), ...shopWallColliders(layout.expansion), ...extraObstacles]);
 }
 
 /**

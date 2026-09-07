@@ -1,6 +1,6 @@
 import { pickCustomerEntry } from "./customerSelection";
 import type { FloorPoint, LayoutCollider } from "./productLayout";
-import { LAYOUT_WALK_RADIUS, layoutRoute, shopBounds } from "./shopLayout";
+import { LAYOUT_WALK_RADIUS, layoutRoute, shopBounds, type ShopExpansionStage } from "./shopLayout";
 
 /** Arrive from the ends of the near pavement, not from the shop threshold. */
 export const CUSTOMER_STREET_SPAWNS: readonly Readonly<FloorPoint>[] = [
@@ -24,7 +24,7 @@ export function customerArrivalOrigins(state: { customerSeed?: number; customer:
  * Replanning uses the current position, including a cancelled visit outside.
  */
 export function customerJourneyRoute(
-  from: FloorPoint, destination: FloorPoint, colliders: readonly LayoutCollider[], expansion: 0 | 1,
+  from: FloorPoint, destination: FloorPoint, colliders: readonly LayoutCollider[], expansion: ShopExpansionStage,
 ): FloorPoint[] | null {
   // Render vectors expose x/z through getters; route copies need plain points.
   from = { x: from.x, z: from.z };

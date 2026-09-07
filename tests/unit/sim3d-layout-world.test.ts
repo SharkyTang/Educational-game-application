@@ -66,6 +66,7 @@ describe("renovation applied to real world interactions, stock and movement", ()
     Object.assign(view, {
       state, scene, shop, catalogFixtures, street, camera: new UniversalCamera("layout-test-eyes", new Vector3(0, 1.65, -3.5), scene),
       expansionLight: new PointLight("layout-test-expanded-light", new Vector3(0, 2.68, 5.5), scene),
+      secondExpansionLight: new PointLight("layout-test-second-expanded-light", new Vector3(0, 2.68, 8.5), scene),
       colliders: [...shop.colliders, ...catalogFixtures.colliders, ...street.colliders, recycling.collider],
       fixedColliders: [...street.colliders, recycling.collider], productVisuals: new ProductVisuals(scene),
       crateSupports: [], occupiedCrates: new Set(), products: new Map(), crates: new Map(),
@@ -91,7 +92,8 @@ describe("renovation applied to real world interactions, stock and movement", ()
   function apply(view: WorldHarness, layout: ShopLayout): void {
     const next = structuredClone(view.state);
     next.revision += 1;
-    next.renovation = { ...next.renovation, layout, expansionDay: layout.expansion ? 1 : null };
+    next.renovation = { ...next.renovation, layout: { ...layout, equipment: next.renovation.layout.equipment },
+      expansionDay: layout.expansion ? 1 : null, secondExpansionDay: layout.expansion >= 2 ? 1 : null };
     view.setState(next);
     // The real render loop refreshes descendant matrices before the next visible frame/pick.
     scene.render();
@@ -145,6 +147,7 @@ describe("renovation applied to real world interactions, stock and movement", ()
   it("updates physical walking bounds when expanding and removes the old back-wall collision", () => {
     const view = harness();
     expect(view.isFree(0, 6)).toBe(false);
+    expect(view.isFree(0, 9)).toBe(false);
     const expanded = createDefaultShopLayout(); expanded.expansion = 1;
     apply(view, expanded);
     expect(view.isFree(0, 6)).toBe(true);
@@ -152,6 +155,13 @@ describe("renovation applied to real world interactions, stock and movement", ()
     expect(view.isFree(0, 7.5)).toBe(false);
     const floorRay = new Ray(new Vector3(0, 1, 6), new Vector3(0, -1, 0), 1.1);
     expect(scene.pickWithRay(floorRay, (mesh) => mesh.name === "oak-floor")?.hit).toBe(true);
+    expect(view.isFree(0, 9)).toBe(false);
+    const twiceExpanded = createDefaultShopLayout(); twiceExpanded.expansion = 2;
+    apply(view, twiceExpanded);
+    expect(view.isFree(0, 9)).toBe(true);
+    expect(view.isFree(0, 10.8)).toBe(false);
+    expect(scene.getLightByName("layout-test-expanded-light")!.isEnabled()).toBe(true);
+    expect(scene.getLightByName("layout-test-second-expanded-light")!.isEnabled()).toBe(true);
     view.camera.position.set(0, 1.65, 6);
     apply(view, createDefaultShopLayout());
     expect(view.isFree(0, 6)).toBe(false);

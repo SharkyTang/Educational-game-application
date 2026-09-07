@@ -226,7 +226,7 @@ describe("safe and usable furniture layouts", () => {
 
 describe("untrusted layout and bounded routing input", () => {
   it.each([
-    null, {}, [], { expansion: 0, placements: [] }, { expansion: 2, placements: createDefaultShopLayout().placements },
+    null, {}, [], { expansion: 0, placements: [] }, { expansion: 3, placements: createDefaultShopLayout().placements },
     { expansion: "1", placements: createDefaultShopLayout().placements },
     { ...createDefaultShopLayout(), placements: createDefaultShopLayout().placements.slice(1) },
     { ...createDefaultShopLayout(), placements: [...createDefaultShopLayout().placements, createDefaultShopLayout().placements[0]] },

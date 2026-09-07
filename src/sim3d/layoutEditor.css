@@ -35,6 +35,8 @@
 .s3-layout-fixture[data-kind="fridge"] .s3-layout-fixture-body,
 .s3-layout-fixture[data-kind="chiller"] .s3-layout-fixture-body { fill: #d4e4dc; stroke: #87a99a; }
 .s3-layout-fixture[data-layout-fixture="checkout-counter"] .s3-layout-fixture-body { fill: #ddc49d; stroke: #a38a66; }
+.s3-layout-owned-equipment .s3-layout-fixture-body { fill: #dce8d0; stroke: #587151; stroke-dasharray: .12 .06; }
+.s3-layout-owned-equipment .s3-layout-fixture-number { fill: #345238; font-size: .22px; }
 .s3-layout-fixture:hover .s3-layout-fixture-body { stroke-width: .055; }
 .s3-layout-fixture[data-selected="true"] { color: #345f3b; }
 .s3-layout-fixture[data-selected="true"] .s3-layout-fixture-body { fill: #b9d2a8; stroke: #426a38; stroke-width: .065; }
@@ -58,6 +60,7 @@
 .s3-layout-position dd { margin: 3px 0 0; color: #415638; font-size: 11px; font-weight: 600; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .s3-layout-facing { min-height: 21px; color: #51703e; font-size: 11px; font-weight: 600; }
 .s3-layout-controls .s3-layout-rotate { gap: 8px; width: 100%; min-height: 38px; margin-top: 10px; padding: 8px 10px; font-size: 12px !important; }
+.s3-layout-equipment-toggle { width: 100%; margin: 2px 0 10px; }
 .s3-layout-rotate kbd { font-size: 9px; }
 .s3-layout-movement { min-width: 0; margin: 12px 0 0; padding: 6px 0 0; border: 0; }
 .s3-layout-movement legend { width: 100%; padding: 0; text-align: center; color: #7c876c; font-size: 10px; }

@@ -152,7 +152,7 @@ describe("movable shop furniture and physical floor expansion", () => {
     expect(hit?.hit).toBe(true);
   });
 
-  it("adds three real metres behind the shop and removes the old rear wall without stretching floor planks", () => {
+  it("adds both three-metre shop stages and moves the real rear wall without stretching floor planks", () => {
     const shop = createShop(scene, { catalogFixtures: true });
     const floor = scene.getMeshByName("oak-floor")!;
     const rear = scene.getMeshByName("back-plaster")!;
@@ -184,16 +184,30 @@ describe("movable shop furniture and physical floor expansion", () => {
     nearBounds(shop.colliders[2]!, { minX: -3.6, maxX: 3.6, minZ: 7.56, maxZ: 7.8 });
     expect(texture.uScale).toBeCloseTo(6.8 / 1.2); expect(texture.vScale).toBeCloseTo(12.2 / 1.2);
     expect(scene.getMeshByName("pendant-bulb-5.5")!.isEnabled()).toBe(true);
+    expect(scene.getMeshByName("pendant-bulb-8.5")!.isEnabled()).toBe(false);
     expect(scene.getMeshByName("wainscot-stile-1-19")!.isEnabled()).toBe(true);
+    expect(scene.getMeshByName("wainscot-stile-1-24")!.isEnabled()).toBe(false);
     nearPoint(scene.getTransformNodeByName("back-corner-plant")!.position, { x: -0.90, z: 4.02 });
     nearPoint(scene.getTransformNodeByName("window-plant")!.position, { x: -3.01, z: -4.10 });
     for (const { target, position, bounds } of drops) { nearPoint(target.position, position); nearBounds(measuredBounds(target.mesh), bounds); }
+    layout.expansion = 2;
+    shop.applyLayout(layout); shop.applyLayout(layout);
+    nearBounds(measuredBounds(floor), { minX: -3.4, maxX: 3.4, minZ: -4.6, maxZ: 10.6 });
+    expect(measuredBounds(rear).minZ).toBeCloseTo(10.6, 5);
+    expect(scene.getMeshByName("stockroom-door")!.position.z).toBeCloseTo(10.49);
+    nearBounds(shop.colliders[2]!, { minX: -3.6, maxX: 3.6, minZ: 10.56, maxZ: 10.8 });
+    expect(texture.vScale).toBeCloseTo(15.2 / 1.2);
+    expect(scene.getMeshByName("pendant-bulb-8.5")!.isEnabled()).toBe(true);
+    expect(scene.getMeshByName("wainscot-stile-1-24")!.isEnabled()).toBe(true);
+    expect([scene.meshes.length, scene.materials.length, scene.textures.length]).toEqual(allocated);
     shop.applyLayout(originalLayout());
     expect(measuredBounds(floor).maxZ).toBeCloseTo(4.6, 5);
     expect(scene.pickWithRay(oldWallRay, (mesh) => mesh === rear)?.hit).toBe(true);
     expect(texture.vScale).toBeCloseTo(9.2 / 1.2);
     expect(scene.getMeshByName("pendant-bulb-5.5")!.isEnabled()).toBe(false);
+    expect(scene.getMeshByName("pendant-bulb-8.5")!.isEnabled()).toBe(false);
     expect(scene.getMeshByName("wainscot-stile-1-19")!.isEnabled()).toBe(false);
+    expect(scene.getMeshByName("wainscot-stile-1-24")!.isEnabled()).toBe(false);
     expect([scene.meshes.length, scene.materials.length, scene.textures.length]).toEqual(allocated);
   });
 

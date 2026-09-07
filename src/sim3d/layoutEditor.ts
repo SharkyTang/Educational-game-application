@@ -8,16 +8,27 @@ import {
   layoutEquals,
   shopBounds,
   validateShopLayout,
-  type FurnitureId,
   type FurniturePlacement,
   type ShopLayout,
 } from "./shopLayout";
 import type { LayoutCollider } from "./productLayout";
+import {
+  EQUIPMENT_COMMERCE_CATALOG,
+  createEquipmentAssetState,
+  type EquipmentAssetState,
+  type EquipmentFloorPlacement,
+} from "./equipmentCommerce";
+import {
+  equipmentPlacementBounds,
+  suggestEquipmentPlacement,
+  validateEquipmentLayout,
+  type EquipmentShopLayout,
+} from "./equipmentLayout";
 import "./layoutEditor.css";
 
 export interface LayoutEditorCallbacks {
   /** Return false when saving fails; the editor keeps the complete draft. */
-  onApply(layout: ShopLayout): boolean | void;
+  onApply(layout: EquipmentShopLayout): boolean | void;
   onDirtyChange?(dirty: boolean): void;
 }
 
@@ -25,13 +36,15 @@ export interface LayoutEditorOptions {
   editable: boolean;
   reason?: string;
   obstacles?: readonly LayoutCollider[];
+  equipmentState?: EquipmentAssetState;
+  occupiedEquipmentIds?: readonly string[];
   resetDraft?: boolean;
 }
 
 interface Point { x: number; z: number }
 interface DragState {
   pointerId: number;
-  placement: FurniturePlacement;
+  placement: FurniturePlacement | EquipmentFloorPlacement;
   start: Point;
   clientX: number;
   clientY: number;
@@ -48,10 +61,17 @@ interface FixtureNodes {
 }
 
 const SVG_NS = "http://www.w3.org/2000/svg";
-const cloneLayout = (layout: ShopLayout): ShopLayout => ({
+const cloneLayout = (layout: ShopLayout & { equipment?: readonly EquipmentFloorPlacement[] }): EquipmentShopLayout => ({
   expansion: layout.expansion,
   placements: layout.placements.map((placement) => ({ ...placement })),
+  equipment: (layout.equipment ?? []).map((placement) => ({ ...placement })),
 });
+const baseLayoutEquals = (a: EquipmentShopLayout, b: EquipmentShopLayout): boolean => layoutEquals(a, b)
+  && a.equipment.length === b.equipment.length && a.equipment.every((placement, index) => {
+    const other = b.equipment[index];
+    return other?.instanceId === placement.instanceId && other.x === placement.x
+      && other.z === placement.z && other.rotation === placement.rotation;
+  });
 const roundCoordinate = (coordinate: number): number => Math.round(coordinate * 1000) / 1000 || 0;
 const escapeHtml = (value: string): string => value.replace(/[&<>"']/g, (character) => ({
   "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
@@ -99,9 +119,10 @@ export function layoutEditorMarkup(): string {
         <div class="s3-layout-legend" aria-label="平面图图例"><span><i class="s3-layout-key s3-layout-key-selected"></i>选中家具</span><span><i class="s3-layout-key s3-layout-key-front"></i>正面 / 顾客侧</span><span><i class="s3-layout-key s3-layout-key-blocked"></i>保留通道</span></div>
       </div>
       <aside class="s3-layout-controls" aria-label="家具调整">
-        <label class="s3-layout-select-label" for="s3-layout-select">选择家具 <span>${FURNITURE_DEFINITIONS.length} 件</span></label>
+        <label class="s3-layout-select-label" for="s3-layout-select">选择家具或设备 <span id="s3-layout-fixture-count">${FURNITURE_DEFINITIONS.length} 件</span></label>
         <select id="s3-layout-select" aria-describedby="s3-layout-selection-help">${FURNITURE_DEFINITIONS.map((definition, index) => `<option value="${escapeHtml(definition.id)}">${String(index + 1).padStart(2, "0")} · ${escapeHtml(definition.name)}</option>`).join("")}</select>
         <p id="s3-layout-selection-help" class="s3-layout-selection-help">货架连同商品移动；收银台连同扫码器、刷卡器一起移动。</p>
+        <button id="s3-layout-equipment-toggle" class="s3-secondary-button s3-layout-equipment-toggle" type="button" hidden>摆入店内</button>
         <dl class="s3-layout-position"><div><dt>横向 X</dt><dd id="s3-layout-x"></dd></div><div><dt>纵向 Z</dt><dd id="s3-layout-z"></dd></div><div><dt>旋转</dt><dd id="s3-layout-rotation"></dd></div></dl>
         <p id="s3-layout-facing" class="s3-layout-facing"></p>
         <button id="s3-layout-rotate" class="s3-secondary-button s3-layout-rotate" type="button" aria-label="将选中的家具旋转90度">↻ 旋转 90° <kbd>R</kbd></button>
@@ -125,11 +146,12 @@ export class LayoutEditor {
   private readonly lifetime = new AbortController();
   private readonly root: HTMLElement;
   private readonly svg: SVGSVGElement;
-  private readonly fixtures = new Map<FurnitureId, FixtureNodes>();
-  private baseline = createDefaultShopLayout();
+  private readonly fixtures = new Map<string, FixtureNodes>();
+  private baseline = cloneLayout(createDefaultShopLayout());
   private draft = cloneLayout(this.baseline);
-  private selected: FurnitureId = FURNITURE_DEFINITIONS[0]!.id;
+  private selected: string = FURNITURE_DEFINITIONS[0]!.id;
   private options: LayoutEditorOptions = { editable: false };
+  private equipmentState = createEquipmentAssetState();
   private obstacleSignature = "";
   private drag: DragState | null = null;
   private reportedDirty = false;
@@ -148,37 +170,45 @@ export class LayoutEditor {
     this.render();
   }
 
-  setState(layout: ShopLayout, options: LayoutEditorOptions): void {
+  setState(layout: ShopLayout & { equipment?: readonly EquipmentFloorPlacement[] }, options: LayoutEditorOptions): void {
     if (this.disposed) return;
     const signature = (options.obstacles ?? []).map((obstacle) => `${obstacle.minX},${obstacle.maxX},${obstacle.minZ},${obstacle.maxZ}`).join(";");
+    const equipmentState = options.equipmentState ?? createEquipmentAssetState();
+    const equipmentSignature = JSON.stringify([equipmentState, options.occupiedEquipmentIds ?? []]);
+    const previousEquipmentSignature = JSON.stringify([this.equipmentState, this.options.occupiedEquipmentIds ?? []]);
+    const equipmentChanged = equipmentSignature !== previousEquipmentSignature;
     const obstaclesChanged = signature !== this.obstacleSignature;
-    let changed = obstaclesChanged || options.editable !== this.options.editable || options.reason !== this.options.reason;
+    let changed = obstaclesChanged || equipmentChanged || options.editable !== this.options.editable || options.reason !== this.options.reason;
     const wasDirty = this.hasUnsavedChanges();
     const expansionChanged = this.draft.expansion !== layout.expansion;
-    if (options.resetDraft || (!layoutEquals(layout, this.baseline) && (!wasDirty || layoutEquals(layout, this.draft)))) {
+    const nextLayout = cloneLayout(layout);
+    if (options.resetDraft || (!baseLayoutEquals(nextLayout, this.baseline) && (!wasDirty || baseLayoutEquals(nextLayout, this.draft)))) {
       this.finishDrag();
-      this.baseline = cloneLayout(layout);
-      this.draft = cloneLayout(layout);
+      this.baseline = cloneLayout(nextLayout);
+      this.draft = cloneLayout(nextLayout);
       this.conflict = false;
       this.applyError = "";
       changed = true;
-    } else if (!layoutEquals(layout, this.baseline)) {
+    } else if (!baseLayoutEquals(nextLayout, this.baseline)) {
       // Another game action must not silently replace an open, edited draft.
-      const onlyExpansionChanged = layoutEquals({ ...layout, expansion: this.baseline.expansion }, this.baseline);
-      this.baseline = cloneLayout(layout);
-      this.draft.expansion = layout.expansion;
+      const onlyExpansionChanged = baseLayoutEquals({ ...nextLayout, expansion: this.baseline.expansion }, this.baseline);
+      this.baseline = cloneLayout(nextLayout);
+      this.draft.expansion = nextLayout.expansion;
       this.conflict = !onlyExpansionChanged;
       changed = true;
     }
-    this.options = { ...options, obstacles: options.obstacles?.map((obstacle) => ({ ...obstacle })) };
+    this.equipmentState = structuredClone(equipmentState);
+    this.options = { ...options, obstacles: options.obstacles?.map((obstacle) => ({ ...obstacle })),
+      occupiedEquipmentIds: [...(options.occupiedEquipmentIds ?? [])] };
     this.obstacleSignature = signature;
+    if (equipmentChanged) this.syncEquipmentFixtures();
     if (!options.editable) this.finishDrag();
     if (expansionChanged || options.resetDraft) this.drawRoom();
     if (obstaclesChanged) this.drawObstacles();
     if (changed) this.render();
   }
 
-  hasUnsavedChanges(): boolean { return !layoutEquals(this.draft, this.baseline) }
+  hasUnsavedChanges(): boolean { return !baseLayoutEquals(this.draft, this.baseline) }
 
   discard(): void {
     if (this.disposed) return;
@@ -207,14 +237,16 @@ export class LayoutEditor {
   private bindEvents(): void {
     const signal = this.lifetime.signal;
     this.el<HTMLSelectElement>("s3-layout-select").addEventListener("change", (event) => {
-      this.select((event.target as HTMLSelectElement).value as FurnitureId);
+      this.select((event.target as HTMLSelectElement).value);
     }, { signal });
     this.el("s3-layout-rotate").addEventListener("click", () => this.rotate(), { signal });
+    this.el("s3-layout-equipment-toggle").addEventListener("click", () => this.toggleEquipment(), { signal });
     this.el("s3-layout-discard").addEventListener("click", () => this.discard(), { signal });
     this.el("s3-layout-default").addEventListener("click", () => {
       if (!this.options.editable) return;
       this.finishDrag();
-      this.draft = { ...createDefaultShopLayout(), expansion: this.baseline.expansion };
+      this.draft = { ...createDefaultShopLayout(), expansion: this.baseline.expansion,
+        equipment: this.draft.equipment.map((placement) => ({ ...placement })) };
       this.conflict = false;
       this.applyError = "";
       this.render();
@@ -226,7 +258,7 @@ export class LayoutEditor {
     }, { signal });
     this.svg.addEventListener("click", (event) => {
       const id = (event.target as Element | null)?.closest<SVGElement>("[data-layout-fixture]")?.dataset.layoutFixture;
-      if (id) this.select(id as FurnitureId);
+      if (id) this.select(id);
     }, { signal });
     this.svg.addEventListener("pointerdown", (event) => this.startDrag(event), { signal });
     this.svg.addEventListener("pointermove", (event) => this.moveDrag(event), { signal });
@@ -260,24 +292,26 @@ export class LayoutEditor {
       if (!event.repeat) this.rotate();
     } else if (event.code === "Space" || event.code === "Enter") {
       const id = target?.closest<SVGElement>("[data-layout-fixture]")?.dataset.layoutFixture;
-      if (id) { event.preventDefault(); this.select(id as FurnitureId) }
+      if (id) { event.preventDefault(); this.select(id) }
     } else if (["KeyW", "KeyA", "KeyS", "KeyD", "KeyE", "KeyF", "KeyG", "KeyB", "KeyU", "KeyM"].includes(event.code)) {
       event.preventDefault();
     }
   }
 
-  private select(id: FurnitureId): void {
+  private select(id: string): void {
     if (!this.fixtures.has(id) || this.selected === id) return;
     this.selected = id;
     this.render();
   }
 
-  private selectedPlacement(): FurniturePlacement {
-    return this.draft.placements.find((placement) => placement.id === this.selected)!;
+  private selectedPlacement(): FurniturePlacement | EquipmentFloorPlacement | undefined {
+    return this.draft.placements.find((placement) => placement.id === this.selected)
+      ?? this.draft.equipment.find((placement) => placement.instanceId === this.selected);
   }
 
-  private replacePlacement(placement: FurniturePlacement): void {
-    this.draft.placements = this.draft.placements.map((entry) => entry.id === placement.id ? { ...placement } : entry);
+  private replacePlacement(placement: FurniturePlacement | EquipmentFloorPlacement): void {
+    if ("id" in placement) this.draft.placements = this.draft.placements.map((entry) => entry.id === placement.id ? { ...placement } : entry);
+    else this.draft.equipment = this.draft.equipment.map((entry) => entry.instanceId === placement.instanceId ? { ...placement } : entry);
     this.applyError = "";
     this.render();
   }
@@ -285,6 +319,7 @@ export class LayoutEditor {
   private move(direction: string): void {
     if (!this.options.editable || this.drag) return;
     const placement = this.selectedPlacement();
+    if (!placement) return;
     const offsets: Record<string, Point> = { up: { x: 0, z: .1 }, down: { x: 0, z: -.1 }, left: { x: -.1, z: 0 }, right: { x: .1, z: 0 } };
     const offset = offsets[direction];
     if (!offset) return;
@@ -294,7 +329,34 @@ export class LayoutEditor {
   private rotate(): void {
     if (!this.options.editable || this.drag) return;
     const placement = this.selectedPlacement();
+    if (!placement) return;
     this.replacePlacement({ ...placement, rotation: ((placement.rotation + 1) % 4) as FurniturePlacement["rotation"] });
+  }
+
+  private toggleEquipment(): void {
+    if (!this.options.editable || !this.equipmentState.instances.some((instance) => instance.id === this.selected)) return;
+    this.finishDrag();
+    const placement = this.draft.equipment.find((entry) => entry.instanceId === this.selected);
+    if (placement) {
+      if ((this.options.occupiedEquipmentIds ?? []).includes(this.selected)) {
+        this.applyError = "这台设备上还有商品，请先把商品移回货箱或其他货位，再收回仓库。";
+        this.render();
+        return;
+      }
+      this.draft.equipment = this.draft.equipment.filter((entry) => entry.instanceId !== this.selected);
+      this.applyError = "";
+      this.render();
+      return;
+    }
+    const suggested = suggestEquipmentPlacement(this.draft, this.equipmentState, this.selected, this.options.obstacles);
+    if (!suggested) {
+      this.applyError = "当前店面没有可自动放入这台设备的位置。请先腾出空间或完成下一次实体扩建。";
+      this.render();
+      return;
+    }
+    this.draft.equipment.push(suggested);
+    this.applyError = "";
+    this.render();
   }
 
   private mapPoint(event: PointerEvent): Point | null {
@@ -309,7 +371,7 @@ export class LayoutEditor {
   private startDrag(event: PointerEvent): void {
     if (event.button !== 0 || this.drag) return;
     const node = (event.target as Element | null)?.closest<SVGElement>("[data-layout-fixture]");
-    const id = node?.dataset.layoutFixture as FurnitureId | undefined;
+    const id = node?.dataset.layoutFixture;
     if (!id || !this.fixtures.has(id)) return;
     event.preventDefault();
     this.select(id);
@@ -317,7 +379,9 @@ export class LayoutEditor {
     if (!this.options.editable) return;
     const start = this.mapPoint(event);
     if (!start) return;
-    this.drag = { pointerId: event.pointerId, placement: { ...this.selectedPlacement() }, start, clientX: event.clientX, clientY: event.clientY, moved: false };
+    const placement = this.selectedPlacement();
+    if (!placement) return;
+    this.drag = { pointerId: event.pointerId, placement: { ...placement }, start, clientX: event.clientX, clientY: event.clientY, moved: false };
     this.svg.setPointerCapture(event.pointerId);
   }
 
@@ -335,7 +399,7 @@ export class LayoutEditor {
     const x = snap(drag.placement.x, point.x - drag.start.x);
     const z = snap(drag.placement.z, point.z - drag.start.z);
     const current = this.selectedPlacement();
-    if (current.x !== x || current.z !== z) this.replacePlacement({ ...drag.placement, x, z });
+    if (current && (current.x !== x || current.z !== z)) this.replacePlacement({ ...drag.placement, x, z });
   }
 
   private finishDrag(): void {
@@ -346,7 +410,9 @@ export class LayoutEditor {
   }
 
   private apply(): void {
-    if (!this.options.editable || !this.hasUnsavedChanges() || this.conflict || !validateShopLayout(this.draft, this.options.obstacles).valid) return;
+    const valid = validateShopLayout(this.draft, this.options.obstacles).valid
+      && validateEquipmentLayout(this.draft, this.equipmentState, this.options.obstacles).valid;
+    if (!this.options.editable || !this.hasUnsavedChanges() || this.conflict || !valid) return;
     this.finishDrag();
     const candidate = cloneLayout(this.draft);
     try {
@@ -366,18 +432,64 @@ export class LayoutEditor {
 
   private createFixtures(): void {
     const layer = this.el<SVGGElement>("s3-layout-fixtures");
-    const document = this.host.ownerDocument;
     FURNITURE_DEFINITIONS.forEach((definition, index) => {
-      const group = svgNode(document, "g", { class: "s3-layout-fixture", "data-layout-fixture": definition.id, "data-kind": definition.kind, tabindex: 0, role: "button", "aria-pressed": "false" });
-      const title = svgNode(document, "title", {});
-      const body = svgNode(document, "rect", { class: "s3-layout-fixture-body", rx: .05 });
-      const front = svgNode(document, "rect", { class: "s3-layout-fixture-front", rx: .025 });
-      const arrow = svgNode(document, "path", { class: "s3-layout-fixture-arrow" });
-      const label = svgNode(document, "text", { class: "s3-layout-fixture-number", "text-anchor": "middle", "dominant-baseline": "central" }, String(index + 1).padStart(2, "0"));
-      group.append(title, body, front, arrow, label);
-      layer.append(group);
-      this.fixtures.set(definition.id, { group, body, front, arrow, label, title });
+      const nodes = this.createFixtureNodes(definition.id, definition.kind, String(index + 1).padStart(2, "0"));
+      layer.append(nodes.group);
+      this.fixtures.set(definition.id, nodes);
     });
+  }
+
+  private createFixtureNodes(id: string, kind: string, number: string): FixtureNodes {
+    const document = this.host.ownerDocument;
+    const group = svgNode(document, "g", { class: "s3-layout-fixture", "data-layout-fixture": id, "data-kind": kind, tabindex: 0, role: "button", "aria-pressed": "false" });
+    const title = svgNode(document, "title", {});
+    const body = svgNode(document, "rect", { class: "s3-layout-fixture-body", rx: .05 });
+    const front = svgNode(document, "rect", { class: "s3-layout-fixture-front", rx: .025 });
+    const arrow = svgNode(document, "path", { class: "s3-layout-fixture-arrow" });
+    const label = svgNode(document, "text", { class: "s3-layout-fixture-number", "text-anchor": "middle", "dominant-baseline": "central" }, number);
+    group.append(title, body, front, arrow, label);
+    return { group, body, front, arrow, label, title };
+  }
+
+  private syncEquipmentFixtures(): void {
+    const layer = this.el<SVGGElement>("s3-layout-fixtures");
+    const owned = new Set(this.equipmentState.instances.map((instance) => instance.id));
+    for (const [id, nodes] of this.fixtures) {
+      if (FURNITURE_DEFINITIONS.some((definition) => definition.id === id) || owned.has(id)) continue;
+      nodes.group.remove();
+      this.fixtures.delete(id);
+    }
+    this.equipmentState.instances.forEach((instance, index) => {
+      if (this.fixtures.has(instance.id)) return;
+      const category = EQUIPMENT_COMMERCE_CATALOG[instance.assetId].id.includes("chiller") ? "fridge" : "shelf";
+      const nodes = this.createFixtureNodes(instance.id, category, `E${index + 1}`);
+      nodes.group.classList.add("s3-layout-owned-equipment");
+      layer.append(nodes.group);
+      this.fixtures.set(instance.id, nodes);
+    });
+    const select = this.el<HTMLSelectElement>("s3-layout-select");
+    const current = select.value;
+    const document = this.host.ownerDocument;
+    const base = document.createElement("optgroup");
+    base.label = `原有设备 · ${FURNITURE_DEFINITIONS.length}`;
+    FURNITURE_DEFINITIONS.forEach((definition, index) => {
+      const option = document.createElement("option");
+      option.value = definition.id;
+      option.textContent = `${String(index + 1).padStart(2, "0")} · ${definition.name}`;
+      base.append(option);
+    });
+    const purchased = document.createElement("optgroup");
+    purchased.label = `已购设备 · ${this.equipmentState.instances.length}`;
+    this.equipmentState.instances.forEach((instance, index) => {
+      const option = document.createElement("option");
+      option.value = instance.id;
+      option.textContent = `E${index + 1} · ${EQUIPMENT_COMMERCE_CATALOG[instance.assetId].nameZh}`;
+      purchased.append(option);
+    });
+    select.replaceChildren(base, purchased);
+    if (this.fixtures.has(current)) this.selected = current;
+    else if (!this.fixtures.has(this.selected)) this.selected = FURNITURE_DEFINITIONS[0]!.id;
+    select.value = this.selected;
   }
 
   private drawRoom(): void {
@@ -385,7 +497,8 @@ export class LayoutEditor {
     const room = this.el<SVGGElement>("s3-layout-room");
     const current = shopBounds(this.draft.expansion);
     const initial = shopBounds(0);
-    const future = shopBounds(1);
+    const nextStage = Math.min(2, this.draft.expansion + 1) as ShopLayout["expansion"];
+    const future = shopBounds(nextStage);
     assignAttributes(this.svg, { viewBox: `${future.minX - .7} ${-future.maxZ - .5} ${future.maxX - future.minX + 1.4} ${future.maxZ - future.minZ + 1.25}` });
     const children: SVGElement[] = [
       svgNode(document, "rect", { ...rectAttributes(future), rx: .06, class: "s3-layout-future-floor" }),
@@ -393,18 +506,23 @@ export class LayoutEditor {
       svgNode(document, "rect", { ...rectAttributes(current), fill: "url(#s3-layout-grid)" }),
       svgNode(document, "rect", { ...rectAttributes(current), fill: "none", class: "s3-layout-wall" }),
     ];
-    if (this.draft.expansion === 0) {
+    if (this.draft.expansion < 2) {
       children.push(
-        svgNode(document, "rect", { x: future.minX, y: -future.maxZ, width: future.maxX - future.minX, height: future.maxZ - initial.maxZ, fill: "url(#s3-layout-locked-pattern)", class: "s3-layout-expansion-border" }),
-        svgNode(document, "text", { x: 0, y: -(initial.maxZ + future.maxZ) / 2 - .08, "text-anchor": "middle", class: "s3-layout-expansion-title" }, "后方扩建区 · 尚未解锁"),
-        svgNode(document, "text", { x: 0, y: -(initial.maxZ + future.maxZ) / 2 + .4, "text-anchor": "middle", class: "s3-layout-map-note" }, "购买扩建后增加 3 米进深"),
+        svgNode(document, "rect", { x: future.minX, y: -future.maxZ, width: future.maxX - future.minX, height: future.maxZ - current.maxZ, fill: "url(#s3-layout-locked-pattern)", class: "s3-layout-expansion-border" }),
+        svgNode(document, "text", { x: 0, y: -(current.maxZ + future.maxZ) / 2 - .08, "text-anchor": "middle", class: "s3-layout-expansion-title" },
+          this.draft.expansion === 1 ? "第 1 次扩建已完成 · 第 2 次尚未解锁" : `第 ${nextStage} 次扩建区 · 尚未解锁`),
+        svgNode(document, "text", { x: 0, y: -(current.maxZ + future.maxZ) / 2 + .4, "text-anchor": "middle", class: "s3-layout-map-note" }, "购买扩建后增加 3 米进深"),
       );
     } else {
       children.push(
         svgNode(document, "path", { d: `M ${initial.minX} ${-initial.maxZ} H ${initial.maxX}`, class: "s3-layout-old-wall" }),
-        svgNode(document, "text", { x: 0, y: -future.maxZ + .38, "text-anchor": "middle", class: "s3-layout-map-note" }, "扩建已完成 · 新增 3 米进深"),
+        svgNode(document, "path", { d: `M ${initial.minX} ${-shopBounds(1).maxZ} H ${initial.maxX}`, class: "s3-layout-old-wall" }),
+        svgNode(document, "text", { x: 0, y: -future.maxZ + .38, "text-anchor": "middle", class: "s3-layout-map-note" }, "本版两次扩建已完成 · 共新增 6 米进深"),
       );
     }
+    if (this.draft.expansion === 1) children.push(
+      svgNode(document, "path", { d: `M ${initial.minX} ${-initial.maxZ} H ${initial.maxX}`, class: "s3-layout-old-wall" }),
+    );
     children.push(
       svgNode(document, "text", { x: 0, y: -future.maxZ - .19, "text-anchor": "middle", class: "s3-layout-map-note" }, "店内后方"),
       svgNode(document, "rect", { ...rectAttributes(SHOP_ENTRANCE), class: "s3-layout-entrance", rx: .07 }),
@@ -449,40 +567,61 @@ export class LayoutEditor {
   }
 
   private render(): void {
-    const validation = validateShopLayout(this.draft, this.options.obstacles);
+    const baseValidation = validateShopLayout(this.draft, this.options.obstacles);
+    const equipmentValidation = validateEquipmentLayout(this.draft, this.equipmentState, this.options.obstacles);
+    const validation = !baseValidation.valid ? baseValidation : equipmentValidation;
     const dirty = this.hasUnsavedChanges();
     const selectedPlacement = this.selectedPlacement();
-    const selectedDefinition = FURNITURE_DEFINITIONS.find((definition) => definition.id === this.selected)!;
+    const selectedDefinition = FURNITURE_DEFINITIONS.find((definition) => definition.id === this.selected);
+    const selectedInstance = this.equipmentState.instances.find((instance) => instance.id === this.selected);
     for (const definition of FURNITURE_DEFINITIONS) {
       const placement = this.draft.placements.find((entry) => entry.id === definition.id)!;
       const bounds = furnitureBounds(placement);
       const nodes = this.fixtures.get(definition.id)!;
       const selected = placement.id === this.selected;
-      const invalid = !validation.valid && (selected || validation.furnitureId === placement.id);
+      const invalid = !validation.valid && (selected || ("furnitureId" in validation && validation.furnitureId === placement.id));
       assignAttributes(nodes.group, { "aria-pressed": String(selected), "data-selected": String(selected), "data-valid": String(!invalid), "aria-label": `${definition.name}，${this.facingLabel(placement)}，旋转 ${placement.rotation * 90} 度${selected ? "，已选中" : ""}` });
+      nodes.group.removeAttribute("hidden");
       assignAttributes(nodes.body, rectAttributes(bounds));
       assignAttributes(nodes.label, { x: placement.x, y: -placement.z });
-      const front = this.frontDirection(placement);
-      const thickness = .09;
-      const frontBounds: LayoutCollider = front.x !== 0
-        ? { ...bounds, minX: front.x > 0 ? bounds.maxX - thickness : bounds.minX, maxX: front.x > 0 ? bounds.maxX : bounds.minX + thickness }
-        : { ...bounds, minZ: front.z > 0 ? bounds.maxZ - thickness : bounds.minZ, maxZ: front.z > 0 ? bounds.maxZ : bounds.minZ + thickness };
-      assignAttributes(nodes.front, rectAttributes(frontBounds));
-      const edge = { x: front.x > 0 ? bounds.maxX : front.x < 0 ? bounds.minX : placement.x, z: front.z > 0 ? bounds.maxZ : front.z < 0 ? bounds.minZ : placement.z };
-      const tip = { x: edge.x + front.x * .29, z: edge.z + front.z * .29 };
-      const base = { x: edge.x + front.x * .08, z: edge.z + front.z * .08 };
-      assignAttributes(nodes.arrow, { d: `M ${tip.x} ${-tip.z} L ${base.x - front.z * .12} ${-base.z - front.x * .12} L ${base.x + front.z * .12} ${-base.z + front.x * .12} Z` });
+      this.renderFixtureFacing(nodes, placement, bounds);
       setText(nodes.title, `${definition.name} · ${this.facingLabel(placement)} · X ${placement.x.toFixed(3)} / Z ${placement.z.toFixed(3)}`);
+    }
+    for (const instance of this.equipmentState.instances) {
+      const nodes = this.fixtures.get(instance.id);
+      if (!nodes) continue;
+      const placement = this.draft.equipment.find((entry) => entry.instanceId === instance.id);
+      if (!placement) {
+        nodes.group.setAttribute("hidden", "");
+        continue;
+      }
+      nodes.group.removeAttribute("hidden");
+      const definition = EQUIPMENT_COMMERCE_CATALOG[instance.assetId];
+      const bounds = equipmentPlacementBounds(instance, placement);
+      const selected = instance.id === this.selected;
+      const invalid = !validation.valid && (selected || ("instanceId" in validation && validation.instanceId === instance.id));
+      assignAttributes(nodes.group, { "aria-pressed": String(selected), "data-selected": String(selected), "data-valid": String(!invalid),
+        "aria-label": `${definition.nameZh}，${this.facingLabel(placement)}，旋转 ${placement.rotation * 90} 度${selected ? "，已选中" : ""}` });
+      assignAttributes(nodes.body, rectAttributes(bounds));
+      assignAttributes(nodes.label, { x: placement.x, y: -placement.z });
+      this.renderFixtureFacing(nodes, placement, bounds);
+      setText(nodes.title, `${definition.nameZh} · ${this.facingLabel(placement)} · X ${placement.x.toFixed(3)} / Z ${placement.z.toFixed(3)}`);
     }
     const select = this.el<HTMLSelectElement>("s3-layout-select");
     if (select.value !== this.selected) select.value = this.selected;
-    setText(this.el("s3-layout-x"), `${selectedPlacement.x.toFixed(3)} m`);
-    setText(this.el("s3-layout-z"), `${selectedPlacement.z.toFixed(3)} m`);
-    setText(this.el("s3-layout-rotation"), `${selectedPlacement.rotation * 90}°`);
-    setText(this.el("s3-layout-facing"), this.facingLabel(selectedPlacement));
-    this.el("s3-layout-selection-help").textContent = selectedDefinition.id === "checkout-counter"
+    setText(this.el("s3-layout-fixture-count"), `${FURNITURE_DEFINITIONS.length + this.equipmentState.instances.length} 件 · ${this.draft.equipment.length} 台已摆入`);
+    setText(this.el("s3-layout-x"), selectedPlacement ? `${selectedPlacement.x.toFixed(3)} m` : "仓库");
+    setText(this.el("s3-layout-z"), selectedPlacement ? `${selectedPlacement.z.toFixed(3)} m` : "待摆入");
+    setText(this.el("s3-layout-rotation"), selectedPlacement ? `${selectedPlacement.rotation * 90}°` : "—");
+    setText(this.el("s3-layout-facing"), selectedPlacement ? this.facingLabel(selectedPlacement) : "购买已保存；摆入并应用后才会增加货位。");
+    this.el("s3-layout-selection-help").textContent = selectedDefinition?.id === "checkout-counter"
       ? "收银台、扫码器和刷卡器整组移动；请为顾客和店员两侧留出位置。"
-      : "商品会跟随货架一起移动；请在深色正面一侧保留取货通道。";
+      : selectedInstance ? `${EQUIPMENT_COMMERCE_CATALOG[selectedInstance.assetId].nameZh}固定陈列${selectedInstance.productId}；店内货物会随设备移动，收回仓库前必须清空。`
+        : "商品会跟随货架一起移动；请在深色正面一侧保留取货通道。";
+    const toggle = this.el<HTMLButtonElement>("s3-layout-equipment-toggle");
+    toggle.hidden = !selectedInstance;
+    toggle.disabled = !this.options.editable || (!!selectedPlacement && (this.options.occupiedEquipmentIds ?? []).includes(this.selected));
+    toggle.textContent = selectedPlacement ? "收回设备仓库" : "从仓库摆入店内";
     const lock = this.el<HTMLElement>("s3-layout-lock");
     lock.hidden = this.options.editable;
     setText(lock, this.options.reason || "当前只能查看布局。请在准备营业或打烊后装修。" );
@@ -493,10 +632,12 @@ export class LayoutEditor {
     setText(this.el("s3-layout-dirty"), dirty ? "有未应用的修改" : "已保存");
     assignAttributes(this.el("s3-layout-dirty"), { "data-dirty": String(dirty) });
     assignAttributes(this.root, { "data-editable": String(this.options.editable) });
-    this.el<HTMLButtonElement>("s3-layout-rotate").disabled = !this.options.editable;
-    this.el<HTMLFieldSetElement>("s3-layout-movement").disabled = !this.options.editable;
+    this.el<HTMLButtonElement>("s3-layout-rotate").disabled = !this.options.editable || !selectedPlacement;
+    this.el<HTMLFieldSetElement>("s3-layout-movement").disabled = !this.options.editable || !selectedPlacement;
     this.el<HTMLButtonElement>("s3-layout-discard").disabled = !dirty && !this.conflict;
-    this.el<HTMLButtonElement>("s3-layout-default").disabled = !this.options.editable || (!this.conflict && layoutEquals(this.draft, { ...createDefaultShopLayout(), expansion: this.draft.expansion }));
+    const defaultBase: EquipmentShopLayout = { ...createDefaultShopLayout(), expansion: this.draft.expansion,
+      equipment: this.draft.equipment.map((placement) => ({ ...placement })) };
+    this.el<HTMLButtonElement>("s3-layout-default").disabled = !this.options.editable || (!this.conflict && baseLayoutEquals(this.draft, defaultBase));
     this.el<HTMLButtonElement>("s3-layout-apply").disabled = !this.options.editable || !dirty || !validation.valid || this.conflict;
     if (dirty !== this.reportedDirty) {
       this.reportedDirty = dirty;
@@ -504,9 +645,24 @@ export class LayoutEditor {
     }
   }
 
-  private frontDirection(placement: FurniturePlacement): Point {
-    const definition = FURNITURE_DEFINITIONS.find((entry) => entry.id === placement.id)!;
-    const { x, z } = definition.front;
+  private renderFixtureFacing(nodes: FixtureNodes, placement: FurniturePlacement | EquipmentFloorPlacement, bounds: LayoutCollider): void {
+    const front = this.frontDirection(placement);
+    const thickness = .09;
+    const frontBounds: LayoutCollider = front.x !== 0
+      ? { ...bounds, minX: front.x > 0 ? bounds.maxX - thickness : bounds.minX, maxX: front.x > 0 ? bounds.maxX : bounds.minX + thickness }
+      : { ...bounds, minZ: front.z > 0 ? bounds.maxZ - thickness : bounds.minZ, maxZ: front.z > 0 ? bounds.maxZ : bounds.minZ + thickness };
+    assignAttributes(nodes.front, rectAttributes(frontBounds));
+    const edge = { x: front.x > 0 ? bounds.maxX : front.x < 0 ? bounds.minX : placement.x, z: front.z > 0 ? bounds.maxZ : front.z < 0 ? bounds.minZ : placement.z };
+    const tip = { x: edge.x + front.x * .29, z: edge.z + front.z * .29 };
+    const base = { x: edge.x + front.x * .08, z: edge.z + front.z * .08 };
+    assignAttributes(nodes.arrow, { d: `M ${tip.x} ${-tip.z} L ${base.x - front.z * .12} ${-base.z - front.x * .12} L ${base.x + front.z * .12} ${-base.z + front.x * .12} Z` });
+  }
+
+  private frontDirection(placement: FurniturePlacement | EquipmentFloorPlacement): Point {
+    const direction = "id" in placement
+      ? FURNITURE_DEFINITIONS.find((entry) => entry.id === placement.id)!.front
+      : { x: 0, z: -1 };
+    const { x, z } = direction;
     switch (placement.rotation) {
       case 1: return { x: z, z: -x };
       case 2: return { x: -x, z: -z };
@@ -515,9 +671,9 @@ export class LayoutEditor {
     }
   }
 
-  private facingLabel(placement: FurniturePlacement): string {
+  private facingLabel(placement: FurniturePlacement | EquipmentFloorPlacement): string {
     const direction = this.frontDirection(placement);
-    const side = placement.id === "checkout-counter" ? "顾客侧" : "商品正面";
+    const side = "id" in placement && placement.id === "checkout-counter" ? "顾客侧" : "商品正面";
     return `${side}${direction.x > 0 ? "朝右 →" : direction.x < 0 ? "朝左 ←" : direction.z > 0 ? "朝店铺后方 ↑" : "朝店门 ↓"}`;
   }
 }

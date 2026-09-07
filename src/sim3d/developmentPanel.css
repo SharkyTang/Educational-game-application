@@ -1,6 +1,6 @@
 .s3-pause.s3-pause-development { width: min(900px, calc(100vw - 32px)); }
 .s3-pause.s3-pause-layout { width: min(1040px, calc(100vw - 32px)); }
-.s3-management-tabs { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.s3-management-tabs { grid-template-columns: repeat(4, minmax(0, 1fr)); }
 .s3-development-heading, .s3-achievement-heading { display: flex; justify-content: space-between; align-items: center; gap: 16px; }
 .s3-shop-type { padding: 6px 11px; border: 1px solid #c7d2b8; border-radius: 30px; background: #e9efdf; color: #47613f; font-size: 12px; white-space: nowrap; }
 .s3-development-stats { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; margin: 22px 0 12px; }

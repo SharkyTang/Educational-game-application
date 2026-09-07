@@ -12,12 +12,31 @@ import {
 } from "./cashDrawer";
 import { BUSINESS_DURATION_MS, advanceBusinessElapsedMs, customerArrivalDelayMs, type BusinessPhase } from "./businessTime";
 import { crateDimensions as layoutCrateDimensions, type LayoutCollider } from "./productLayout";
-import { layoutEquals, validateShopLayout, type ShopLayout } from "./shopLayout";
+import { layoutEquals, validateShopLayout, type ShopExpansionStage, type ShopLayout } from "./shopLayout";
 import {
-  SHOP_EXPANSION_COST_PENCE, createInitialRenovation, getShopExpansionOffer,
-  shopRenovationReason, validateRenovation, type ShopRenovation,
+  SECOND_SHOP_EXPANSION_COST_PENCE, SHOP_EXPANSION_COST_PENCE, createInitialRenovation, getShopExpansionOffer,
+  shopRenovationReason, validateLegacyRenovation, validateRenovation, type LegacyShopRenovation, type ShopRenovation,
 } from "./shopDevelopment";
 import { streetNeighbourForDay, type StreetNeighbourId } from "./streetNeighbourContent";
+import {
+  EQUIPMENT_COMMERCE_CATALOG,
+  createEquipmentAssetState,
+  purchaseEquipment,
+  validateEquipmentAssetState,
+  type EquipmentAssetState,
+  type EquipmentFloorPlacement,
+  type OperationalEquipmentAssetId,
+} from "./equipmentCommerce";
+import { validateEquipmentLayout, type EquipmentShopLayout } from "./equipmentLayout";
+import {
+  equipmentHasStock,
+  findFirstEmptyShelfSlot,
+  isValidShelfStockLocation,
+  productInStoreCapacity,
+  shelfCapacityFor,
+  shelfSlotKey,
+  type ShelfStockLocation,
+} from "./equipmentStock";
 export { PRODUCTS, PRODUCT_IDS, isProductId, type CrateId, type ProductId, type ProductDefinition } from "./products";
 export type { PaymentMethod, PaymentState } from "./cashPayment";
 export type { StreetNeighbourId } from "./streetNeighbourContent";
@@ -48,11 +67,11 @@ const INDOOR_BOUNDS = { minX: -3.4, maxX: 3.4, minZ: -4.6, maxZ: 4.6 } as const;
 export const WORLD_BOUNDS = { minX: -20, maxX: 20, minZ: -20, maxZ: 4.6 } as const;
 
 /** The room joins the street without a radius-sized gap at the doorway seam. */
-export function isWalkablePosition(position: Position, radius = 0, expansion: 0 | 1 = 0): boolean {
+export function isWalkablePosition(position: Position, radius = 0, expansion: ShopExpansionStage = 0): boolean {
   const { x, z } = position;
   if (!Number.isFinite(x) || !Number.isFinite(z) || !Number.isFinite(radius) || radius < 0
     || x < WORLD_BOUNDS.minX + radius || x > WORLD_BOUNDS.maxX - radius
-    || (expansion !== 0 && expansion !== 1)
+    || (expansion !== 0 && expansion !== 1 && expansion !== 2)
     || z < WORLD_BOUNDS.minZ + radius || z > WORLD_BOUNDS.maxZ + expansion * 3 - radius) return false;
   if (z > INDOOR_BOUNDS.minZ && (x < INDOOR_BOUNDS.minX || x > INDOOR_BOUNDS.maxX)) return false;
   // Distance to the two forbidden quadrants beside the shop, including their inside corners.
@@ -72,7 +91,7 @@ export type PurchasePairs = (typeof PURCHASE_PAIR_OPTIONS)[number];
 
 export type ReturnLocation =
   | { kind: "crate"; crateId: CrateId }
-  | { kind: "shelf"; productId: ProductId; slot: number };
+  | ShelfStockLocation;
 export type ItemLocation = ReturnLocation
   | { kind: "delivery"; orderId: string }
   | { kind: "hand" }
@@ -194,10 +213,14 @@ export interface SimDaySummaryV10 extends SimDaySummaryV9 {
   /** Structural expansion is capital spending, separate from sold-goods cost and shelf capacity. */
   expansionSpendPence: number;
 }
-export interface SimDaySummary extends SimDaySummaryV10 {
+export interface SimDaySummaryV11 extends SimDaySummaryV10 {
   /** Voluntary cash support is a community expense, never merchandise cost or progression. */
   communitySupportCount: number;
   communityCashPence: number;
+}
+export interface SimDaySummary extends SimDaySummaryV11 {
+  /** Purchased fixtures are capital investment, separate from merchandise procurement. */
+  equipmentSpendPence: number;
 }
 export interface SimSettlementV6 extends SimDaySummaryV6 {
   transactionStart: number;
@@ -210,7 +233,8 @@ export interface SimSettlementV6 extends SimDaySummaryV6 {
 export interface SimSettlementV7 extends SimSettlementV6, SimDaySummaryV7 {}
 export interface SimSettlementV9 extends Omit<SimSettlementV7, "targetCustomers">, SimDaySummaryV9 {}
 export interface SimSettlementV10 extends SimSettlementV9, SimDaySummaryV10 {}
-export interface SimSettlement extends SimSettlementV10, SimDaySummary {}
+export interface SimSettlementV11 extends SimSettlementV10, SimDaySummaryV11 {}
+export interface SimSettlement extends SimSettlementV11, SimDaySummary {}
 export interface SimRecyclingBatch {
   id: string;
   productId: ProductId;
@@ -268,16 +292,16 @@ export interface SimStateV9 extends Omit<SimStateV8, "schemaVersion" | "day" | "
 }
 export interface SimStateV10 extends Omit<SimStateV9, "schemaVersion" | "settlements"> {
   schemaVersion: 10;
-  renovation: ShopRenovation;
+  renovation: LegacyShopRenovation;
   settlements: SimSettlementV10[];
 }
 export interface SimStateV11 extends Omit<SimStateV10, "schemaVersion" | "customer" | "settlements"> {
   schemaVersion: 11;
   customer: SimStateV10["customer"] & { contentVersion: 1 | 2 };
   streetSupportRecords: SimStreetSupportRecord[];
-  settlements: SimSettlement[];
+  settlements: SimSettlementV11[];
 }
-export interface SimState extends Omit<SimStateV11, "schemaVersion" | "payment" | "transactions"> {
+export interface SimStateV12 extends Omit<SimStateV11, "schemaVersion" | "payment" | "transactions"> {
   schemaVersion: 12;
   payment: PaymentState | null;
   transactions: SimTransaction[];
@@ -288,7 +312,14 @@ export interface SimState extends Omit<SimStateV11, "schemaVersion" | "payment" 
   /** Older transactions before this boundary were made with the v1 unlimited teaching till. */
   cashDrawerTransactionStart: number;
 }
-type EconomySnapshot = SimState | SimStateV4 | SimStateV5 | SimStateV6 | SimStateV7 | SimStateV8 | SimStateV9 | SimStateV10 | SimStateV11;
+export interface ShopRenovationV2 extends Omit<ShopRenovation, "layout"> { layout: EquipmentShopLayout }
+export interface SimState extends Omit<SimStateV12, "schemaVersion" | "renovation" | "settlements"> {
+  schemaVersion: 13;
+  renovation: ShopRenovationV2;
+  equipment: EquipmentAssetState;
+  settlements: SimSettlement[];
+}
+type EconomySnapshot = SimState | SimStateV12 | SimStateV11 | SimStateV4 | SimStateV5 | SimStateV6 | SimStateV7 | SimStateV8 | SimStateV9 | SimStateV10;
 export interface RecyclingOffer { allowed: boolean; rewardPence: number; reason?: string }
 export interface RecyclingSummary { recycledToday: number; incomeTodayPence: number }
 export interface DeliverySummary {
@@ -314,7 +345,7 @@ export type SimCommand =
   | { type: "RECYCLE_CRATE" }
   | { type: "TAKE_ITEM"; itemId: string }
   | { type: "RETURN_ITEM" }
-  | { type: "STOCK"; productId: ProductId; slot: number }
+  | { type: "STOCK"; productId: ProductId; slot: number; equipmentId?: string }
   | { type: "INSPECT"; productId: ProductId }
   | { type: "OPEN_STORE" }
   | { type: "CLOSE_STORE" }
@@ -333,6 +364,7 @@ export type SimCommand =
   | { type: "CANCEL_CUSTOMER" }
   | { type: "BUY_UPGRADE" }
   | { type: "BUY_SPACE_EXPANSION" }
+  | { type: "BUY_EQUIPMENT"; purchaseId: string; assetId: OperationalEquipmentAssetId; productId: ProductId }
   | { type: "SUPPORT_STREET_NEIGHBOUR"; neighbourId: StreetNeighbourId; amountPence: 100 | 200 }
   | { type: "APPLY_SHOP_LAYOUT"; layout: ShopLayout }
   | { type: "PURCHASE_STOCK"; orderId: string; pairs: PurchasePairs; lines?: never }
@@ -348,8 +380,26 @@ const isInteger = (value: unknown): value is number => typeof value === "number"
 const isFiniteNumber = (value: unknown): value is number => typeof value === "number" && Number.isFinite(value);
 const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === "object" && value !== null && !Array.isArray(value);
 const positionEquals = (a: Position, b: Position): boolean => Math.abs(a.x - b.x) < 0.001 && Math.abs(a.z - b.z) < 0.001;
+const fullLayoutEquals = (a: EquipmentShopLayout, b: EquipmentShopLayout): boolean => layoutEquals(a, b)
+  && a.equipment.length === b.equipment.length && a.equipment.every((placement, index) => {
+    const other = b.equipment[index];
+    return placement.instanceId === other?.instanceId && placement.x === other.x && placement.z === other.z && placement.rotation === other.rotation;
+  });
 
 export function capacityFor(state: Pick<SimState, "upgraded">): number { return state.upgraded ? 8 : 4 }
+
+export function shelfCapacityAt(state: Pick<SimState, "upgraded" | "equipment" | "renovation">, productId: ProductId, equipmentId?: string): number {
+  return shelfCapacityFor({ productId, ...(equipmentId === undefined ? {} : { equipmentId }) }, state.upgraded, state.equipment, state.renovation.layout.equipment);
+}
+
+export function countOnShelf(state: Pick<SimState, "items">, productId: ProductId, equipmentId?: string): number {
+  return state.items.filter((item) => item.productId === productId && item.location.kind === "shelf"
+    && item.location.equipmentId === equipmentId).length;
+}
+
+export function equipmentHasShelvedStock(state: Pick<SimState, "items">, equipmentId: string): boolean {
+  return equipmentHasStock(state.items, equipmentId);
+}
 
 function createLegacyInitialState(): LegacySimState {
   return {
@@ -386,6 +436,11 @@ function firstDay(openingKind: SimState["openingKind"]): SimDay {
   };
 }
 
+function createInitialRenovationV2(): ShopRenovationV2 {
+  const renovation = createInitialRenovation();
+  return { ...renovation, layout: { ...renovation.layout, equipment: [] } };
+}
+
 /** Retained as a deterministic S0 regression fixture; new games use createFirstDayState. */
 export function createInitialSimState(): SimState {
   return migrateLegacySimState(createLegacyInitialState());
@@ -394,7 +449,8 @@ export function createInitialSimState(): SimState {
 export function createFirstDayState(): SimState {
   const world = createLegacyInitialState();
   return {
-    ...world, schemaVersion: 12, renovation: createInitialRenovation(), items: [], cashPence: INITIAL_CAPITAL_PENCE, payment: null, transactions: [],
+    ...world, schemaVersion: 13, renovation: createInitialRenovationV2(), equipment: createEquipmentAssetState(),
+    items: [], cashPence: INITIAL_CAPITAL_PENCE, payment: null, transactions: [],
     cashDrawer: createDefaultCashDrawer(), cashDrawerOpening: createDefaultCashDrawer(), cashDrawerTransactionStart: 0,
     customer: { ...world.customer, shoppingList: [], contentVersion: 2 },
     openingKind: "first-day", day: firstDay("first-day"), purchases: [], upgradeDay: null, settlements: [], recyclingBatches: [], recyclingRecords: [],
@@ -467,7 +523,8 @@ export function migrateLegacySimState(value: unknown): SimState {
   const day = firstDay("legacy-s0");
   day.phase = legacy.customer.phase === "outside" ? "preparing" : "open";
   const migrated: SimState = {
-    ...legacy, ...migrateCardPayments(legacy), schemaVersion: 12, renovation: createInitialRenovation(), openingKind: "legacy-s0", day,
+    ...legacy, ...migrateCardPayments(legacy), schemaVersion: 13, renovation: createInitialRenovationV2(),
+    equipment: createEquipmentAssetState(), openingKind: "legacy-s0", day,
     customer: { ...legacy.customer, shoppingList: legacy.customer.phase === "outside" ? [] : [...LEGACY_PRODUCT_IDS], contentVersion: 1 },
     purchases: [], upgradeDay: legacy.upgraded ? 1 : null, settlements: [], recyclingBatches: [], recyclingRecords: [], streetSupportRecords: [],
   };
@@ -481,10 +538,11 @@ export function migrateV4SimState(value: unknown): SimState {
   if (!validateV4SimState(value)) throw new Error("旧版 v4 存档校验失败，不能迁移这份库存或金额。");
   const previous = structuredClone(value);
   const migrated: SimState = {
-    ...previous, ...migrateCardPayments(previous), schemaVersion: 12, renovation: createInitialRenovation(), streetSupportRecords: [],
+    ...previous, ...migrateCardPayments(previous), schemaVersion: 13, renovation: createInitialRenovationV2(),
+    equipment: createEquipmentAssetState(), streetSupportRecords: [],
     day: migrateBusinessDay(previous), recyclingBatches: [], recyclingRecords: [],
     settlements: previous.settlements.map((record) => ({ ...record, recycledCrates: 0, recyclingIncomePence: 0, expansionSpendPence: 0,
-      communitySupportCount: 0, communityCashPence: 0 })),
+      communitySupportCount: 0, communityCashPence: 0, equipmentSpendPence: 0 })),
     customer: { ...previous.customer, shoppingList: previous.customer.phase === "outside" ? [] : [...LEGACY_PRODUCT_IDS], contentVersion: 1 },
     purchases: previous.purchases.map((purchase) => ({ ...purchase, lines: pairLines(purchase.pairs), receivedDay: purchase.dayNumber })),
   };
@@ -498,10 +556,11 @@ export function migrateV5SimState(value: unknown): SimState {
   if (!validateV5SimState(value)) throw new Error("旧版 v5 存档校验失败，不能迁移这份库存或金额。");
   const previous = structuredClone(value);
   const migrated: SimState = {
-    ...previous, ...migrateCardPayments(previous), schemaVersion: 12, renovation: createInitialRenovation(), streetSupportRecords: [],
+    ...previous, ...migrateCardPayments(previous), schemaVersion: 13, renovation: createInitialRenovationV2(),
+    equipment: createEquipmentAssetState(), streetSupportRecords: [],
     day: migrateBusinessDay(previous), recyclingBatches: [], recyclingRecords: [],
     settlements: previous.settlements.map((record) => ({ ...record, recycledCrates: 0, recyclingIncomePence: 0, expansionSpendPence: 0,
-      communitySupportCount: 0, communityCashPence: 0 })),
+      communitySupportCount: 0, communityCashPence: 0, equipmentSpendPence: 0 })),
     customer: { ...previous.customer, shoppingList: previous.customer.phase === "outside" ? [] : [...LEGACY_PRODUCT_IDS], contentVersion: 1 },
     purchases: previous.purchases.map((purchase) => ({ ...purchase, lines: pairLines(purchase.pairs) })),
   };
@@ -515,10 +574,11 @@ export function migrateV6SimState(value: unknown): SimState {
   if (!validateV6SimState(value)) throw new Error("旧版 v6 存档校验失败，不能迁移这份库存或金额。");
   const previous = structuredClone(value);
   const migrated: SimState = {
-    ...previous, ...migrateCardPayments(previous), schemaVersion: 12, renovation: createInitialRenovation(), streetSupportRecords: [],
+    ...previous, ...migrateCardPayments(previous), schemaVersion: 13, renovation: createInitialRenovationV2(),
+    equipment: createEquipmentAssetState(), streetSupportRecords: [],
     day: migrateBusinessDay(previous), recyclingBatches: [], recyclingRecords: [],
     settlements: previous.settlements.map((record) => ({ ...record, recycledCrates: 0, recyclingIncomePence: 0, expansionSpendPence: 0,
-      communitySupportCount: 0, communityCashPence: 0 })),
+      communitySupportCount: 0, communityCashPence: 0, equipmentSpendPence: 0 })),
     customer: { ...previous.customer, contentVersion: 1 },
   };
   recordReceivedCrateBatches(migrated, migrated.purchases.filter((purchase) => purchase.receivedDay !== null));
@@ -530,9 +590,10 @@ export function migrateV6SimState(value: unknown): SimState {
 export function migrateV7SimState(value: unknown): SimState {
   if (!validateV7SimState(value)) throw new Error("旧版 v7 存档校验失败，不能迁移这份库存或金额。");
   const previous = structuredClone(value);
-  const migrated: SimState = { ...previous, ...migrateCardPayments(previous), schemaVersion: 12, renovation: createInitialRenovation(),
+  const migrated: SimState = { ...previous, ...migrateCardPayments(previous), schemaVersion: 13,
+    renovation: createInitialRenovationV2(), equipment: createEquipmentAssetState(),
     customer: { ...previous.customer, contentVersion: 1 }, streetSupportRecords: [], day: migrateBusinessDay(previous),
-    settlements: previous.settlements.map((record) => ({ ...record, expansionSpendPence: 0, communitySupportCount: 0, communityCashPence: 0 })) };
+    settlements: previous.settlements.map((record) => ({ ...record, expansionSpendPence: 0, communitySupportCount: 0, communityCashPence: 0, equipmentSpendPence: 0 })) };
   if (!validateSimState(migrated)) throw new Error("旧版 v7 存档迁移校验失败，原始存档未改变。");
   return migrated;
 }
@@ -541,9 +602,10 @@ export function migrateV7SimState(value: unknown): SimState {
 export function migrateV8SimState(value: unknown): SimState {
   if (!validateV8SimState(value)) throw new Error("旧版 v8 存档校验失败，不能迁移这份库存、现金或日结。");
   const previous = structuredClone(value);
-  const migrated: SimState = { ...previous, ...migrateCashPaymentLedger(previous), schemaVersion: 12, renovation: createInitialRenovation(),
+  const migrated: SimState = { ...previous, ...migrateCashPaymentLedger(previous), schemaVersion: 13,
+    renovation: createInitialRenovationV2(), equipment: createEquipmentAssetState(),
     customer: { ...previous.customer, contentVersion: 1 }, streetSupportRecords: [], day: migrateBusinessDay(previous),
-    settlements: previous.settlements.map((record) => ({ ...record, expansionSpendPence: 0, communitySupportCount: 0, communityCashPence: 0 })) };
+    settlements: previous.settlements.map((record) => ({ ...record, expansionSpendPence: 0, communitySupportCount: 0, communityCashPence: 0, equipmentSpendPence: 0 })) };
   if (!validateSimState(migrated)) throw new Error("旧版 v8 存档迁移校验失败，原始存档未改变。");
   return migrated;
 }
@@ -553,8 +615,10 @@ export function migrateV9SimState(value: unknown): SimState {
   if (!validateV9SimState(value)) throw new Error("旧版 v9 存档校验失败，不能迁移这份营业时间、库存或资金。");
   const previous = structuredClone(value);
   const migrated: SimState = {
-    ...previous, ...migrateCashPaymentLedger(previous), schemaVersion: 12, renovation: createInitialRenovation(), customer: { ...previous.customer, contentVersion: 1 }, streetSupportRecords: [],
-    settlements: previous.settlements.map((record) => ({ ...record, expansionSpendPence: 0, communitySupportCount: 0, communityCashPence: 0 })),
+    ...previous, ...migrateCashPaymentLedger(previous), schemaVersion: 13,
+    renovation: createInitialRenovationV2(), equipment: createEquipmentAssetState(),
+    customer: { ...previous.customer, contentVersion: 1 }, streetSupportRecords: [],
+    settlements: previous.settlements.map((record) => ({ ...record, expansionSpendPence: 0, communitySupportCount: 0, communityCashPence: 0, equipmentSpendPence: 0 })),
   };
   if (!validateSimState(migrated)) throw new Error("旧版 v9 存档迁移校验失败，原始存档未改变。");
   return migrated;
@@ -565,19 +629,44 @@ export function migrateV10SimState(value: unknown): SimState {
   if (!validateV10SimState(value)) throw new Error("旧版 v10 存档校验失败，不能迁移这份装修、库存或资金。");
   const previous = structuredClone(value);
   const migrated: SimState = {
-    ...previous, ...migrateCashPaymentLedger(previous), schemaVersion: 12, customer: { ...previous.customer, contentVersion: 1 }, streetSupportRecords: [],
-    settlements: previous.settlements.map((record) => ({ ...record, communitySupportCount: 0, communityCashPence: 0 })),
+    ...previous, ...migrateCashPaymentLedger(previous), schemaVersion: 13,
+    renovation: { ...previous.renovation, secondExpansionDay: null,
+      layout: { ...previous.renovation.layout, equipment: [] } },
+    equipment: createEquipmentAssetState(), customer: { ...previous.customer, contentVersion: 1 }, streetSupportRecords: [],
+    settlements: previous.settlements.map((record) => ({ ...record, communitySupportCount: 0, communityCashPence: 0, equipmentSpendPence: 0 })),
   };
   if (!validateSimState(migrated)) throw new Error("旧版 v10 存档迁移校验失败，原始存档未改变。");
   return migrated;
 }
 
-/** v11 community, renovation and business records stay exact; v2 till tracking begins now. */
+/** v11 community, renovation and business records stay exact; finite till and equipment tracking begin now. */
 export function migrateV11SimState(value: unknown): SimState {
   if (!validateV11SimState(value)) throw new Error("旧版 v11 存档校验失败，不能迁移这份顾客、装修、库存或资金。");
   const previous = structuredClone(value);
-  const migrated: SimState = { ...previous, ...migrateCashPaymentLedger(previous), schemaVersion: 12 };
+  const migrated: SimState = {
+    ...previous, ...migrateCashPaymentLedger(previous), schemaVersion: 13,
+    renovation: { ...previous.renovation, secondExpansionDay: null,
+      layout: { ...previous.renovation.layout, equipment: [] } },
+    equipment: createEquipmentAssetState(),
+    settlements: previous.settlements.map((record) => ({ ...record, equipmentSpendPence: 0 })),
+  };
   if (!validateSimState(migrated)) throw new Error("旧版 v11 存档迁移校验失败，原始存档未改变。");
+  return migrated;
+}
+
+/** v12 already has an auditable finite till; add equipment without changing any payment record or denomination. */
+export function migrateV12SimState(value: unknown): SimState {
+  if (!validateV12SimState(value)) throw new Error("旧版 v12 存档校验失败，不能迁移这份钱箱、顾客、装修、库存或资金。");
+  const previous = structuredClone(value);
+  const migrated: SimState = {
+    ...previous,
+    schemaVersion: 13,
+    renovation: { ...previous.renovation, secondExpansionDay: null,
+      layout: { ...previous.renovation.layout, equipment: [] } },
+    equipment: createEquipmentAssetState(),
+    settlements: previous.settlements.map((record) => ({ ...record, equipmentSpendPence: 0 })),
+  };
+  if (!validateSimState(migrated)) throw new Error("旧版 v12 存档迁移校验失败，原始存档未改变。");
   return migrated;
 }
 
@@ -648,7 +737,8 @@ export function getPurchaseOffer(state: SimState, selection: readonly PurchaseLi
       return denied(`${PRODUCTS[productId].nameZh}箱最多容纳 ${CRATE_CAPACITY} 件，请先上架或卖出部分商品。`);
     }
     // Keep room to cancel an unpaid basket safely even after shelf replenishment.
-    if (unsoldItems(state, productId).length + quantity > CRATE_CAPACITY + capacityFor(state)) {
+    const displayCapacity = productInStoreCapacity(state.upgraded, state.equipment, state.renovation.layout.equipment, productId);
+    if (unsoldItems(state, productId).length + quantity > CRATE_CAPACITY + displayCapacity) {
       return denied(`${PRODUCTS[productId].nameZh}暂存空间不足，请先完成当前交易或卖出部分商品。`);
     }
   }
@@ -753,6 +843,14 @@ export function getShoppingProduct(state: SimState): ProductId | null {
     : state.customer.phase === "to-bread" ? state.customer.shoppingList[1] ?? null : null;
 }
 
+/** World routing and the reducer share this exact deterministic shelf source. */
+export function getShoppingShelfLocation(state: SimState): ShelfStockLocation | null {
+  const productId = getShoppingProduct(state);
+  if (!productId) return null;
+  const item = state.items.find((candidate) => candidate.productId === productId && candidate.location.kind === "shelf");
+  return item?.location.kind === "shelf" ? { ...item.location } : null;
+}
+
 export function canStartCustomer(state: SimState): boolean {
   return ((state.day.phase === "preparing" && state.customer.phase === "outside")
       || (state.day.phase === "open" && state.day.elapsedOpenMs < BUSINESS_DURATION_MS && state.customer.phase === "complete"))
@@ -780,23 +878,30 @@ function summaryForRange(
   const revenuePence = transactions.reduce((total, transaction) => total + transaction.amountPence, 0);
   const procurementPence = purchases.reduce((total, purchase) => total + purchase.amountPence, 0);
   const upgradeSpendPence = state.upgradeDay === day.number ? UPGRADE_COST_PENCE : 0;
-  const expansionSpendPence = (state.schemaVersion === 10 || state.schemaVersion === 11 || state.schemaVersion === 12)
+  const firstExpansionSpend = (state.schemaVersion === 10 || state.schemaVersion === 11
+      || state.schemaVersion === 12 || state.schemaVersion === 13)
     && state.renovation.expansionDay === day.number ? SHOP_EXPANSION_COST_PENCE : 0;
+  const secondExpansionSpend = state.schemaVersion === 13 && state.renovation.secondExpansionDay === day.number
+    ? SECOND_SHOP_EXPANSION_COST_PENCE : 0;
+  const expansionSpendPence = firstExpansionSpend + secondExpansionSpend;
   const recycling = state.schemaVersion === 7 || state.schemaVersion === 8 || state.schemaVersion === 9
-    || state.schemaVersion === 10 || state.schemaVersion === 11 || state.schemaVersion === 12
+    || state.schemaVersion === 10 || state.schemaVersion === 11 || state.schemaVersion === 12 || state.schemaVersion === 13
     ? state.recyclingRecords.filter((record) => record.dayNumber === day.number) : [];
   const recyclingIncomePence = recycling.reduce((sum, record) => sum + record.amountPence, 0);
-  const community = state.schemaVersion === 11 || state.schemaVersion === 12
+  const community = state.schemaVersion === 11 || state.schemaVersion === 12 || state.schemaVersion === 13
     ? state.streetSupportRecords.filter((record) => record.dayNumber === day.number) : [];
   const communityCashPence = community.reduce((sum, record) => sum + record.amountPence, 0);
+  const equipmentSpendPence = state.schemaVersion === 13
+    ? state.equipment.purchases.filter((record) => record.purchasedDay === day.number).reduce((sum, record) => sum + record.amountPence, 0)
+    : 0;
   return {
     dayNumber: day.number, paidCustomers: transactions.length, targetCustomers: day.targetCustomers,
     openingCashPence: day.openingCashPence, revenuePence, procurementPence, costOfGoodsPence,
-    grossProfitPence: revenuePence - costOfGoodsPence, upgradeSpendPence, expansionSpendPence,
+    grossProfitPence: revenuePence - costOfGoodsPence, upgradeSpendPence, expansionSpendPence, equipmentSpendPence,
     recycledCrates: recycling.length, recyclingIncomePence,
     communitySupportCount: community.length, communityCashPence,
     closingCashPence: day.openingCashPence + revenuePence + recyclingIncomePence - procurementPence - upgradeSpendPence
-      - expansionSpendPence - communityCashPence,
+      - expansionSpendPence - equipmentSpendPence - communityCashPence,
     remainingStockUnits: day.openingStockUnits + purchases.reduce((sum, purchase) => sum + purchase.itemIds.length, 0)
       - transactions.reduce((sum, sale) => sum + sale.itemIds.length, 0),
     remainingInventoryValuePence: day.openingInventoryValuePence + procurementPence - costOfGoodsPence,
@@ -867,7 +972,7 @@ export function getObjective(state: SimState): string {
     if (heldProduct) {
       const product = PRODUCTS[heldProduct];
       if (!state.inspectedProducts.includes(heldProduct)) return `先按 F 近看手里的${product.nameZh}，把 ${product.nameEn} 和实物对应起来。`;
-      if (countAt(state, heldProduct, "shelf") >= capacityFor(state)) return `${product.nameZh}货架已满，先按 G 放下手里的货物。`;
+      if (countAt(state, heldProduct, "shelf") >= productInStoreCapacity(state.upgraded, state.equipment, state.renovation.layout.equipment, heldProduct)) return `${product.nameZh}货架已满，先按 G 放下手里的货物。`;
       const remaining = crate ? state.items.filter((entry) => entry.location.kind === "crate" && entry.location.crateId === crate.id).length : 1;
       const shelfName = heldProduct === "milk" ? "牛奶冰柜" : heldProduct === "bread" ? "面包架" : `${product.nameZh}货位`;
       return `把手里的${product.nameZh}摆上${shelfName}，看向货架按 E，逐件上架${crate ? `（箱内剩 ${remaining} 件）` : ""}。`;
@@ -899,25 +1004,22 @@ export function getObjective(state: SimState): string {
   return "整理已购商品并给货架补货，准备接待下一位顾客。";
 }
 
-function freeSlot(state: SimState, productId: ProductId): number | undefined {
-  for (let slot = 0; slot < capacityFor(state); slot += 1) {
-    if (!state.items.some((item) => item.location.kind === "shelf" && item.location.productId === productId && item.location.slot === slot)) return slot;
-  }
-  return undefined;
+function freeSlot(state: SimState, productId: ProductId): ShelfStockLocation | null {
+  return findFirstEmptyShelfSlot(state.items, productId, state.upgraded, state.equipment, state.renovation.layout.equipment);
 }
 
 function returnUnpaidItem(state: SimState, item: SimItem): boolean {
   const slot = freeSlot(state, item.productId);
-  if (slot === undefined && !state.crates.some((crate) => crate.productId === item.productId)) {
+  if (slot === null && !state.crates.some((crate) => crate.productId === item.productId)) {
     const position = SAFE_DROP_POINTS.find((point) => !state.crates.some((crate) => positionEquals(crate.position, point))
       && !playerOccupiesDrop(state, item.productId, point));
     if (!position) return false;
     // A return container has no new paid source; recycling it cannot mint another reward.
     state.crates.push({ id: crateIdFor(item.productId), productId: item.productId, position: { ...position } });
   }
-  item.location = slot === undefined
+  item.location = slot === null
     ? { kind: "crate", crateId: crateIdFor(item.productId) }
-    : { kind: "shelf", productId: item.productId, slot };
+    : slot;
   return true;
 }
 
@@ -1031,22 +1133,24 @@ export function reduceSim(state: SimState, command: SimCommand): SimResult {
       if (!item) return reject("找不到手里的商品。");
       const origin = held.returnTo;
       if (origin.kind === "crate") item.location = { ...origin };
-      else if (!next.items.some((other) => other.location.kind === "shelf" && other.location.productId === origin.productId && other.location.slot === origin.slot)) item.location = { ...origin };
+      else if (!next.items.some((other) => other.location.kind === "shelf" && shelfSlotKey(other.location) === shelfSlotKey(origin))) item.location = { ...origin };
       else if (!returnUnpaidItem(next, item)) return reject("暂时没有安全空位归还商品，请先搬开或回收空箱。");
       next.held = { kind: "none" };
       return finish("商品已放回。");
     }
     case "STOCK": {
       if (!isProductId(command.productId)) return reject("没有对应的货架。");
-      if (!Number.isInteger(command.slot) || command.slot < 0 || command.slot >= capacityFor(next)) return reject("这个位置不可用，或需要先升级容量。");
-      if (next.items.some((item) => item.location.kind === "shelf" && item.location.productId === command.productId && item.location.slot === command.slot)) return reject("这个货位已有商品，请选择空位。");
+      const location: ShelfStockLocation = { kind: "shelf", productId: command.productId, slot: command.slot,
+        ...(command.equipmentId === undefined ? {} : { equipmentId: command.equipmentId }) };
+      if (!isValidShelfStockLocation(location, next.upgraded, next.equipment, next.renovation.layout.equipment, command.productId)) return reject("这个位置不可用，或需要先摆入对应设备、选择匹配商品或升级原货架容量。");
+      if (next.items.some((item) => item.location.kind === "shelf" && shelfSlotKey(item.location) === shelfSlotKey(location))) return reject("这个货位已有商品，请选择空位。");
       const held = next.held;
       const item = held.kind === "crate"
         ? next.items.find((candidate) => candidate.location.kind === "crate" && candidate.location.crateId === held.crateId)
         : held.kind === "item" ? next.items.find((candidate) => candidate.id === held.itemId) : undefined;
       if (!item) return reject(held.kind === "crate" ? "货箱已经空了。" : "先抱起货箱或拿起一件商品。");
       if (item.productId !== command.productId) return reject(`${PRODUCTS[item.productId].nameZh}应放在标有同种商品的货架上。`);
-      item.location = { kind: "shelf", productId: command.productId, slot: command.slot };
+      item.location = location;
       if (held.kind === "item") next.held = { kind: "none" };
       return finish(`${PRODUCTS[item.productId].nameEn} · 上架成功。`);
     }
@@ -1090,7 +1194,9 @@ export function reduceSim(state: SimState, command: SimCommand): SimResult {
       if (next.customer.phase === "to-milk" || next.customer.phase === "to-bread") {
         const productId = getShoppingProduct(next);
         if (!productId) return reject("当前顾客没有对应的购物项目。");
-        const item = next.items.find((candidate) => candidate.productId === productId && candidate.location.kind === "shelf");
+        const shelf = getShoppingShelfLocation(next);
+        const item = shelf ? next.items.find((candidate) => candidate.location.kind === "shelf"
+          && shelfSlotKey(candidate.location) === shelfSlotKey(shelf)) : undefined;
         if (!item) return reject(`顾客还没拿到${PRODUCTS[productId].nameZh}，请先补货。`);
         item.location = { kind: "basket" };
         next.customer.phase = next.customer.phase === "to-milk" && next.customer.shoppingList.length > 1 ? "to-bread" : "to-checkout";
@@ -1213,12 +1319,28 @@ export function reduceSim(state: SimState, command: SimCommand): SimResult {
     }
     case "BUY_SPACE_EXPANSION": {
       const offer = getShopExpansionOffer(next);
-      if (!offer.allowed) return reject(offer.reason ?? "当前不能扩建店面。");
+      if (!offer.allowed || offer.targetStage === null) return reject(offer.reason ?? "当前不能扩建店面。");
       next.cashPence -= offer.costPence;
-      next.renovation.layout.expansion = 1;
-      next.renovation.expansionDay = next.day.number;
+      next.renovation.layout.expansion = offer.targetStage;
+      if (offer.targetStage === 1) next.renovation.expansionDay = next.day.number;
+      else next.renovation.secondExpansionDay = next.day.number;
       if (next.day.phase === "settled") next.settlements[next.settlements.length - 1] = settlementFor(next);
-      return finish("店面已向后扩建 3 米，支出 £15 已单独记入账本；设备、库存和货架容量保持不变。");
+      return finish(`店面已完成第 ${offer.targetStage} 次扩建，向后增加 3 米，支出 £${(offer.costPence / 100).toFixed(2)} 已单独记账；设备、库存和货架容量保持不变。`);
+    }
+    case "BUY_EQUIPMENT": {
+      const reason = shopRenovationReason(next);
+      if (reason) return reject(reason.replace("移动设备", "购买设备"));
+      const purchase = purchaseEquipment(next.equipment, next.cashPence, {
+        purchaseId: command.purchaseId,
+        assetId: command.assetId,
+        productId: command.productId,
+        purchasedDay: next.day.number,
+      });
+      if (!purchase.changed || !purchase.instance) return reject(purchase.reason ?? "当前不能购买这台设备。");
+      next.equipment = purchase.state;
+      next.cashPence = purchase.cashPence;
+      if (next.day.phase === "settled") next.settlements[next.settlements.length - 1] = settlementFor(next);
+      return finish(`已购买${EQUIPMENT_COMMERCE_CATALOG[purchase.instance.assetId].nameZh} -£${(purchase.spentPence / 100).toFixed(2)}；设备已进入仓库，请在自由装修中摆入店内。`);
     }
     case "SUPPORT_STREET_NEIGHBOUR": {
       if (next.day.phase === "settled") return reject("今天已经日结，社区现金帮助请记入下一个营业日。");
@@ -1239,10 +1361,16 @@ export function reduceSim(state: SimState, command: SimCommand): SimResult {
       if (reason) return reject(reason);
       const validation = validateShopLayout(command.layout, getShopLayoutObstacles(next));
       if (!validation.valid) return reject(validation.reason ?? "布局不可用，请保留设备和顾客通道。");
+      const equipmentValidation = validateEquipmentLayout(command.layout as EquipmentShopLayout, next.equipment, getShopLayoutObstacles(next));
+      if (!equipmentValidation.valid) return reject(equipmentValidation.reason ?? "已购设备布局不可用，请保留取货通道。");
       if (command.layout.expansion !== next.renovation.layout.expansion) return reject("移动设备不能改变店面面积，请先购买已开放的店面扩建。");
-      if (layoutEquals(command.layout, next.renovation.layout)) return reject("设备位置和朝向没有变化，不会重复记录装修。");
+      const incoming = command.layout as EquipmentShopLayout;
+      const removedWithStock = next.renovation.layout.equipment.find((placement) => !incoming.equipment.some((entry) => entry.instanceId === placement.instanceId)
+        && equipmentHasStock(next.items, placement.instanceId));
+      if (removedWithStock) return reject("要收回的设备上还有商品，请先把商品移回货箱或其他货位。");
+      if (fullLayoutEquals(incoming, next.renovation.layout)) return reject("设备位置和朝向没有变化，不会重复记录装修。");
       if (next.renovation.layoutRevision >= Number.MAX_SAFE_INTEGER) return reject("装修记录已达到安全上限，本次布局未改变。");
-      next.renovation.layout = structuredClone(command.layout);
+      next.renovation.layout = structuredClone(incoming);
       next.renovation.layoutRevision += 1;
       return finish("设备布局已保存，库存、订单和资金均未改变。");
     }
@@ -1323,30 +1451,50 @@ export function canUnlockAdvancedUpgrade(input: {
     && input.requiredTaskIds.every((id) => id.length > 0 && input.completedIndependentTaskIds.includes(id));
 }
 
-function validPose(value: unknown, version: 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12, expansion: 0 | 1 = 0): value is PlayerPose {
+function validPose(value: unknown, version: 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13, expansion: ShopExpansionStage = 0): value is PlayerPose {
   return isRecord(value) && isFiniteNumber(value.x) && isFiniteNumber(value.z) && isFiniteNumber(value.yaw) && isFiniteNumber(value.pitch)
     && (version >= 5 ? isWalkablePosition({ x: value.x, z: value.z }, 0, version >= 10 ? expansion : 0)
       : value.x >= INDOOR_BOUNDS.minX && value.x <= INDOOR_BOUNDS.maxX && value.z >= INDOOR_BOUNDS.minZ && value.z <= INDOOR_BOUNDS.maxZ)
     && Math.abs(value.yaw) <= Math.PI + 0.00001 && Math.abs(value.pitch) <= 1.35;
 }
 
-function validReturnLocation(value: unknown, productId: ProductId, capacity: number): value is ReturnLocation {
+function validReturnLocation(
+  value: unknown,
+  productId: ProductId,
+  capacity: number,
+  equipment?: { state: EquipmentAssetState; placements: readonly EquipmentFloorPlacement[] },
+): value is ReturnLocation {
   if (!isRecord(value)) return false;
   if (value.kind === "crate") return value.crateId === crateIdFor(productId);
-  return value.kind === "shelf" && value.productId === productId && isInteger(value.slot) && value.slot >= 0 && value.slot < capacity;
+  if (value.kind !== "shelf") return false;
+  return equipment
+    ? isValidShelfStockLocation(value, capacity === 8, equipment.state, equipment.placements, productId)
+    : value.equipmentId === undefined && value.productId === productId && isInteger(value.slot) && value.slot >= 0 && value.slot < capacity;
 }
 
 /** Shared physical ownership checks; S0 additionally requires its fixed eight-unit grant. */
-function validateWorldState(value: unknown, version: 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12): value is EconomySnapshot | LegacySimState {
+function validateWorldState(value: unknown, version: 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13): value is EconomySnapshot | LegacySimState {
   const legacy = version === 3;
   const knownProduct = (input: unknown): input is ProductId => version >= 6 ? isProductId(input) : isLegacyProductId(input);
   if (!isRecord(value) || value.schemaVersion !== version || !isInteger(value.revision) || value.revision < 0
     || typeof value.upgraded !== "boolean" || !isInteger(value.cashPence) || value.cashPence < 0) return false;
-  let expansion: 0 | 1 = 0;
+  let expansion: ShopExpansionStage = 0;
   if (version >= 10) {
-    if (!isRecord(value.day) || !isInteger(value.day.number) || value.day.number < 1
-      || !validateRenovation(value.renovation, value.day.number)) return false;
-    expansion = value.renovation.layout.expansion;
+    if (!isRecord(value.day) || !isInteger(value.day.number) || value.day.number < 1) return false;
+    if (version === 13) {
+      if (!validateRenovation(value.renovation, value.day.number)) return false;
+      expansion = value.renovation.layout.expansion;
+    } else {
+      if (!validateLegacyRenovation(value.renovation, value.day.number)) return false;
+      expansion = value.renovation.layout.expansion;
+    }
+  }
+  let equipmentContext: { state: EquipmentAssetState; placements: readonly EquipmentFloorPlacement[] } | undefined;
+  if (version === 13) {
+    if (!validateEquipmentAssetState(value.equipment) || !isRecord(value.renovation)
+      || !isRecord(value.renovation.layout) || !Array.isArray(value.renovation.layout.equipment)) return false;
+    equipmentContext = { state: value.equipment, placements: value.renovation.layout.equipment };
+    if (!validateEquipmentLayout(value.renovation.layout as unknown as EquipmentShopLayout, value.equipment).valid) return false;
   }
   if (!validPose(value.playerPose, version, expansion)) return false;
   if (!Array.isArray(value.crates) || (version >= 6 ? value.crates.length < (version >= 7 ? 0 : 2) || value.crates.length > PRODUCT_IDS.length : value.crates.length !== 2)
@@ -1378,14 +1526,15 @@ function validateWorldState(value: unknown, version: 3 | 4 | 5 | 6 | 7 | 8 | 9 |
       || (legacy && ![1, 2, 3, 4].some((number) => item.id === `${item.productId}-${number}`))
       || item.id.length === 0 || item.id.length > 128 || itemIds.has(item.id) || !isRecord(item.location)) return false;
     const location = item.location;
-    if (location.kind === "crate" || location.kind === "shelf") {
-      if (!validReturnLocation(location, item.productId, capacity)) return false;
-      if (location.kind === "crate" && !crateIds.has(crateIdFor(item.productId))) return false;
-      if (location.kind === "shelf") {
-        const key = `${location.productId}:${location.slot}`;
-        if (occupiedSlots.has(key)) return false;
-        occupiedSlots.add(key);
-      }
+    if (location.kind === "crate") {
+      if (!validReturnLocation(location, item.productId, capacity, equipmentContext)
+        || !crateIds.has(crateIdFor(item.productId))) return false;
+    } else if (location.kind === "shelf") {
+      if (!validReturnLocation(location, item.productId, capacity, equipmentContext)) return false;
+      const shelfLocation = location as unknown as ShelfStockLocation;
+      const key = equipmentContext ? shelfSlotKey(shelfLocation) : `${shelfLocation.productId}:${shelfLocation.slot}`;
+      if (occupiedSlots.has(key)) return false;
+      occupiedSlots.add(key);
     } else if (location.kind === "delivery") {
       if (version < 5 || !validOrderId(location.orderId)) return false;
     } else if (location.kind === "sold") {
@@ -1403,7 +1552,7 @@ function validateWorldState(value: unknown, version: 3 | 4 | 5 | 6 | 7 | 8 | 9 |
     if (handItems.length !== 0 || typeof value.held.crateId !== "string" || !crateIds.has(value.held.crateId)) return false;
   } else if (value.held.kind === "item") {
     const item = handItems[0];
-    if (handItems.length !== 1 || !item || value.held.itemId !== item.id || !validReturnLocation(value.held.returnTo, item.productId, capacity)) return false;
+    if (handItems.length !== 1 || !item || value.held.itemId !== item.id || !validReturnLocation(value.held.returnTo, item.productId, capacity, equipmentContext)) return false;
     if (value.held.returnTo.kind === "crate" && !crateIds.has(crateIdFor(item.productId))) return false;
   } else return false;
   let shoppingList: ProductId[] = [...LEGACY_PRODUCT_IDS];
@@ -1430,11 +1579,11 @@ function validateWorldState(value: unknown, version: 3 | 4 | 5 | 6 | 7 | 8 | 9 |
   if (version >= 8) {
     if (activeCustomerPhase(value.customer.phase)) {
       const amountPence = shoppingList.reduce((sum, productId) => sum + PRODUCTS[productId].pricePence, 0);
-      if (version === 12) {
+      if (version === 12 || version === 13) {
         if (!validatePaymentState(value.payment, amountPence)) return false;
         const payment = value.payment as PaymentState;
         if (payment.method === "cash" && payment.tenderedCashRecorded
-          && !selectedChangeFitsDrawer((value as unknown as SimState).cashDrawer, payment.selectedChange)) return false;
+          && !selectedChangeFitsDrawer((value as unknown as SimState | SimStateV12).cashDrawer, payment.selectedChange)) return false;
       } else if (!validateLegacyPaymentState(value.payment, amountPence)) return false;
       const payment = value.payment as PaymentState | LegacyPaymentState;
       const scannedIds = value.scannedIds;
@@ -1470,7 +1619,7 @@ function validateWorldState(value: unknown, version: 3 | 4 | 5 | 6 | 7 | 8 | 9 |
         || !isInteger(transaction.tenderedPence) || !isInteger(transaction.changePence)
         || transaction.changePence < 0 || transaction.tenderedPence < transaction.amountPence
         || transaction.changePence !== transaction.tenderedPence - transaction.amountPence) return false;
-      if (version === 12) {
+      if (version === 12 || version === 13) {
         if (!Array.isArray(transaction.tenderedCash) || !Array.isArray(transaction.changeCash)
           || transaction.tenderedCash.some((piece) => !isCashDenomination(piece))
           || transaction.changeCash.some((piece) => !isCashDenomination(piece))
@@ -1505,8 +1654,8 @@ function validateWorldState(value: unknown, version: 3 | 4 | 5 | 6 | 7 | 8 | 9 |
     grossPence += transaction.amountPence;
     previousCustomerNumber = transaction.customerNumber;
   }
-  if (version === 12) {
-    const current = value as unknown as SimState;
+  if (version === 12 || version === 13) {
+    const current = value as unknown as SimState | SimStateV12;
     if (!validateCashDrawerState(current.cashDrawer) || !validateCashDrawerState(current.cashDrawerOpening)
       || !isInteger(current.cashDrawerTransactionStart)
       || current.cashDrawerTransactionStart < 0 || current.cashDrawerTransactionStart > current.transactions.length) return false;
@@ -1548,6 +1697,7 @@ const SUMMARY_FIELDS = [
 ] as const;
 const RECYCLING_SUMMARY_FIELDS = ["recycledCrates", "recyclingIncomePence"] as const;
 const COMMUNITY_SUMMARY_FIELDS = ["communitySupportCount", "communityCashPence"] as const;
+const EQUIPMENT_SUMMARY_FIELDS = ["equipmentSpendPence"] as const;
 
 /** Constant-time checks shared by the clock-only reducer path and the full save validator. */
 function validBusinessClock(day: unknown): boolean {
@@ -1565,7 +1715,7 @@ function validBusinessClock(day: unknown): boolean {
 }
 
 /** The ledger proves each item source, purchase quantity, paid sale, daily carry and cash balance. */
-function validateEconomyState(value: unknown, version: 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12): value is EconomySnapshot {
+function validateEconomyState(value: unknown, version: 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13): value is EconomySnapshot {
   if (!validateWorldState(value, version) || value.schemaVersion === 3) return false;
   if (value.customerSeed !== undefined && (!isInteger(value.customerSeed) || value.customerSeed < 0 || value.customerSeed > 0xffffffff)) return false;
   if (value.openingKind !== "first-day" && value.openingKind !== "legacy-s0") return false;
@@ -1576,7 +1726,8 @@ function validateEconomyState(value: unknown, version: 4 | 5 | 6 | 7 | 8 | 9 | 1
     || !Array.isArray(value.purchases) || !isInteger(value.day.purchaseStart) || value.day.purchaseStart < 0 || value.day.purchaseStart > value.purchases.length
     || !Array.isArray(value.settlements)
     || [value.day.openingCashPence, value.day.openingInventoryValuePence, value.day.openingStockUnits].some((amount) => !isInteger(amount) || amount < 0)) return false;
-  if (value.schemaVersion === 9 || value.schemaVersion === 10 || value.schemaVersion === 11 || value.schemaVersion === 12) {
+  if (value.schemaVersion === 9 || value.schemaVersion === 10 || value.schemaVersion === 11
+    || value.schemaVersion === 12 || value.schemaVersion === 13) {
     if (!validBusinessClock(value.day)) return false;
     const awaitingCustomer = value.day.phase === "open" && value.customer.phase === "complete";
     if (awaitingCustomer !== (value.day.nextCustomerAtMs !== null)) return false;
@@ -1640,7 +1791,7 @@ function validateEconomyState(value: unknown, version: 4 | 5 | 6 | 7 | 8 | 9 | 1
   if (version === 6 && (value.crates.length !== expectedCrateIds.size || value.crates.some((crate) => !expectedCrateIds.has(crate.id)))) return false;
   let recyclingIncomePence = 0;
   if (value.schemaVersion === 7 || value.schemaVersion === 8 || value.schemaVersion === 9
-    || value.schemaVersion === 10 || value.schemaVersion === 11 || value.schemaVersion === 12) {
+    || value.schemaVersion === 10 || value.schemaVersion === 11 || value.schemaVersion === 12 || value.schemaVersion === 13) {
     if (!Array.isArray(value.recyclingRecords) || !Array.isArray(value.recyclingBatches)) return false;
     const sourceBatches = new Map<string, string>();
     const batchById = new Map<string, SimRecyclingBatch>();
@@ -1706,7 +1857,7 @@ function validateEconomyState(value: unknown, version: 4 | 5 | 6 | 7 | 8 | 9 | 1
     }
   }
   let communityCashPence = 0;
-  if (value.schemaVersion === 11 || value.schemaVersion === 12) {
+  if (value.schemaVersion === 11 || value.schemaVersion === 12 || value.schemaVersion === 13) {
     if (!Array.isArray(value.streetSupportRecords)) return false;
     let previousSupportDay = 0;
     for (const record of value.streetSupportRecords) {
@@ -1719,18 +1870,34 @@ function validateEconomyState(value: unknown, version: 4 | 5 | 6 | 7 | 8 | 9 | 1
       communityCashPence += record.amountPence;
     }
   }
+  let equipmentSpendPence = 0;
+  if (value.schemaVersion === 13) {
+    let previousEquipmentDay = 0;
+    for (const purchase of value.equipment.purchases) {
+      if (purchase.purchasedDay < previousEquipmentDay || purchase.purchasedDay > value.day.number) return false;
+      previousEquipmentDay = purchase.purchasedDay;
+      equipmentSpendPence += purchase.amountPence;
+    }
+  }
   for (const productId of PRODUCT_IDS) {
     const held = value.held;
     const reserved = held.kind === "item" && held.returnTo.kind === "crate" && held.returnTo.crateId === crateIdFor(productId) ? 1 : 0;
+    const storeCapacity = value.schemaVersion === 13
+      ? productInStoreCapacity(value.upgraded, value.equipment, value.renovation.layout.equipment, productId)
+      : value.upgraded ? 8 : 4;
     if (countAt(value, productId, "crate") + countAt(value, productId, "delivery") + reserved > CRATE_CAPACITY
-      || unsoldItems(value, productId).length > CRATE_CAPACITY + capacityFor(value)) return false;
+      || unsoldItems(value, productId).length > CRATE_CAPACITY + storeCapacity) return false;
   }
   const opening = firstDay(value.openingKind);
   const grossPence = value.transactions.reduce((sum, transaction) => sum + transaction.amountPence, 0);
-  const expansionSpendPence = (value.schemaVersion === 10 || value.schemaVersion === 11 || value.schemaVersion === 12)
-    && value.renovation.layout.expansion === 1 ? SHOP_EXPANSION_COST_PENCE : 0;
+  const expansionSpendPence = value.schemaVersion === 10 || value.schemaVersion === 11 || value.schemaVersion === 12
+    ? (value.renovation.layout.expansion === 1 ? SHOP_EXPANSION_COST_PENCE : 0)
+    : value.schemaVersion === 13
+      ? (value.renovation.layout.expansion >= 1 ? SHOP_EXPANSION_COST_PENCE : 0)
+        + (value.renovation.layout.expansion >= 2 ? SECOND_SHOP_EXPANSION_COST_PENCE : 0)
+      : 0;
   const expectedCash = opening.openingCashPence + grossPence + recyclingIncomePence - purchaseSpendPence
-    - (value.upgraded ? UPGRADE_COST_PENCE : 0) - expansionSpendPence - communityCashPence;
+    - (value.upgraded ? UPGRADE_COST_PENCE : 0) - expansionSpendPence - communityCashPence - equipmentSpendPence;
   if (!isInteger(expectedCash) || value.cashPence !== expectedCash) return false;
 
   const expectedSettlementCount = value.day.number - (value.day.phase === "settled" ? 0 : 1);
@@ -1759,12 +1926,14 @@ function validateEconomyState(value: unknown, version: 4 | 5 | 6 | 7 | 8 | 9 | 1
     if ((record.targetCustomers === DAY_CUSTOMER_TARGET && (summary.paidCustomers < DAY_CUSTOMER_TARGET || summary.paidCustomers > maxPaid))
       || SUMMARY_FIELDS.some((field) => !isInteger(record[field]) || record[field] !== summary[field])
       || ((value.schemaVersion === 7 || value.schemaVersion === 8 || value.schemaVersion === 9
-          || value.schemaVersion === 10 || value.schemaVersion === 11 || value.schemaVersion === 12)
+          || value.schemaVersion === 10 || value.schemaVersion === 11 || value.schemaVersion === 12 || value.schemaVersion === 13)
         && RECYCLING_SUMMARY_FIELDS.some((field) => !isInteger(record[field]) || record[field] !== summary[field]))
-      || ((value.schemaVersion === 10 || value.schemaVersion === 11 || value.schemaVersion === 12)
+      || ((value.schemaVersion === 10 || value.schemaVersion === 11 || value.schemaVersion === 12 || value.schemaVersion === 13)
         && (!isInteger(record.expansionSpendPence) || record.expansionSpendPence !== summary.expansionSpendPence))
-      || ((value.schemaVersion === 11 || value.schemaVersion === 12)
+      || ((value.schemaVersion === 11 || value.schemaVersion === 12 || value.schemaVersion === 13)
         && COMMUNITY_SUMMARY_FIELDS.some((field) => !isInteger(record[field]) || record[field] !== summary[field]))
+      || (value.schemaVersion === 13
+        && EQUIPMENT_SUMMARY_FIELDS.some((field) => !isInteger(record[field]) || record[field] !== summary[field]))
       || summary.closingCashPence < 0 || summary.remainingStockUnits < 0 || summary.remainingInventoryValuePence < 0) return false;
     if (value.purchases.slice(purchaseStart, record.purchaseEnd).some((purchase) => purchase.dayNumber !== number)) return false;
     if (value.transactions.slice(transactionStart, record.transactionEnd)
@@ -1791,7 +1960,8 @@ function validateEconomyState(value: unknown, version: 4 | 5 | 6 | 7 | 8 | 9 | 1
   if (value.day.phase === "preparing") {
     if (value.customer.phase !== "outside" || current.paidCustomers !== 0) return false;
   } else if (value.customer.phase === "outside" && (version < 9 || value.day.phase === "open" || current.paidCustomers !== 0)) return false;
-  if (value.schemaVersion === 9 || value.schemaVersion === 10 || value.schemaVersion === 11 || value.schemaVersion === 12) {
+  if (value.schemaVersion === 9 || value.schemaVersion === 10 || value.schemaVersion === 11
+    || value.schemaVersion === 12 || value.schemaVersion === 13) {
     if (value.day.phase === "settled" && (!["outside", "complete"].includes(value.customer.phase)
       || value.payment !== null || value.scannedIds.length !== 0
       || value.settlements.at(-1)?.targetCustomers !== (value.day.closeReason === "legacy" ? DAY_CUSTOMER_TARGET : null))) return false;
@@ -1834,6 +2004,10 @@ export function validateV11SimState(value: unknown): value is SimStateV11 {
   return validateEconomyState(value, 11) && value.schemaVersion === 11;
 }
 
-export function validateSimState(value: unknown): value is SimState {
+export function validateV12SimState(value: unknown): value is SimStateV12 {
   return validateEconomyState(value, 12) && value.schemaVersion === 12;
+}
+
+export function validateSimState(value: unknown): value is SimState {
+  return validateEconomyState(value, 13) && value.schemaVersion === 13;
 }

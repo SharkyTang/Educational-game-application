@@ -19,8 +19,11 @@ import { crateRestingHeight, measureCrateSupport, ProductVisuals, productDimensi
 import { createStreet, setDeliveryTruckStatus, setStreetVenueStatus, type StreetEnvironment } from "./street";
 import { createRecyclingStation, RECYCLING_POINT } from "./recyclingStation";
 import { STREET_VENUES, getVenueProgress, type VenueId } from "./progression";
+import { EQUIPMENT_COMMERCE_CATALOG } from "./equipmentCommerce";
+import { createEquipmentSceneFixtures, type EquipmentSceneFixtures } from "./equipmentScene";
+import { findFirstEmptyShelfSlot, shelfSlotKey, type ShelfStockLocation } from "./equipmentStock";
 import {
-  capacityFor, countAt, canSettleDay, canStartCustomer, getCheckoutTotal, getCustomerOrder, getShoppingProduct, getDeliverySummary, getRecyclingOffer, getRecyclingSummary, isWalkablePosition, PRODUCTS, PRODUCT_IDS, SAFE_DROP_POINTS, type CrateId, type CustomerPhase,
+  countAt, countOnShelf, canSettleDay, canStartCustomer, getCheckoutTotal, getCustomerOrder, getShoppingProduct, getShoppingShelfLocation, getDeliverySummary, getRecyclingOffer, getRecyclingSummary, isWalkablePosition, shelfCapacityAt, PRODUCTS, PRODUCT_IDS, SAFE_DROP_POINTS, type CrateId, type CustomerPhase,
   type PlayerPose, type Position, type ProductId, type SimState,
 } from "./domain";
 
@@ -29,6 +32,8 @@ export interface InteractionTarget {
   id: string;
   kind: "crate" | "shelf" | "item" | "counter" | "open-sign" | "drop-zone" | "delivery" | "venue" | "recycling" | "street-neighbour";
   productId?: ProductId;
+  /** Present for a purchased fixture; absent for the original built-in display. */
+  equipmentId?: string;
   itemId?: string;
   crateId?: CrateId;
   venueId?: VenueId;
@@ -75,7 +80,9 @@ export class ShopWorld {
   private readonly street: StreetEnvironment;
   private readonly shop: ShopEnvironment;
   private readonly catalogFixtures: CatalogFixtures;
+  private readonly equipmentFixtures: EquipmentSceneFixtures;
   private readonly expansionLight: PointLight;
+  private readonly secondExpansionLight: PointLight;
   private readonly fixedColliders: Collider[] = [];
   private truckPhase: "arriving" | "parked" | "departing" | "away" = "arriving";
   private state: SimState;
@@ -100,6 +107,7 @@ export class ShopWorld {
   private arrivedRevision = -1;
   private customerRouteBlocked = false;
   private customerObstacleSignature = "";
+  private customerShoppingTargetSignature = "";
   private customerEntryAnnounced = false;
   private active = false;
   private disposed = false;
@@ -173,7 +181,12 @@ export class ShopWorld {
     this.expansionLight.intensity = 4;
     this.expansionLight.range = 6;
     this.expansionLight.diffuse = new Color3(1, .89, .71);
-    this.expansionLight.setEnabled(initialState.renovation.layout.expansion === 1);
+    this.expansionLight.setEnabled(initialState.renovation.layout.expansion >= 1);
+    this.secondExpansionLight = new PointLight("warm-second-expanded-shop", new Vector3(0, 2.68, 8.5), this.scene);
+    this.secondExpansionLight.intensity = 4;
+    this.secondExpansionLight.range = 6;
+    this.secondExpansionLight.diffuse = new Color3(1, .89, .71);
+    this.secondExpansionLight.setEnabled(initialState.renovation.layout.expansion >= 2);
 
     const shop = createShop(this.scene, { catalogFixtures: true, layout: initialState.renovation.layout });
     this.shop = shop;
@@ -181,6 +194,8 @@ export class ShopWorld {
     const fixtures = createCatalogFixtures(this.scene, PRODUCTS, initialState.renovation.layout);
     this.catalogFixtures = fixtures;
     this.colliders.push(...fixtures.colliders);
+    this.equipmentFixtures = createEquipmentSceneFixtures(this.scene, initialState.equipment, initialState.renovation.layout.equipment);
+    this.colliders.push(...this.equipmentFixtures.colliders);
     this.street = createStreet(this.scene);
     this.colliders.push(...this.street.colliders);
     const recycling = createRecyclingStation(this.scene);
@@ -208,6 +223,7 @@ export class ShopWorld {
       });
       if (target.kind === "drop-zone") this.crateSupports.push(measureCrateSupport(target.position, target.mesh));
     }
+    this.tagEquipmentTargets();
     this.hands = createPlayerHands(this.scene);
     this.hands.parent = this.camera;
     this.hands.position.set(0, -.39, .80);
@@ -282,7 +298,8 @@ export class ShopWorld {
     const newDay = this.state.day.number !== state.day.number;
     const freshRun = state.revision < this.state.revision && state.purchases.length === 0 && state.transactions.length === 0;
     const closed = this.state.day.phase !== "settled" && state.day.phase === "settled";
-    const layoutChanged = !layoutEquals(this.state.renovation.layout, state.renovation.layout);
+    const layoutChanged = !layoutEquals(this.state.renovation.layout, state.renovation.layout)
+      || JSON.stringify(this.state.renovation.layout.equipment) !== JSON.stringify(state.renovation.layout.equipment);
     this.state = state;
     if (layoutChanged) this.syncShopLayout();
     this.customerActors.select(state);
@@ -291,7 +308,11 @@ export class ShopWorld {
     else if (closed && this.truckPhase !== "away") this.truckPhase = "departing";
     this.syncInventory();
     const obstacles = this.crateObstacleSignature();
-    if (phaseChanged || newCustomer || freshRun || layoutChanged || streetNeighbourChanged || obstacles !== this.customerObstacleSignature) this.setCustomerRoute(freshRun || newCustomer || layoutChanged);
+    const shoppingTargetChanged = this.shoppingTargetSignature() !== this.customerShoppingTargetSignature;
+    if (phaseChanged || newCustomer || freshRun || layoutChanged || streetNeighbourChanged
+      || obstacles !== this.customerObstacleSignature || shoppingTargetChanged) {
+      this.setCustomerRoute(freshRun || newCustomer || layoutChanged);
+    }
     this.syncStreet();
     this.ensureSafePose();
     this.updateTarget();
@@ -316,7 +337,9 @@ export class ShopWorld {
     const layout = this.state.renovation.layout;
     this.shop.applyLayout(layout);
     this.catalogFixtures.applyLayout(layout);
-    this.colliders.splice(0, this.colliders.length, ...this.shop.colliders, ...this.catalogFixtures.colliders, ...this.fixedColliders);
+    this.equipmentFixtures?.apply(this.state.equipment, layout.equipment);
+    this.colliders.splice(0, this.colliders.length, ...this.shop.colliders, ...this.catalogFixtures.colliders,
+      ...(this.equipmentFixtures?.colliders ?? []), ...this.fixedColliders);
     const displays = this.createDisplays(layout);
     for (const productId of PRODUCT_IDS) {
       this.displays[productId] = displays[productId];
@@ -329,7 +352,25 @@ export class ShopWorld {
         position: { x: target.position.x, z: target.position.z },
       });
     }
-    this.expansionLight.setEnabled(layout.expansion === 1);
+    this.tagEquipmentTargets();
+    for (const target of this.equipmentFixtures?.targets ?? []) for (const mesh of target.root.getChildMeshes()) {
+      mesh.receiveShadows = true;
+      if (mesh.getTotalVertices() > 12 && !/glass|label|letter/i.test(mesh.name)) this.shadow.addShadowCaster(mesh, false);
+    }
+    this.expansionLight.setEnabled(layout.expansion >= 1);
+    this.secondExpansionLight?.setEnabled(layout.expansion >= 2);
+  }
+
+  private tagEquipmentTargets(): void {
+    for (const target of this.equipmentFixtures?.targets ?? []) {
+      this.tag(target.root, {
+        id: target.id,
+        kind: target.kind,
+        productId: target.productId,
+        equipmentId: target.equipmentId,
+        position: { x: target.position.x, z: target.position.z },
+      });
+    }
   }
 
   private checkoutPoint(): Position {
@@ -338,6 +379,46 @@ export class ShopWorld {
 
   private checkoutYaw(): number {
     return this.state.renovation.layout.placements.find((placement) => placement.id === "checkout-counter")!.rotation * Math.PI / 2;
+  }
+
+  private shelfLocationForProduct(productId: ProductId): ShelfStockLocation | null {
+    const item = this.state.items.find((candidate) => candidate.productId === productId && candidate.location.kind === "shelf");
+    return item?.location.kind === "shelf" ? item.location : null;
+  }
+
+  private shelfApproach(productId: ProductId, location: ShelfStockLocation | null = this.shelfLocationForProduct(productId)): Position {
+    if (location?.equipmentId) {
+      const service = this.equipmentFixtures?.servicePoint(location.equipmentId, location.slot);
+      if (service) return { x: service.position.x, z: service.position.z };
+    }
+    return this.displays[productId].approach;
+  }
+
+  private shelfFacingPoint(productId: ProductId, location: ShelfStockLocation | null): Position {
+    if (location?.equipmentId) {
+      const slot = this.equipmentFixtures?.slot(location.equipmentId, location.slot);
+      if (slot) return { x: slot.position.x, z: slot.position.z };
+    }
+    const base = this.displays[productId].slots[location?.slot ?? 0] ?? this.displays[productId].slots[0]!;
+    return { x: base.x, z: base.z };
+  }
+
+  /** The stock slot and its live service point both determine where an in-flight shopper must walk. */
+  private shoppingTargetSignature(): string {
+    const productId = getShoppingProduct(this.state);
+    if (!productId) return `${this.state.customer.phase}:none`;
+    const location = getShoppingShelfLocation(this.state);
+    if (!location) return `${this.state.customer.phase}:${productId}:missing`;
+    const approach = this.shelfApproach(productId, location);
+    return `${this.state.customer.phase}:${productId}:${shelfSlotKey(location)}:${approach.x}:${approach.z}`;
+  }
+
+  private shelfName(productId: ProductId, equipmentId?: string): string {
+    if (equipmentId) {
+      const instance = this.state.equipment.instances.find((candidate) => candidate.id === equipmentId);
+      if (instance) return `${EQUIPMENT_COMMERCE_CATALOG[instance.assetId].nameZh} · ${PRODUCTS[productId].nameZh}`;
+    }
+    return this.displays[productId].shelfName;
   }
 
   private syncInventory(): void {
@@ -422,10 +503,22 @@ export class ShopWorld {
         root.setEnabled(!this.inspectionProduct);
         this.setViewModel(root, true);
       } else if (location.kind === "shelf") {
-        root.position.copyFrom(this.shelfSlots[item.productId][location.slot]!);
-        const layout = this.displays[item.productId];
-        root.rotation.y = layout.yaw;
-        root.scaling.setAll(fitProduct(dimensions, layout.maxSize));
+        const equipmentSlot = location.equipmentId
+          ? this.equipmentFixtures?.slot(location.equipmentId, location.slot) ?? null : null;
+        if (location.equipmentId && !equipmentSlot) {
+          // A persisted item must never float at the origin if its equipment
+          // cannot be rendered. Validation normally prevents this fallback.
+          root.setEnabled(false);
+        } else if (equipmentSlot) {
+          root.position.copyFrom(equipmentSlot.position);
+          root.rotation.y = equipmentSlot.yaw;
+          root.scaling.setAll(fitProduct(dimensions, equipmentSlot.maxSize));
+        } else {
+          root.position.copyFrom(this.shelfSlots[item.productId][location.slot]!);
+          const display = this.displays[item.productId];
+          root.rotation.y = display.yaw;
+          root.scaling.setAll(fitProduct(dimensions, display.maxSize));
+        }
       } else if (location.kind === "basket") {
         const layout = basketPlacement(dimensions, basketItems.findIndex((entry) => entry.id === item.id), basketItems.length);
         root.parent = this.basket;
@@ -504,9 +597,9 @@ export class ShopWorld {
     const arrivalOrigins = (initial || freshCustomer) && phase === "to-milk" ? customerArrivalOrigins(this.state) : null;
     if (initial || freshCustomer) {
       this.customerEntryAnnounced = phase !== "to-milk";
-      const first = order[0] ? this.displays[order[0]].approach : this.displays.milk.approach;
+      const first = order[0] ? this.shelfApproach(order[0]) : this.displays.milk.approach;
       const lastProduct = order.at(-1);
-      const last = lastProduct ? this.displays[lastProduct].approach : first;
+      const last = lastProduct ? this.shelfApproach(lastProduct) : first;
       const start = arrivalOrigins ? arrivalOrigins[0]!
         : phase === "to-bread" ? first : phase === "to-checkout" ? last
           : phase === "checkout" || phase === "leaving" ? this.checkoutPoint() : CUSTOMER_DOORSTEP;
@@ -515,7 +608,8 @@ export class ShopWorld {
     this.customerPhase = phase;
     this.customer.setEnabled(phase !== "outside" && phase !== "complete");
     const product = getShoppingProduct(this.state);
-    const destination = product ? this.displays[product].approach
+    const shoppingLocation = getShoppingShelfLocation(this.state);
+    const destination = product ? this.shelfApproach(product, shoppingLocation)
       : phase === "to-checkout" ? this.checkoutPoint()
         : phase === "leaving" ? CUSTOMER_DOORSTEP : null;
     const obstacles = this.customerColliders();
@@ -535,6 +629,7 @@ export class ShopWorld {
     this.customerRouteBlocked = route === null;
     this.route = route ?? [];
     this.customerObstacleSignature = this.crateObstacleSignature();
+    this.customerShoppingTargetSignature = this.shoppingTargetSignature();
     if (this.customerRouteBlocked) this.callbacks.onStatus("顾客通道被货箱挡住了。先把箱子搬到安全卸货点，顾客会继续前往对应货架。");
     this.routeIndex = 0;
     this.arrivalDelay = 0;
@@ -630,7 +725,7 @@ export class ShopWorld {
     this.playCustomerAnimation(false);
     const shoppingProduct = getShoppingProduct(this.state);
     if (shoppingProduct) {
-      const shelf = this.displays[shoppingProduct].slots[0]!;
+      const shelf = this.shelfFacingPoint(shoppingProduct, getShoppingShelfLocation(this.state));
       this.customer.rotation.y = Math.atan2(shelf.x - this.customer.position.x, shelf.z - this.customer.position.z);
     }
     if (this.customerPhase === "checkout" || this.customerPhase === "to-checkout") this.customer.rotation.y = -Math.PI / 2 + this.checkoutYaw();
@@ -733,7 +828,8 @@ export class ShopWorld {
       || !target || target.kind !== "shelf" || !target.productId || held.kind !== "crate") return false;
     const crate = this.state.crates.find((candidate) => candidate.id === held.crateId);
     return crate?.productId === target.productId
-      && countAt(this.state, target.productId, "shelf") < capacityFor(this.state)
+      && countOnShelf(this.state, target.productId, target.equipmentId)
+        < shelfCapacityAt(this.state, target.productId, target.equipmentId)
       && this.state.items.some((item) => item.productId === target.productId
         && item.location.kind === "crate" && item.location.crateId === held.crateId);
   }
@@ -916,10 +1012,10 @@ export class ShopWorld {
       action = this.state.held.kind === "none" ? remaining ? "抱起货箱" : "抱起空箱 · 送往回收点" : "先放下手里的货物";
       inspectable = remaining > 0;
     } else if (data.kind === "shelf") {
-      label = data.productId ? `${product?.nameEn} · ${this.displays[data.productId].shelfName}` : "商品货架";
+      label = data.productId ? `${product?.nameEn} · ${this.shelfName(data.productId, data.equipmentId)}` : "商品货架";
       action = this.state.held.kind === "none" ? "先抱起对应货箱" : `摆放一件${product?.nameZh ?? "商品"}`;
       if (getRecyclingOffer(this.state).allowed) action = "货箱已空 · 送往门旁绿色回收点";
-      inspectable = !!data.productId && countAt(this.state, data.productId, "shelf") > 0;
+      inspectable = !!data.productId && countOnShelf(this.state, data.productId, data.equipmentId) > 0;
     } else if (data.kind === "item") {
       const item = this.state.items.find((entry) => entry.id === data.itemId);
       label = `${product?.nameEn} · ${product?.nameZh}`;
@@ -928,7 +1024,9 @@ export class ShopWorld {
         action = scanned ? "已扫描，不会重复计费" : "扫描商品";
         inspectable = false;
       } else if (this.state.held.kind !== "none" && item?.location.kind === "shelf") {
-        return this.decorateTarget({ id: `${item.productId}-shelf`, kind: "shelf", productId: item.productId }, distance);
+        return this.decorateTarget({ id: item.location.equipmentId ? `${item.location.equipmentId}-shelf` : `${item.productId}-shelf`,
+          kind: "shelf", productId: item.productId,
+          ...(item.location.equipmentId ? { equipmentId: item.location.equipmentId } : {}) }, distance);
       } else action = "拿起商品";
     } else if (data.kind === "counter") {
       label = "Checkout · 收银台";
@@ -1013,8 +1111,10 @@ export class ShopWorld {
       point = transformLayoutPoint(state.renovation.layout, "checkout-counter", CHECKOUT_CLERK_POINT); title = "收银台内侧";
     } else if (state.held.kind === "crate") {
       const crate = state.crates.find((entry) => state.held.kind === "crate" && entry.id === state.held.crateId)!;
-      point = this.displays[crate.productId].approach;
-      title = `${PRODUCTS[crate.productId].nameEn} · ${this.displays[crate.productId].shelfName}`;
+      const openSlot = findFirstEmptyShelfSlot(state.items, crate.productId, state.upgraded,
+        state.equipment, state.renovation.layout.equipment);
+      point = this.shelfApproach(crate.productId, openSlot);
+      title = `${PRODUCTS[crate.productId].nameEn} · ${this.shelfName(crate.productId, openSlot?.equipmentId)}`;
     } else if (delivery.pendingUnits > 0) {
       if (this.truckPhase === "arriving") {
         this.callbacks.onGuide?.(`送货车正在靠边 · ${delivery.pendingUnits} 件货待签收 · 请留出车道`);

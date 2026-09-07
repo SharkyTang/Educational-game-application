@@ -3,7 +3,7 @@ import {
   createFirstDayState, getCheckoutTotal, getObjective, reduceSim,
   getDaySummary, getPaymentMethodSummary, getPurchaseOffer, getDeliverySummary, getCustomerOrder, getShoppingProduct,
   getRecyclingOffer, getRecyclingSummary, RECYCLING_REWARD_PENCE,
-  canSettleDay, canStartCustomer, getShopLayoutObstacles, CRATE_CAPACITY,
+  canSettleDay, canStartCustomer, getShopLayoutObstacles, CRATE_CAPACITY, shelfCapacityAt,
   type PlayerPose, type ProductId, type PurchaseLine, type SimCommand, type SimState,
 } from "./domain";
 import { loadSimState, parseImportedSimState, SimSaveConflictError, SimSaveSession, SIM_STORAGE_KEY } from "./persistence";
@@ -18,6 +18,7 @@ import { CashRegisterController } from "./cashRegisterController";
 import { cashDrawerPieceCount, cashDrawerValuePence } from "./cashDrawer";
 import { LayoutEditor } from "./layoutEditor";
 import { DevelopmentPanel } from "./developmentPanel";
+import { EquipmentStore } from "./equipmentStore";
 import { shopRenovationReason } from "./shopDevelopment";
 import { STREET_VENUES, getStreetProgress, getVenueProgress } from "./progression";
 import { PRODUCT_ASSETS, PRODUCT_CATEGORIES, type ProductCategoryId } from "./product-library/catalog";
@@ -33,9 +34,9 @@ import "./developmentPanel.css";
 import "./streetNeighbourDialog.css";
 
 type ScreenMode = "loading" | "start" | "playing" | "paused" | "inspecting" | "cashier" | "street-dialogue" | "readonly" | "error";
-type ManagementSection = "supply" | "day" | "upgrade" | "development" | "layout" | "street";
+type ManagementSection = "supply" | "day" | "upgrade" | "development" | "equipment" | "layout" | "street";
 type StreetVenueId = (typeof STREET_VENUES)[number]["id"];
-const MANAGEMENT_SECTIONS: readonly ManagementSection[] = ["supply", "day", "upgrade", "development", "layout", "street"];
+const MANAGEMENT_SECTIONS: readonly ManagementSection[] = ["supply", "day", "upgrade", "development", "equipment", "layout", "street"];
 interface InteractionDecision {
   command?: SimCommand;
   message?: string;
@@ -109,9 +110,14 @@ export function commandForInteraction(state: SimState, target: InteractionTarget
     case "crate": return target.crateId ? { command: { type: "PICK_CRATE", crateId: target.crateId } } : {};
     case "shelf": {
       if (!target.productId) return {};
-      const occupied = state.items.flatMap((item) => item.location.kind === "shelf" && item.location.productId === target.productId ? [item.location.slot] : []);
-      const slot = Array.from({ length: capacityFor(state) }, (_, index) => index).find((candidate) => !occupied.includes(candidate));
-      return slot === undefined ? { message: "这一侧货架已经放满了。" } : { command: { type: "STOCK", productId: target.productId, slot } };
+      const equipmentId = target.equipmentId;
+      const capacity = shelfCapacityAt(state, target.productId, equipmentId);
+      const occupied = state.items.flatMap((item) => item.location.kind === "shelf"
+        && item.location.productId === target.productId && item.location.equipmentId === equipmentId ? [item.location.slot] : []);
+      const slot = Array.from({ length: capacity }, (_, index) => index).find((candidate) => !occupied.includes(candidate));
+      return slot === undefined ? { message: "这一侧货架已经放满了。" } : {
+        command: { type: "STOCK", productId: target.productId, slot, ...(equipmentId === undefined ? {} : { equipmentId }) },
+      };
     }
     case "item": {
       if (!target.itemId) return {};
@@ -196,6 +202,7 @@ export class App3D {
   private readonly cashRegister: CashRegisterController;
   private readonly layoutEditor: LayoutEditor;
   private readonly developmentPanel: DevelopmentPanel;
+  private readonly equipmentStore: EquipmentStore;
   private pendingLayoutExit: ManagementSection | "resume" | null = null;
   private audioForeground = true;
 
@@ -261,6 +268,11 @@ export class App3D {
     });
     this.developmentPanel = new DevelopmentPanel(this.el("s3-development-host"), {
       onExpand: () => this.mode === "paused" && this.dispatch({ type: "BUY_SPACE_EXPANSION" }),
+      onLayout: () => this.showManagementSection("layout"),
+    });
+    this.equipmentStore = new EquipmentStore(this.el("s3-equipment-host"), {
+      onBuy: (purchaseId, assetId, productId) => this.mode === "paused"
+        && this.dispatch({ type: "BUY_EQUIPMENT", purchaseId, assetId, productId }),
       onLayout: () => this.showManagementSection("layout"),
     });
     this.bindEvents();
@@ -395,6 +407,7 @@ export class App3D {
               <button id="s3-open-supply" type="button">进货 <kbd>B</kbd></button>
               <button id="s3-open-day" type="button">营业 / 日结</button>
               <button id="s3-open-upgrade" type="button">扩容 <kbd>U</kbd></button>
+              <button id="s3-open-equipment" type="button">设备商店</button>
               <button id="s3-open-layout" type="button">装修 <kbd>P</kbd></button>
               <button id="s3-open-street" type="button">商业街 <kbd>M</kbd></button>
             </nav>
@@ -485,6 +498,7 @@ export class App3D {
             <button id="s3-tab-day" type="button" aria-pressed="false">营业与日结</button>
             <button id="s3-tab-upgrade" type="button" aria-pressed="false">普通扩容</button>
             <button id="s3-tab-development" type="button" aria-pressed="false">店铺成长</button>
+            <button id="s3-tab-equipment" type="button" aria-pressed="false">设备商店</button>
             <button id="s3-tab-layout" type="button" aria-pressed="false">自由装修</button>
             <button id="s3-tab-street" type="button" aria-pressed="false">商业街</button>
           </nav>
@@ -521,7 +535,7 @@ export class App3D {
             <p id="s3-day-eyebrow" class="s3-eyebrow">TODAY AT THE CORNER SHOP</p><h3 id="s3-day-title">今天的小店</h3>
             <p id="s3-day-progress" class="s3-muted"></p>
             <p id="s3-day-clock" class="s3-day-clock"></p>
-            <dl class="s3-account-lines"><div><dt>今日营业收入</dt><dd id="s3-day-revenue"></dd></div><div><dt>现金付款</dt><dd id="s3-day-cash-sales"></dd></div><div><dt>刷卡付款</dt><dd id="s3-day-card-sales"></dd></div><div><dt>教学钱箱面额</dt><dd id="s3-day-drawer"></dd></div><div><dt>已售商品成本</dt><dd id="s3-day-cogs"></dd></div><div class="s3-account-result"><dt>商品毛利</dt><dd id="s3-day-profit"></dd></div><div><dt>空箱回收收入</dt><dd id="s3-day-recycling"></dd></div><div><dt>今日进货支出</dt><dd id="s3-day-procurement"></dd></div><div><dt>货架扩容支出</dt><dd id="s3-day-investment"></dd></div><div><dt>店面扩建支出</dt><dd id="s3-day-expansion"></dd></div><div><dt>社区现金帮助</dt><dd id="s3-day-community"></dd></div><div><dt>当前剩余资金</dt><dd id="s3-day-cash"></dd></div><div><dt>未售商品 / 成本价值</dt><dd id="s3-day-inventory"></dd></div></dl>
+            <dl class="s3-account-lines"><div><dt>今日营业收入</dt><dd id="s3-day-revenue"></dd></div><div><dt>现金付款</dt><dd id="s3-day-cash-sales"></dd></div><div><dt>刷卡付款</dt><dd id="s3-day-card-sales"></dd></div><div><dt>教学钱箱面额</dt><dd id="s3-day-drawer"></dd></div><div><dt>已售商品成本</dt><dd id="s3-day-cogs"></dd></div><div class="s3-account-result"><dt>商品毛利</dt><dd id="s3-day-profit"></dd></div><div><dt>空箱回收收入</dt><dd id="s3-day-recycling"></dd></div><div><dt>今日进货支出</dt><dd id="s3-day-procurement"></dd></div><div><dt>货架扩容支出</dt><dd id="s3-day-investment"></dd></div><div><dt>店面扩建支出</dt><dd id="s3-day-expansion"></dd></div><div><dt>设备购置支出</dt><dd id="s3-day-equipment"></dd></div><div><dt>社区现金帮助</dt><dd id="s3-day-community"></dd></div><div><dt>当前剩余资金</dt><dd id="s3-day-cash"></dd></div><div><dt>未售商品 / 成本价值</dt><dd id="s3-day-inventory"></dd></div></dl>
             <p id="s3-day-drawer-detail" class="s3-muted"></p>
             <p id="s3-day-recycling-count" class="s3-muted"></p>
             <p class="s3-muted">商品毛利 = 营业收入 − 已售商品成本。回收收入单独记账，自愿现金帮助单独记为社区支出，不计经验或成就。进货中尚未卖出的部分仍是存货；扩容是投资，不把钱包余额当利润。</p>
@@ -539,6 +553,7 @@ export class App3D {
             <p id="s3-upgrade-status" class="s3-inline-reason" role="status"></p><button id="s3-upgrade" class="s3-primary-button" type="button">£8 · 扩充货架容量</button><span id="s3-upgrade-badge" class="s3-upgrade-badge">£8</span>
           </section>
           <section id="s3-panel-development" class="s3-management-panel" aria-label="店铺成长与成就" hidden><div id="s3-development-host"></div></section>
+          <section id="s3-panel-equipment" class="s3-management-panel" aria-label="设备商店与设备仓库" hidden><div id="s3-equipment-host"></div></section>
           <section id="s3-panel-layout" class="s3-management-panel" aria-label="自由装修" hidden><div id="s3-layout-editor"></div></section>
           <section id="s3-panel-street" class="s3-management-panel s3-street-panel" aria-labelledby="s3-street-title" hidden>
             <p class="s3-eyebrow">A LITTLE SHOP, A BIGGER STREET</p><h3 id="s3-street-title">从街角小店，走向整条街</h3>
@@ -649,6 +664,7 @@ export class App3D {
     click("s3-open-supply", () => this.openManagement("supply"));
     click("s3-open-day", () => this.openManagement("day"));
     click("s3-open-upgrade", () => this.openManagement("upgrade"));
+    click("s3-open-equipment", () => this.openManagement("equipment"));
     click("s3-open-layout", () => this.openManagement("layout"));
     click("s3-open-street", () => this.openManagement("street"));
     click("s3-layout-exit-keep", () => this.cancelLayoutExit(true));
@@ -1079,6 +1095,7 @@ export class App3D {
     }
     this.cancelLayoutExit(false);
     this.developmentPanel.cancelConfirmation();
+    this.equipmentStore.cancelConfirmation();
     this.managementSection = section;
     this.closeConfirmation = false;
     for (const candidate of MANAGEMENT_SECTIONS) {
@@ -1143,6 +1160,7 @@ export class App3D {
       this.el("s3-buy-space").focus();
       return;
     }
+    this.equipmentStore.cancelConfirmation();
     if (this.closeConfirmation) { this.cancelCloseConfirmation(); return }
     if (!this.el("s3-import-confirm").hidden) { this.cancelImport(); this.el("s3-resume").focus(); return }
     if (!this.el("s3-restart-confirm").hidden) {
@@ -1211,15 +1229,17 @@ export class App3D {
       if (!this.saveSession.canWrite) return false;
       this.capturePose();
       const result = reduceSim(this.state, command);
-      const renovation = command.type === "APPLY_SHOP_LAYOUT" || command.type === "BUY_SPACE_EXPANSION";
-      // Keep the draft and the existing room until the entire proposed snapshot
-      // is safely stored. A quota failure must not clear the editor or spend cash.
-      if (result.changed && renovation && !this.persist(result.state)) return false;
+      const requiresDurableCommit = command.type === "APPLY_SHOP_LAYOUT"
+        || command.type === "BUY_SPACE_EXPANSION"
+        || command.type === "BUY_EQUIPMENT";
+      // Keep the current room, warehouse and balance until the entire proposed
+      // snapshot is safely stored. A quota failure must not spend cash or clear a draft.
+      if (result.changed && requiresDurableCommit && !this.persist(result.state)) return false;
       this.state = result.state;
       if (result.changed) {
         if (command.type === "OPEN_STORE") this.businessClock.resume(performance.now());
         if (command.type === "CLOSE_STORE" || command.type === "START_NEXT_DAY") this.businessClock.reset();
-        if (!renovation) this.persist();
+        if (!requiresDurableCommit) this.persist();
         if (!this.saveSession.canWrite) return false;
         this.world?.setState(this.state);
         this.renderState();
@@ -1415,6 +1435,7 @@ export class App3D {
     this.el("s3-pause").classList.toggle("s3-pause-street", this.managementSection === "street");
     this.el("s3-pause").classList.toggle("s3-pause-supply", this.managementSection === "supply");
     this.el("s3-pause").classList.toggle("s3-pause-development", this.managementSection === "development");
+    this.el("s3-pause").classList.toggle("s3-pause-equipment", this.managementSection === "equipment");
     this.el("s3-pause").classList.toggle("s3-pause-layout", this.managementSection === "layout");
     for (const candidate of MANAGEMENT_SECTIONS) {
       this.el(`s3-panel-${candidate}`).hidden = candidate !== this.managementSection;
@@ -1423,7 +1444,7 @@ export class App3D {
     this.text("s3-day-title", `第 ${day.dayNumber} 天${this.state.day.phase === "settled" ? " · 日结完成" : " · 营业账本"}`);
     this.text("s3-day-progress", `已收款 ${day.paidCustomers} 单 · 开始时资金 ${money(day.openingCashPence)}`);
     this.renderBusinessClock();
-    for (const [suffix, value] of [["revenue", day.revenuePence], ["cogs", day.costOfGoodsPence], ["profit", day.grossProfitPence], ["recycling", day.recyclingIncomePence], ["procurement", day.procurementPence], ["investment", day.upgradeSpendPence], ["expansion", day.expansionSpendPence], ["community", day.communityCashPence], ["cash", day.closingCashPence]] as const) {
+    for (const [suffix, value] of [["revenue", day.revenuePence], ["cogs", day.costOfGoodsPence], ["profit", day.grossProfitPence], ["recycling", day.recyclingIncomePence], ["procurement", day.procurementPence], ["investment", day.upgradeSpendPence], ["expansion", day.expansionSpendPence], ["equipment", day.equipmentSpendPence], ["community", day.communityCashPence], ["cash", day.closingCashPence]] as const) {
       this.text(`s3-day-${suffix}`, money(value));
     }
     this.text("s3-day-cash-sales", `${paymentMethods.cashTransactions} 单 / ${money(paymentMethods.cashRevenuePence)}`);
@@ -1464,10 +1485,18 @@ export class App3D {
     this.renderStreet();
     this.developmentPanel.render(this.state, writable && this.mode === "paused");
     const reason = !writable ? "此页面只读，不能修改设备布局。" : shopRenovationReason(this.state);
+    this.equipmentStore.setState(this.state.equipment, this.state.renovation.layout.equipment, this.state.cashPence, {
+      writable: writable && this.mode === "paused",
+      reason,
+    });
+    const occupiedEquipmentIds = [...new Set(this.state.items.flatMap((item) => item.location.kind === "shelf"
+      && item.location.equipmentId ? [item.location.equipmentId] : []))];
     this.layoutEditor.setState(this.state.renovation.layout, {
       editable: writable && this.mode === "paused" && !reason,
       reason,
       obstacles: getShopLayoutObstacles(this.state),
+      equipmentState: this.state.equipment,
+      occupiedEquipmentIds,
     });
   }
 
@@ -2140,6 +2169,7 @@ export class App3D {
     this.shopAudio.dispose();
     this.layoutEditor.dispose();
     this.developmentPanel.dispose();
+    this.equipmentStore.dispose();
     this.releasePointer();
     this.world?.dispose();
     this.world = null;
