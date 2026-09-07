@@ -5,6 +5,7 @@ import {
   type PlayerPose, type SimCommand, type SimState,
 } from "../../src/sim3d/domain";
 import { cashChangeDuePence } from "../../src/sim3d/cashPayment";
+import { denominationLabel } from "../../src/sim3d/cashRegister";
 import { createDefaultShopLayout, transformLayoutPoint, type FurnitureId } from "../../src/sim3d/shopLayout";
 import { SHOP_EXPANSION_COST_PENCE } from "../../src/sim3d/shopDevelopment";
 import { completeFixturePayment, payScannedCheckout, readBrowserSnapshot } from "./helpers/sim3d-payment";
@@ -411,8 +412,9 @@ test("shop renovation: a customer reaches the relocated counter and cash is acce
     changePence: expectedChange,
   });
   expect(paid.transactions.at(-1)!.itemIds).toEqual(checkoutItems.map((item) => item.id));
+  const cashTransaction = paid.transactions.at(-1)!;
   await expect(page.locator("#s3-receipt-cash-breakdown")).toHaveText(
-    `交付 ${money(arrived.payment.tenderedPence)} · 找零 ${money(expectedChange)} · 本单入账 ${money(amountPence)}`,
+    `交付 ${money(arrived.payment.tenderedPence)}（${cashTransaction.tenderedCash.map(denominationLabel).join(" + ")}） · 找零 ${money(expectedChange)}${cashTransaction.changeCash.length ? `（${cashTransaction.changeCash.map(denominationLabel).join(" + ")}）` : "（无需找零）"} · 本单入账 ${money(amountPence)}`,
   );
   await expect(page.locator("#s3-cash")).toHaveText(money(arrived.cashPence + amountPence));
   await page.keyboard.press("e");

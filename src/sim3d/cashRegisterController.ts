@@ -1,5 +1,6 @@
 import { CASH_DENOMINATIONS_PENCE, cashPaymentCanConfirm, type PaymentState } from "./cashPayment";
 import { renderCashRegister } from "./cashRegister";
+import { canMakeExactChange, selectedChangeFitsDrawer, type CashDrawerState } from "./cashDrawer";
 import type { CustomerSpeechClip } from "./customerSelection";
 
 export type CashRegisterCommand =
@@ -7,11 +8,14 @@ export type CashRegisterCommand =
   | { type: "ADD_CHANGE"; denominationPence: number }
   | { type: "REMOVE_CHANGE"; index: number }
   | { type: "CLEAR_CHANGE" }
-  | { type: "CONFIRM_CASH" };
+  | { type: "CONFIRM_CASH" }
+  | { type: "REQUEST_EXACT_CASH" }
+  | { type: "SWITCH_CASH_TO_CARD" };
 
 interface RegisterSnapshot {
   payment: PaymentState | null;
   amountPence: number;
+  drawer: CashDrawerState;
   atCheckout: boolean;
   canWrite: boolean;
   customerName: string;
@@ -41,12 +45,26 @@ export class CashRegisterController {
     click("s3-cash-receive", () => {
       if (this.act({ type: "RECEIVE_CASH" })) {
         const state = this.host.read();
-        this.el(cashPaymentCanConfirm(state.payment, state.amountPence) ? "s3-cash-confirm" : "s3-cash-add-50").focus();
+        this.focusNextControl(state);
       }
     });
-    click("s3-cash-reset", () => this.act({ type: "CLEAR_CHANGE" }));
+    click("s3-cash-reset", () => {
+      if (this.act({ type: "CLEAR_CHANGE" }) && this.isOpen) this.focusNextControl(this.host.read());
+    });
     click("s3-cash-confirm", () => this.act({ type: "CONFIRM_CASH" }));
-    for (const denominationPence of CASH_DENOMINATIONS_PENCE) click(`s3-cash-add-${denominationPence}`, () => this.act({ type: "ADD_CHANGE", denominationPence }));
+    click("s3-cash-request-exact", () => {
+      if (this.act({ type: "REQUEST_EXACT_CASH" }) && this.isOpen) {
+        this.el("s3-cash-receive").focus();
+        this.replay();
+      }
+    });
+    click("s3-cash-switch-card", () => this.act({ type: "SWITCH_CASH_TO_CARD" }));
+    for (const denominationPence of CASH_DENOMINATIONS_PENCE) click(`s3-cash-add-${denominationPence}`, () => {
+      if (this.act({ type: "ADD_CHANGE", denominationPence }) && this.isOpen
+        && this.el<HTMLButtonElement>(`s3-cash-add-${denominationPence}`).disabled) {
+        this.focusNextControl(this.host.read());
+      }
+    });
     this.el("s3-cash-tray").addEventListener("click", (event) => {
       const button = (event.target as HTMLElement | null)?.closest<HTMLButtonElement>("button[data-change-index]");
       if (!button || !this.el("s3-cash-tray").contains(button)) return;
@@ -54,7 +72,8 @@ export class CashRegisterController {
       if (this.act({ type: "REMOVE_CHANGE", index }) && this.isOpen) {
         const payment = this.host.read().payment;
         const next = payment?.method === "cash" ? Math.min(index, payment.selectedChange.length - 1) : -1;
-        this.el(next >= 0 ? `s3-cash-remove-${next}` : "s3-cash-add-50").focus();
+        if (next >= 0) this.el(`s3-cash-remove-${next}`).focus();
+        else this.focusNextControl(this.host.read());
       }
     }, { signal });
     this.dialog.addEventListener("cancel", (event) => { event.preventDefault(); this.close() }, { signal });
@@ -82,8 +101,7 @@ export class CashRegisterController {
     this.host.onOpen();
     this.dialog.showModal();
     this.render();
-    this.el(!state.payment.received ? "s3-cash-receive"
-      : cashPaymentCanConfirm(state.payment, state.amountPence) ? "s3-cash-confirm" : "s3-cash-add-50").focus();
+    this.focusNextControl(state);
     return true;
   }
 
@@ -103,12 +121,12 @@ export class CashRegisterController {
     if (!this.isOpen) return;
     const state = this.host.read();
     if (!state.canWrite || !state.atCheckout || state.payment?.method !== "cash") { this.close(); return }
-    renderCashRegister(this.root, state.payment, state.amountPence);
+    renderCashRegister(this.root, state.payment, state.amountPence, state.drawer);
     this.el("s3-cash-customer-name").textContent = state.customerName;
     this.el("s3-cash-line").textContent = state.clip ? `“${state.clip.text}”` : "";
     this.el("s3-cash-zh").textContent = state.clip?.zh ?? "";
     const note = this.el("s3-cash-save-note");
-    note.textContent = state.warning || "钱箱仅模拟收钱与找零；暂时离开会保留本单。取消订单请返回小店，在暂停菜单中操作。";
+    note.textContent = state.warning || "钱箱会按面额记录收钱与找零；暂时离开会保留本单。取消订单请返回小店，在暂停菜单中操作。";
     note.setAttribute("data-error", state.warning ? "true" : "false");
   }
 
@@ -117,6 +135,35 @@ export class CashRegisterController {
     const changed = this.host.dispatch(command);
     this.render();
     return changed;
+  }
+
+  private nextControlId(state: RegisterSnapshot): string {
+    const payment = state.payment;
+    if (payment?.method !== "cash" || !payment.received) return "s3-cash-receive";
+    if (cashPaymentCanConfirm(payment, state.amountPence) && selectedChangeFitsDrawer(state.drawer, payment.selectedChange)) {
+      return "s3-cash-confirm";
+    }
+    const due = payment.tenderedPence - state.amountPence;
+    if (due > 0 && !canMakeExactChange(state.drawer, due)) return "s3-cash-request-exact";
+    // Prefer a visible common denomination. Small coins live in a collapsed
+    // <details>, so they are considered only when no common button is usable.
+    const commonFocusOrder = [50, ...CASH_DENOMINATIONS_PENCE.filter((piece) => piece >= 5 && piece !== 50)] as const;
+    const denomination = [...commonFocusOrder, ...CASH_DENOMINATIONS_PENCE.filter((piece) => piece < 5)]
+      .find((piece) => {
+        const button = this.el<HTMLButtonElement>(`s3-cash-add-${piece}`);
+        return !button.disabled && !button.hidden;
+      });
+    return denomination === undefined ? "s3-cash-reset" : `s3-cash-add-${denomination}`;
+  }
+
+  private focusNextControl(state: RegisterSnapshot): void {
+    const id = this.nextControlId(state);
+    const denomination = /^s3-cash-add-(\d+)$/.exec(id)?.[1];
+    if (denomination !== undefined && Number(denomination) < 5) {
+      const smallCoins = this.root.querySelector<HTMLDetailsElement>(".s3-cash-small-coins");
+      if (smallCoins) smallCoins.open = true;
+    }
+    this.el(id).focus();
   }
 
   private el<T extends HTMLElement = HTMLElement>(id: string): T { return this.root.querySelector<T>(`#${id}`)! }

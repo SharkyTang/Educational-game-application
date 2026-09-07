@@ -5,7 +5,7 @@ import type { InteractionTarget, WorldCallbacks } from "../../src/sim3d/world";
 import { SPEECH_CLIPS } from "../../src/sim3d/speechClips";
 import { customerProfileFor, customerSpeechFor, cashTenderSpeechFor, type CustomerVoice } from "../../src/sim3d/customerSelection";
 import { BUSINESS_DURATION_MS } from "../../src/sim3d/businessTime";
-import { CASH_DENOMINATIONS_PENCE, cashChangeDuePence } from "../../src/sim3d/cashPayment";
+import { CASH_DENOMINATIONS_PENCE, cashChangeDuePence, cashPiecesForAmount } from "../../src/sim3d/cashPayment";
 import { payScannedCheckout } from "../helpers/sim3dPayment";
 
 const doubles = vi.hoisted(() => {
@@ -1776,7 +1776,10 @@ describe("receipts for the products actually stocked", () => {
 
 function cashCheckoutState(scanned = true): SimState {
   let state = act(beforeCheckout(1), { type: "CUSTOMER_ADVANCE" });
-  expect(state.payment).toEqual({ method: "cash", tenderedPence: 500, received: false, selectedChange: [] });
+  expect(state.payment).toEqual({
+    method: "cash", tenderedPence: 500, tenderedCash: [500], tenderedCashRecorded: true,
+    received: false, selectedChange: [],
+  });
   if (scanned) for (const item of state.items.filter((entry) => entry.location.kind === "checkout")) state = act(state, { type: "SCAN", itemId: item.id });
   return state;
 }
@@ -1828,14 +1831,55 @@ describe("cash checkout app wiring and recoverable interaction", () => {
     view.element("s3-cash-confirm").click();
     expect(view.element("s3-cash-dialog").open).toBe(false);
     expect(savedState().cashPence).toBe(state.cashPence + 400);
-    expect(savedState().transactions.at(-1)).toMatchObject({ paymentMethod: "cash", amountPence: 400, tenderedPence: 500, changePence: 100 });
-    expect(view.element("s3-receipt-cash-breakdown").textContent).toBe("交付 £5.00 · 找零 £1.00 · 本单入账 £4.00");
+    expect(savedState().transactions.at(-1)).toMatchObject({
+      paymentMethod: "cash",
+      amountPence: 400,
+      tenderedPence: 500,
+      changePence: 100,
+      tenderedCash: [500],
+      changeCash: [50, 50],
+      tenderedCashRecorded: true,
+      changeCashRecorded: true,
+      cashDrawerTracked: true,
+    });
+    expect(view.element("s3-receipt-cash-breakdown").textContent).toBe(
+      "交付 £5.00（£5） · 找零 £1.00（50p + 50p） · 本单入账 £4.00",
+    );
     expect(view.world.setActive).toHaveBeenLastCalledWith(true);
     expect(view.shopAudio.playEffect.mock.calls).toEqual([["payment"]]);
     view.element("s3-cash-confirm").dispatchEvent(new Event("click"));
     view.world.callbacks.onInteract();
     expect(savedState().transactions).toHaveLength(2);
     expect(view.shopAudio.playEffect.mock.calls).toEqual([["payment"]]);
+  });
+
+  it("does not present canonical migration pieces as the actual tender or change on an old cash receipt", async () => {
+    let state = cashCheckoutState();
+    state = act(state, { type: "RECEIVE_CASH" });
+    state = act(state, { type: "ADD_CHANGE", denominationPence: 50 });
+    state = act(state, { type: "ADD_CHANGE", denominationPence: 50 });
+    state = act(state, { type: "CONFIRM_CASH" });
+    const migrated: SimState = {
+      ...state,
+      cashDrawer: { ...state.cashDrawerOpening },
+      cashDrawerTransactionStart: state.transactions.length,
+      transactions: state.transactions.map((transaction) => ({
+        ...transaction,
+        cashDrawerTracked: false,
+        tenderedCash: transaction.paymentMethod === "cash" ? cashPiecesForAmount(transaction.tenderedPence) : [],
+        changeCash: transaction.paymentMethod === "cash" ? cashPiecesForAmount(transaction.changePence) : [],
+        tenderedCashRecorded: false,
+        changeCashRecorded: false,
+      })),
+    };
+    expect(validateSimState(migrated)).toBe(true);
+
+    const view = await readyGame(migrated);
+    expect(view.element("s3-receipt-cash-breakdown").textContent).toBe(
+      "交付 £5.00（旧版未记录面额） · 找零 £1.00（旧版未记录面额） · 本单入账 £4.00",
+    );
+    expect(view.element("s3-receipt-cash-breakdown").textContent).not.toContain("£5）");
+    expect(view.element("s3-receipt-cash-breakdown").textContent).not.toContain("£1）");
   });
 
   it("replays the fixed tender slowly, blocks background actions, and Esc preserves partial change", async () => {

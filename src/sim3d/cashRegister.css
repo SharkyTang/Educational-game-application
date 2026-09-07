@@ -45,8 +45,12 @@
 .s3-cash-denominations { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 9px; margin-top: 12px; }
 .s3-cash-denomination { display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 62px; padding: 7px 4px; border: 1px solid #c2cbbb; border-radius: 7px; color: #374b3a; background: #eef1e6; }
 .s3-cash-denomination strong { font: 600 22px/1.2 Georgia, serif; font-variant-numeric: tabular-nums; }
-.s3-cash-denomination span { margin-top: 6px; font-size: 9px; }
+.s3-cash-denomination span { font-size: 9px; }
+.s3-cash-piece-kind { margin-top: 5px; }
+.s3-cash-stock { margin-top: 3px; color: #53634f; font-weight: 650; }
 .s3-cash-denomination:hover:not(:disabled) { border-color: #3d6649; background: #e0e9d4; }
+.s3-cash-denomination:disabled { border-color: #d5d8ce; color: #7b8178; background: #e8e9e3; opacity: .72; }
+.s3-cash-denomination:disabled .s3-cash-stock { color: #747a70; }
 .s3-cash-pound { border-color: #c9b06d; color: #675127; background: #f2e6bd; }
 .s3-cash-note { border-color: #b8cbae; color: #3f5941; background: #e1e9d6; }
 .s3-cash-copper { border-color: #cfb39b; color: #70503b; background: #f0dfcf; }
@@ -69,6 +73,13 @@
 .s3-cash-feedback { min-height: 38px; margin-bottom: 8px !important; padding: 8px 10px; border-radius: 5px; color: #526343; background: #e8eedc; font-size: 12px; line-height: 1.65; }
 .s3-cash-feedback[data-tone="warning"] { color: #824529; background: #f7e6d5; }
 .s3-cash-feedback[data-tone="ready"] { color: #2e593a; background: #dcebd2; }
+.s3-cash-change-shortage { margin: 0 0 9px; padding: 11px; border: 1px solid #d4a278; border-radius: 6px; color: #704027; background: #f9eadb; }
+.s3-cash-change-shortage h4 { font-size: 13px; font-weight: 700; }
+.s3-cash-change-shortage > p { margin-top: 4px !important; font-size: 11px; line-height: 1.55; }
+.s3-cash-change-shortage-actions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 7px; margin-top: 9px; }
+.s3-cash-change-shortage-actions button { display: flex; align-items: flex-start; flex-direction: column; min-height: 57px; padding: 8px 10px; text-align: left; }
+.s3-cash-change-shortage-actions strong { font-size: 11px; }
+.s3-cash-change-shortage-actions span { margin-top: 4px; font: 400 11px/1.35 Georgia, serif; }
 .s3-cash-footer { margin-top: 15px !important; padding-top: 11px; border-top: 1px solid #dce0cc; color: #687461; font-size: 10px; line-height: 1.8; }
 .s3-cash-footer[data-error="true"] { padding: 10px 12px; border: 1px solid #bb8366; border-radius: 5px; color: #753e2d; background: #f8e4d5; }
 .s3-payment-method { display: inline-block; margin: 0 0 8px; padding: 3px 7px; border: 1px solid #b8c7a9; border-radius: 4px; color: #38553d; background: #e8efdc; font-size: 10px; }
@@ -91,6 +102,7 @@
   .s3-cash-dialogue { margin-bottom: 8px; padding-top: 10px; }
   .s3-cash-denominations { gap: 7px; }
   .s3-cash-section-heading > span { font-size: 9px; }
+  .s3-cash-change-shortage-actions { grid-template-columns: minmax(0, 1fr); }
 }
 @media (prefers-reduced-motion: reduce) {
   .s3-cash-dialog *, .s3-cash-dialog *::before, .s3-cash-dialog *::after { scroll-behavior: auto; }

@@ -1,9 +1,15 @@
 /** First-person shop inventory and economy, separate from the legacy 2D game. */
 import { PRODUCTS, PRODUCT_IDS, isProductId, type CrateId, type ProductId } from "./products";
 import {
-  MAX_CHANGE_PIECES, cashChangeDuePence, cashPaymentCanConfirm, createPaymentForVisit,
-  isCashDenomination, selectedChangeTotalPence, validatePaymentState, type PaymentMethod, type PaymentState,
+  CASH_DENOMINATIONS_PENCE, MAX_CHANGE_PIECES, cashChangeDuePence, cashPaymentCanConfirm, cashPiecesForAmount, createPaymentForVisit,
+  isCashDenomination, selectedChangeTotalPence, validateLegacyPaymentState, validatePaymentState,
+  type CashDenominationPence, type LegacyPaymentState, type PaymentMethod, type PaymentState,
 } from "./cashPayment";
+import {
+  applyCashDrawerTransaction, canMakeExactChange, cashDrawerCount, cashDrawerPieceCount, cashDrawerValuePence,
+  createDefaultCashDrawer, selectedChangeFitsDrawer,
+  validateCashDrawerState, type CashDrawerState,
+} from "./cashDrawer";
 import { BUSINESS_DURATION_MS, advanceBusinessElapsedMs, customerArrivalDelayMs, type BusinessPhase } from "./businessTime";
 import { crateDimensions as layoutCrateDimensions, type LayoutCollider } from "./productLayout";
 import { layoutEquals, validateShopLayout, type ShopLayout } from "./shopLayout";
@@ -86,10 +92,22 @@ export interface SimTransactionV7 {
   itemIds: string[];
   amountPence: number;
 }
-export interface SimTransaction extends SimTransactionV7 {
+export interface SimTransactionV8 extends SimTransactionV7 {
   paymentMethod: PaymentMethod;
   tenderedPence: number;
   changePence: number;
+}
+export interface SimTransaction extends SimTransactionV8 {
+  /** Tender pieces when recorded; otherwise a deterministic legacy representation. Empty for card. */
+  tenderedCash: CashDenominationPence[];
+  /** Change pieces when recorded; otherwise a deterministic legacy representation. Empty for card or exact cash. */
+  changeCash: CashDenominationPence[];
+  /** Whether the tender breakdown was actually recorded rather than reconstructed from a legacy total. */
+  tenderedCashRecorded: boolean;
+  /** Whether the returned-piece breakdown was actually recorded. */
+  changeCashRecorded: boolean;
+  /** False only for transactions migrated from a version that did not track a finite till. */
+  cashDrawerTracked: boolean;
 }
 interface SimWorldState {
   revision: number;
@@ -240,8 +258,8 @@ export interface SimStateV7 extends Omit<SimStateV6, "schemaVersion" | "settleme
 export interface SimStateV8 extends Omit<SimStateV7, "schemaVersion" | "transactions"> {
   schemaVersion: 8;
   /** Null outside an active unpaid visit; cash remains tentative until confirmation. */
-  payment: PaymentState | null;
-  transactions: SimTransaction[];
+  payment: LegacyPaymentState | null;
+  transactions: SimTransactionV8[];
 }
 export interface SimStateV9 extends Omit<SimStateV8, "schemaVersion" | "day" | "settlements"> {
   schemaVersion: 9;
@@ -253,13 +271,24 @@ export interface SimStateV10 extends Omit<SimStateV9, "schemaVersion" | "settlem
   renovation: ShopRenovation;
   settlements: SimSettlementV10[];
 }
-export interface SimState extends Omit<SimStateV10, "schemaVersion" | "customer" | "settlements"> {
+export interface SimStateV11 extends Omit<SimStateV10, "schemaVersion" | "customer" | "settlements"> {
   schemaVersion: 11;
   customer: SimStateV10["customer"] & { contentVersion: 1 | 2 };
   streetSupportRecords: SimStreetSupportRecord[];
   settlements: SimSettlement[];
 }
-type EconomySnapshot = SimState | SimStateV4 | SimStateV5 | SimStateV6 | SimStateV7 | SimStateV8 | SimStateV9 | SimStateV10;
+export interface SimState extends Omit<SimStateV11, "schemaVersion" | "payment" | "transactions"> {
+  schemaVersion: 12;
+  payment: PaymentState | null;
+  transactions: SimTransaction[];
+  /** Operational denomination stock only; it never adds a second business-money balance. */
+  cashDrawer: CashDrawerState;
+  /** Auditable denomination baseline at `cashDrawerTransactionStart`. */
+  cashDrawerOpening: CashDrawerState;
+  /** Older transactions before this boundary were made with the v1 unlimited teaching till. */
+  cashDrawerTransactionStart: number;
+}
+type EconomySnapshot = SimState | SimStateV4 | SimStateV5 | SimStateV6 | SimStateV7 | SimStateV8 | SimStateV9 | SimStateV10 | SimStateV11;
 export interface RecyclingOffer { allowed: boolean; rewardPence: number; reason?: string }
 export interface RecyclingSummary { recycledToday: number; incomeTodayPence: number }
 export interface DeliverySummary {
@@ -298,6 +327,8 @@ export type SimCommand =
   | { type: "REMOVE_CHANGE"; index: number }
   | { type: "CLEAR_CHANGE" }
   | { type: "CONFIRM_CASH" }
+  | { type: "REQUEST_EXACT_CASH" }
+  | { type: "SWITCH_CASH_TO_CARD" }
   | { type: "NEXT_CUSTOMER" }
   | { type: "CANCEL_CUSTOMER" }
   | { type: "BUY_UPGRADE" }
@@ -363,7 +394,8 @@ export function createInitialSimState(): SimState {
 export function createFirstDayState(): SimState {
   const world = createLegacyInitialState();
   return {
-    ...world, schemaVersion: 11, renovation: createInitialRenovation(), items: [], cashPence: INITIAL_CAPITAL_PENCE, payment: null, transactions: [],
+    ...world, schemaVersion: 12, renovation: createInitialRenovation(), items: [], cashPence: INITIAL_CAPITAL_PENCE, payment: null, transactions: [],
+    cashDrawer: createDefaultCashDrawer(), cashDrawerOpening: createDefaultCashDrawer(), cashDrawerTransactionStart: 0,
     customer: { ...world.customer, shoppingList: [], contentVersion: 2 },
     openingKind: "first-day", day: firstDay("first-day"), purchases: [], upgradeDay: null, settlements: [], recyclingBatches: [], recyclingRecords: [],
     streetSupportRecords: [],
@@ -391,13 +423,41 @@ function migrateBusinessDay(previous: Pick<SimEconomyState, "day" | "customer" |
 }
 
 /** Old versions only implemented card. Never reroll an already-present old visitor. */
-function migrateCardPayments(previous: Pick<SimWorldState, "customer" | "transactions">): Pick<SimState, "payment" | "transactions"> {
+function migrateCardPayments(previous: Pick<SimWorldState, "customer" | "transactions">):
+Pick<SimState, "payment" | "transactions" | "cashDrawer" | "cashDrawerOpening" | "cashDrawerTransactionStart"> {
+  const transactions: SimTransaction[] = previous.transactions.map(({ id, customerNumber, itemIds, amountPence }) => ({
+    id, customerNumber, itemIds: [...itemIds], amountPence, paymentMethod: "card", tenderedPence: amountPence, changePence: 0,
+    tenderedCash: [], changeCash: [], tenderedCashRecorded: false, changeCashRecorded: false, cashDrawerTracked: false,
+  }));
   return {
     payment: activeCustomerPhase(previous.customer.phase) ? { method: "card" } : null,
-    transactions: previous.transactions.map(({ id, customerNumber, itemIds, amountPence }) => ({
-      id, customerNumber, itemIds: [...itemIds], amountPence, paymentMethod: "card", tenderedPence: amountPence, changePence: 0,
-    })),
+    transactions,
+    cashDrawer: createDefaultCashDrawer(),
+    cashDrawerOpening: createDefaultCashDrawer(),
+    cashDrawerTransactionStart: transactions.length,
   };
+}
+
+/** v8-v11 did not retain pieces or a finite till. Start the auditable till at the migration boundary. */
+function migrateCashPaymentLedger(previous: SimStateV8 | SimStateV9 | SimStateV10 | SimStateV11):
+Pick<SimState, "payment" | "transactions" | "cashDrawer" | "cashDrawerOpening" | "cashDrawerTransactionStart"> {
+  const cashDrawer = createDefaultCashDrawer();
+  const transactions: SimTransaction[] = previous.transactions.map((transaction) => ({
+    ...transaction,
+    tenderedCash: transaction.paymentMethod === "cash" ? cashPiecesForAmount(transaction.tenderedPence) : [],
+    changeCash: transaction.paymentMethod === "cash" && transaction.changePence > 0 ? cashPiecesForAmount(transaction.changePence) : [],
+    tenderedCashRecorded: false,
+    changeCashRecorded: false,
+    cashDrawerTracked: false,
+  }));
+  let payment: PaymentState | null = previous.payment?.method === "card" ? { method: "card" } : null;
+  if (previous.payment?.method === "cash") {
+    const selectedChange = [...previous.payment.selectedChange];
+    payment = {
+      ...previous.payment, tenderedCash: cashPiecesForAmount(previous.payment.tenderedPence), tenderedCashRecorded: false, selectedChange,
+    };
+  }
+  return { payment, transactions, cashDrawer, cashDrawerOpening: { ...cashDrawer }, cashDrawerTransactionStart: transactions.length };
 }
 
 /** S0 trial goods are an opening grant; all old cash, sales, scan and held state remain intact. */
@@ -407,7 +467,7 @@ export function migrateLegacySimState(value: unknown): SimState {
   const day = firstDay("legacy-s0");
   day.phase = legacy.customer.phase === "outside" ? "preparing" : "open";
   const migrated: SimState = {
-    ...legacy, ...migrateCardPayments(legacy), schemaVersion: 11, renovation: createInitialRenovation(), openingKind: "legacy-s0", day,
+    ...legacy, ...migrateCardPayments(legacy), schemaVersion: 12, renovation: createInitialRenovation(), openingKind: "legacy-s0", day,
     customer: { ...legacy.customer, shoppingList: legacy.customer.phase === "outside" ? [] : [...LEGACY_PRODUCT_IDS], contentVersion: 1 },
     purchases: [], upgradeDay: legacy.upgraded ? 1 : null, settlements: [], recyclingBatches: [], recyclingRecords: [], streetSupportRecords: [],
   };
@@ -421,7 +481,7 @@ export function migrateV4SimState(value: unknown): SimState {
   if (!validateV4SimState(value)) throw new Error("旧版 v4 存档校验失败，不能迁移这份库存或金额。");
   const previous = structuredClone(value);
   const migrated: SimState = {
-    ...previous, ...migrateCardPayments(previous), schemaVersion: 11, renovation: createInitialRenovation(), streetSupportRecords: [],
+    ...previous, ...migrateCardPayments(previous), schemaVersion: 12, renovation: createInitialRenovation(), streetSupportRecords: [],
     day: migrateBusinessDay(previous), recyclingBatches: [], recyclingRecords: [],
     settlements: previous.settlements.map((record) => ({ ...record, recycledCrates: 0, recyclingIncomePence: 0, expansionSpendPence: 0,
       communitySupportCount: 0, communityCashPence: 0 })),
@@ -438,7 +498,7 @@ export function migrateV5SimState(value: unknown): SimState {
   if (!validateV5SimState(value)) throw new Error("旧版 v5 存档校验失败，不能迁移这份库存或金额。");
   const previous = structuredClone(value);
   const migrated: SimState = {
-    ...previous, ...migrateCardPayments(previous), schemaVersion: 11, renovation: createInitialRenovation(), streetSupportRecords: [],
+    ...previous, ...migrateCardPayments(previous), schemaVersion: 12, renovation: createInitialRenovation(), streetSupportRecords: [],
     day: migrateBusinessDay(previous), recyclingBatches: [], recyclingRecords: [],
     settlements: previous.settlements.map((record) => ({ ...record, recycledCrates: 0, recyclingIncomePence: 0, expansionSpendPence: 0,
       communitySupportCount: 0, communityCashPence: 0 })),
@@ -455,7 +515,7 @@ export function migrateV6SimState(value: unknown): SimState {
   if (!validateV6SimState(value)) throw new Error("旧版 v6 存档校验失败，不能迁移这份库存或金额。");
   const previous = structuredClone(value);
   const migrated: SimState = {
-    ...previous, ...migrateCardPayments(previous), schemaVersion: 11, renovation: createInitialRenovation(), streetSupportRecords: [],
+    ...previous, ...migrateCardPayments(previous), schemaVersion: 12, renovation: createInitialRenovation(), streetSupportRecords: [],
     day: migrateBusinessDay(previous), recyclingBatches: [], recyclingRecords: [],
     settlements: previous.settlements.map((record) => ({ ...record, recycledCrates: 0, recyclingIncomePence: 0, expansionSpendPence: 0,
       communitySupportCount: 0, communityCashPence: 0 })),
@@ -470,7 +530,7 @@ export function migrateV6SimState(value: unknown): SimState {
 export function migrateV7SimState(value: unknown): SimState {
   if (!validateV7SimState(value)) throw new Error("旧版 v7 存档校验失败，不能迁移这份库存或金额。");
   const previous = structuredClone(value);
-  const migrated: SimState = { ...previous, ...migrateCardPayments(previous), schemaVersion: 11, renovation: createInitialRenovation(),
+  const migrated: SimState = { ...previous, ...migrateCardPayments(previous), schemaVersion: 12, renovation: createInitialRenovation(),
     customer: { ...previous.customer, contentVersion: 1 }, streetSupportRecords: [], day: migrateBusinessDay(previous),
     settlements: previous.settlements.map((record) => ({ ...record, expansionSpendPence: 0, communitySupportCount: 0, communityCashPence: 0 })) };
   if (!validateSimState(migrated)) throw new Error("旧版 v7 存档迁移校验失败，原始存档未改变。");
@@ -481,7 +541,7 @@ export function migrateV7SimState(value: unknown): SimState {
 export function migrateV8SimState(value: unknown): SimState {
   if (!validateV8SimState(value)) throw new Error("旧版 v8 存档校验失败，不能迁移这份库存、现金或日结。");
   const previous = structuredClone(value);
-  const migrated: SimState = { ...previous, schemaVersion: 11, renovation: createInitialRenovation(),
+  const migrated: SimState = { ...previous, ...migrateCashPaymentLedger(previous), schemaVersion: 12, renovation: createInitialRenovation(),
     customer: { ...previous.customer, contentVersion: 1 }, streetSupportRecords: [], day: migrateBusinessDay(previous),
     settlements: previous.settlements.map((record) => ({ ...record, expansionSpendPence: 0, communitySupportCount: 0, communityCashPence: 0 })) };
   if (!validateSimState(migrated)) throw new Error("旧版 v8 存档迁移校验失败，原始存档未改变。");
@@ -493,7 +553,7 @@ export function migrateV9SimState(value: unknown): SimState {
   if (!validateV9SimState(value)) throw new Error("旧版 v9 存档校验失败，不能迁移这份营业时间、库存或资金。");
   const previous = structuredClone(value);
   const migrated: SimState = {
-    ...previous, schemaVersion: 11, renovation: createInitialRenovation(), customer: { ...previous.customer, contentVersion: 1 }, streetSupportRecords: [],
+    ...previous, ...migrateCashPaymentLedger(previous), schemaVersion: 12, renovation: createInitialRenovation(), customer: { ...previous.customer, contentVersion: 1 }, streetSupportRecords: [],
     settlements: previous.settlements.map((record) => ({ ...record, expansionSpendPence: 0, communitySupportCount: 0, communityCashPence: 0 })),
   };
   if (!validateSimState(migrated)) throw new Error("旧版 v9 存档迁移校验失败，原始存档未改变。");
@@ -505,10 +565,19 @@ export function migrateV10SimState(value: unknown): SimState {
   if (!validateV10SimState(value)) throw new Error("旧版 v10 存档校验失败，不能迁移这份装修、库存或资金。");
   const previous = structuredClone(value);
   const migrated: SimState = {
-    ...previous, schemaVersion: 11, customer: { ...previous.customer, contentVersion: 1 }, streetSupportRecords: [],
+    ...previous, ...migrateCashPaymentLedger(previous), schemaVersion: 12, customer: { ...previous.customer, contentVersion: 1 }, streetSupportRecords: [],
     settlements: previous.settlements.map((record) => ({ ...record, communitySupportCount: 0, communityCashPence: 0 })),
   };
   if (!validateSimState(migrated)) throw new Error("旧版 v10 存档迁移校验失败，原始存档未改变。");
+  return migrated;
+}
+
+/** v11 community, renovation and business records stay exact; v2 till tracking begins now. */
+export function migrateV11SimState(value: unknown): SimState {
+  if (!validateV11SimState(value)) throw new Error("旧版 v11 存档校验失败，不能迁移这份顾客、装修、库存或资金。");
+  const previous = structuredClone(value);
+  const migrated: SimState = { ...previous, ...migrateCashPaymentLedger(previous), schemaVersion: 12 };
+  if (!validateSimState(migrated)) throw new Error("旧版 v11 存档迁移校验失败，原始存档未改变。");
   return migrated;
 }
 
@@ -711,13 +780,13 @@ function summaryForRange(
   const revenuePence = transactions.reduce((total, transaction) => total + transaction.amountPence, 0);
   const procurementPence = purchases.reduce((total, purchase) => total + purchase.amountPence, 0);
   const upgradeSpendPence = state.upgradeDay === day.number ? UPGRADE_COST_PENCE : 0;
-  const expansionSpendPence = (state.schemaVersion === 10 || state.schemaVersion === 11)
+  const expansionSpendPence = (state.schemaVersion === 10 || state.schemaVersion === 11 || state.schemaVersion === 12)
     && state.renovation.expansionDay === day.number ? SHOP_EXPANSION_COST_PENCE : 0;
   const recycling = state.schemaVersion === 7 || state.schemaVersion === 8 || state.schemaVersion === 9
-    || state.schemaVersion === 10 || state.schemaVersion === 11
+    || state.schemaVersion === 10 || state.schemaVersion === 11 || state.schemaVersion === 12
     ? state.recyclingRecords.filter((record) => record.dayNumber === day.number) : [];
   const recyclingIncomePence = recycling.reduce((sum, record) => sum + record.amountPence, 0);
-  const community = state.schemaVersion === 11
+  const community = state.schemaVersion === 11 || state.schemaVersion === 12
     ? state.streetSupportRecords.filter((record) => record.dayNumber === day.number) : [];
   const communityCashPence = community.reduce((sum, record) => sum + record.amountPence, 0);
   return {
@@ -737,6 +806,27 @@ function summaryForRange(
 /** Purchase expense is cash flow; gross profit subtracts sold-goods cost, not all unsold stock. */
 export function getDaySummary(state: EconomySnapshot): SimDaySummary {
   return summaryForRange(state, state.day, state.transactions.length, state.purchases.length);
+}
+
+export interface PaymentMethodSummary {
+  cashTransactions: number;
+  cardTransactions: number;
+  cashRevenuePence: number;
+  cardRevenuePence: number;
+}
+
+/** Payment-method split is derived from the transaction ledger, never a second cash balance. */
+export function getPaymentMethodSummary(state: SimState): PaymentMethodSummary {
+  return state.transactions.slice(state.day.transactionStart).reduce<PaymentMethodSummary>((summary, transaction) => {
+    if (transaction.paymentMethod === "cash") {
+      summary.cashTransactions += 1;
+      summary.cashRevenuePence += transaction.amountPence;
+    } else {
+      summary.cardTransactions += 1;
+      summary.cardRevenuePence += transaction.amountPence;
+    }
+    return summary;
+  }, { cashTransactions: 0, cardTransactions: 0, cashRevenuePence: 0, cardRevenuePence: 0 });
 }
 
 export function canSettleDay(state: SimState): boolean {
@@ -861,13 +951,25 @@ export function reduceSim(state: SimState, command: SimCommand): SimResult {
     const items = checkoutItems();
     return items.length > 0 && items.every((item) => next.scannedIds.includes(item.id));
   };
-  const commitPayment = (paymentMethod: PaymentMethod, tenderedPence: number, changePence: number): SimResult => {
+  const commitPayment = (paymentMethod: PaymentMethod, tenderedPence: number, changePence: number,
+    tenderedCash: readonly CashDenominationPence[] = [], changeCash: readonly CashDenominationPence[] = [],
+    tenderedCashRecorded = false, changeCashRecorded = false): SimResult => {
     const transactionId = `sale-${next.customer.number}`;
     if (next.transactions.some((transaction) => transaction.id === transactionId)) return reject("这笔交易已经收款。");
     const items = checkoutItems();
     const amountPence = getCheckoutTotal(next);
+    if (paymentMethod === "cash") {
+      try {
+        next.cashDrawer = applyCashDrawerTransaction(next.cashDrawer, {
+          tenderedCash, tenderedPence, changeCash, changePence,
+        });
+      } catch {
+        return reject("钱箱中的零钱不足或面额已变化，本单尚未完成；请重新核对。");
+      }
+    }
     next.transactions.push({ id: transactionId, customerNumber: next.customer.number, itemIds: items.map((item) => item.id),
-      amountPence, paymentMethod, tenderedPence, changePence });
+      amountPence, paymentMethod, tenderedPence, changePence, tenderedCash: [...tenderedCash], changeCash: [...changeCash],
+      tenderedCashRecorded, changeCashRecorded, cashDrawerTracked: true });
     // This is the unified business balance, not a physical drawer balance.
     next.cashPence += amountPence;
     for (const item of items) item.location = { kind: "sold", transactionId };
@@ -1038,6 +1140,8 @@ export function reduceSim(state: SimState, command: SimCommand): SimResult {
       if (command.type === "ADD_CHANGE") {
         if (!isCashDenomination(command.denominationPence)) return reject("请选择有效的英镑纸币或硬币面额。");
         if (next.payment.selectedChange.length >= MAX_CHANGE_PIECES) return reject(`一次最多选择 ${MAX_CHANGE_PIECES} 枚零钱，请先移除或清空部分选择。`);
+        const alreadySelected = next.payment.selectedChange.filter((piece) => piece === command.denominationPence).length;
+        if (alreadySelected >= cashDrawerCount(next.cashDrawer, command.denominationPence)) return reject("钱箱里这一面额已经用完，请换一种找零组合。");
         next.payment.selectedChange.push(command.denominationPence);
       } else if (command.type === "REMOVE_CHANGE") {
         if (!isInteger(command.index) || command.index < 0 || command.index >= next.payment.selectedChange.length) return reject("这枚零钱不在当前选择中。");
@@ -1058,7 +1162,31 @@ export function reduceSim(state: SimState, command: SimCommand): SimResult {
         const selected = selectedChangeTotalPence(next.payment.selectedChange);
         return reject(`找零${selected > changePence ? "多了" : "还不够"}，请重新核对；本单尚未完成，资金和商品未改变。`);
       }
-      return commitPayment("cash", next.payment.tenderedPence, changePence);
+      if (!selectedChangeFitsDrawer(next.cashDrawer, next.payment.selectedChange)) {
+        return reject("钱箱中的零钱不足，本单尚未完成；请重新选择、请顾客给刚好金额，或改为刷卡。");
+      }
+      return commitPayment("cash", next.payment.tenderedPence, changePence,
+        next.payment.tenderedCash, next.payment.selectedChange as CashDenominationPence[], next.payment.tenderedCashRecorded, true);
+    }
+    case "REQUEST_EXACT_CASH":
+    case "SWITCH_CASH_TO_CARD": {
+      if (next.customer.phase !== "checkout" || next.payment?.method !== "cash" || !next.payment.received || !allScanned()) {
+        return reject("请先扫描全部商品并接收现金，再处理零钱不足。");
+      }
+      const amountPence = getCheckoutTotal(next);
+      const changePence = cashChangeDuePence(next.payment, amountPence);
+      if (changePence === 0 || canMakeExactChange(next.cashDrawer, changePence)) {
+        return reject("钱箱仍能配出正确找零，请先清空并重新选择零钱。");
+      }
+      if (command.type === "REQUEST_EXACT_CASH") {
+        next.payment = {
+          method: "cash", tenderedPence: amountPence, tenderedCash: cashPiecesForAmount(amountPence), tenderedCashRecorded: true,
+          received: false, selectedChange: [],
+        };
+        return finish("已把原现金退回，并请顾客改给刚好金额；请重新接收现金。资金和钱箱尚未改变。");
+      }
+      next.payment = { method: "card" };
+      return finish("已把暂收现金退回，顾客改为刷卡；请使用刷卡机完成本单。资金和钱箱尚未改变。");
     }
     case "CANCEL_CUSTOMER": {
       if (["outside", "leaving", "complete"].includes(next.customer.phase)) return reject("当前没有可以取消的购物流程。");
@@ -1195,7 +1323,7 @@ export function canUnlockAdvancedUpgrade(input: {
     && input.requiredTaskIds.every((id) => id.length > 0 && input.completedIndependentTaskIds.includes(id));
 }
 
-function validPose(value: unknown, version: 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11, expansion: 0 | 1 = 0): value is PlayerPose {
+function validPose(value: unknown, version: 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12, expansion: 0 | 1 = 0): value is PlayerPose {
   return isRecord(value) && isFiniteNumber(value.x) && isFiniteNumber(value.z) && isFiniteNumber(value.yaw) && isFiniteNumber(value.pitch)
     && (version >= 5 ? isWalkablePosition({ x: value.x, z: value.z }, 0, version >= 10 ? expansion : 0)
       : value.x >= INDOOR_BOUNDS.minX && value.x <= INDOOR_BOUNDS.maxX && value.z >= INDOOR_BOUNDS.minZ && value.z <= INDOOR_BOUNDS.maxZ)
@@ -1209,7 +1337,7 @@ function validReturnLocation(value: unknown, productId: ProductId, capacity: num
 }
 
 /** Shared physical ownership checks; S0 additionally requires its fixed eight-unit grant. */
-function validateWorldState(value: unknown, version: 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11): value is EconomySnapshot | LegacySimState {
+function validateWorldState(value: unknown, version: 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12): value is EconomySnapshot | LegacySimState {
   const legacy = version === 3;
   const knownProduct = (input: unknown): input is ProductId => version >= 6 ? isProductId(input) : isLegacyProductId(input);
   if (!isRecord(value) || value.schemaVersion !== version || !isInteger(value.revision) || value.revision < 0
@@ -1240,7 +1368,7 @@ function validateWorldState(value: unknown, version: 3 | 4 | 5 | 6 | 7 | 8 | 9 |
   }
   if (!isRecord(value.customer) || !isInteger(value.customer.number) || value.customer.number < 1
     || typeof value.customer.phase !== "string" || !["outside", "to-milk", "to-bread", "to-checkout", "checkout", "leaving", "complete"].includes(value.customer.phase)) return false;
-  if (version === 11 && value.customer.contentVersion !== 1 && value.customer.contentVersion !== 2) return false;
+  if (version >= 11 && value.customer.contentVersion !== 1 && value.customer.contentVersion !== 2) return false;
   const capacity = value.upgraded ? 8 : 4;
   const itemIds = new Set<string>();
   const occupiedSlots = new Set<string>();
@@ -1302,9 +1430,15 @@ function validateWorldState(value: unknown, version: 3 | 4 | 5 | 6 | 7 | 8 | 9 |
   if (version >= 8) {
     if (activeCustomerPhase(value.customer.phase)) {
       const amountPence = shoppingList.reduce((sum, productId) => sum + PRODUCTS[productId].pricePence, 0);
-      if (!validatePaymentState(value.payment, amountPence)) return false;
+      if (version === 12) {
+        if (!validatePaymentState(value.payment, amountPence)) return false;
+        const payment = value.payment as PaymentState;
+        if (payment.method === "cash" && payment.tenderedCashRecorded
+          && !selectedChangeFitsDrawer((value as unknown as SimState).cashDrawer, payment.selectedChange)) return false;
+      } else if (!validateLegacyPaymentState(value.payment, amountPence)) return false;
+      const payment = value.payment as PaymentState | LegacyPaymentState;
       const scannedIds = value.scannedIds;
-      if (value.payment.method === "cash" && value.payment.received
+      if (payment.method === "cash" && payment.received
         && (value.customer.phase !== "checkout" || checkout.some((item) => !scannedIds.includes(item.id)))) return false;
     } else if (value.payment !== null) return false;
   }
@@ -1336,13 +1470,68 @@ function validateWorldState(value: unknown, version: 3 | 4 | 5 | 6 | 7 | 8 | 9 |
         || !isInteger(transaction.tenderedPence) || !isInteger(transaction.changePence)
         || transaction.changePence < 0 || transaction.tenderedPence < transaction.amountPence
         || transaction.changePence !== transaction.tenderedPence - transaction.amountPence) return false;
-      if (transaction.paymentMethod === "card") {
+      if (version === 12) {
+        if (!Array.isArray(transaction.tenderedCash) || !Array.isArray(transaction.changeCash)
+          || transaction.tenderedCash.some((piece) => !isCashDenomination(piece))
+          || transaction.changeCash.some((piece) => !isCashDenomination(piece))
+          || transaction.tenderedCash.length > MAX_CHANGE_PIECES || transaction.changeCash.length > MAX_CHANGE_PIECES
+          || typeof transaction.tenderedCashRecorded !== "boolean" || typeof transaction.changeCashRecorded !== "boolean"
+          || typeof transaction.cashDrawerTracked !== "boolean") return false;
+        const tenderedCash = transaction.tenderedCash as CashDenominationPence[];
+        const changeCash = transaction.changeCash as CashDenominationPence[];
+        if (transaction.paymentMethod === "card") {
+          if (transaction.tenderedPence !== transaction.amountPence || transaction.changePence !== 0
+            || tenderedCash.length !== 0 || changeCash.length !== 0
+            || transaction.tenderedCashRecorded || transaction.changeCashRecorded) return false;
+        } else if (!validatePaymentState({ method: "cash", tenderedPence: transaction.tenderedPence,
+          tenderedCash, tenderedCashRecorded: transaction.tenderedCashRecorded, received: true, selectedChange: [] }, transaction.amountPence)
+          || selectedChangeTotalPence(changeCash) !== transaction.changePence
+          || (transaction.cashDrawerTracked && !transaction.changeCashRecorded)) return false;
+        if (transaction.paymentMethod === "cash" && (!transaction.tenderedCashRecorded || !transaction.changeCashRecorded)) {
+          const legacyTender = cashPiecesForAmount(transaction.tenderedPence);
+          const legacyChange = transaction.changePence > 0 ? cashPiecesForAmount(transaction.changePence) : [];
+          if ((!transaction.tenderedCashRecorded && (legacyTender.length !== tenderedCash.length
+            || legacyTender.some((piece, index) => piece !== tenderedCash[index])
+          )) || (!transaction.changeCashRecorded && (legacyChange.length !== changeCash.length
+            || legacyChange.some((piece, index) => piece !== changeCash[index])))) return false;
+        }
+        if (!transaction.cashDrawerTracked && (transaction.tenderedCashRecorded || transaction.changeCashRecorded)) return false;
+      } else if (transaction.paymentMethod === "card") {
         if (transaction.tenderedPence !== transaction.amountPence || transaction.changePence !== 0) return false;
-      } else if (!validatePaymentState({ method: "cash", tenderedPence: transaction.tenderedPence, received: true, selectedChange: [] }, transaction.amountPence)) return false;
+      } else if (!validateLegacyPaymentState({ method: "cash", tenderedPence: transaction.tenderedPence,
+        received: true, selectedChange: [] }, transaction.amountPence)) return false;
     }
     transactionIds.add(transaction.id);
     grossPence += transaction.amountPence;
     previousCustomerNumber = transaction.customerNumber;
+  }
+  if (version === 12) {
+    const current = value as unknown as SimState;
+    if (!validateCashDrawerState(current.cashDrawer) || !validateCashDrawerState(current.cashDrawerOpening)
+      || !isInteger(current.cashDrawerTransactionStart)
+      || current.cashDrawerTransactionStart < 0 || current.cashDrawerTransactionStart > current.transactions.length) return false;
+    const defaultDrawer = createDefaultCashDrawer();
+    if (CASH_DENOMINATIONS_PENCE.some((denomination) =>
+      cashDrawerCount(current.cashDrawerOpening, denomination) !== cashDrawerCount(defaultDrawer, denomination))) return false;
+    if (current.transactions.some((transaction, index) =>
+      transaction.cashDrawerTracked !== (index >= current.cashDrawerTransactionStart))) return false;
+    let expectedDrawer: CashDrawerState = { ...current.cashDrawerOpening };
+    try {
+      cashDrawerPieceCount(current.cashDrawer);
+      cashDrawerValuePence(current.cashDrawer);
+      cashDrawerPieceCount(current.cashDrawerOpening);
+      cashDrawerValuePence(current.cashDrawerOpening);
+      for (const transaction of current.transactions.slice(current.cashDrawerTransactionStart)) {
+        if (transaction.paymentMethod === "cash") expectedDrawer = applyCashDrawerTransaction(expectedDrawer, {
+          tenderedCash: transaction.tenderedCash, tenderedPence: transaction.tenderedPence,
+          changeCash: transaction.changeCash, changePence: transaction.changePence,
+        });
+      }
+    } catch {
+      return false;
+    }
+    if (CASH_DENOMINATIONS_PENCE.some((denomination) => cashDrawerCount(expectedDrawer, denomination)
+      !== cashDrawerCount(current.cashDrawer, denomination))) return false;
   }
   if (items.some((item) => item.location.kind === "sold" && !soldIds.has(item.id))) return false;
   if (legacy && value.customer.phase === "outside" && (value.customer.number !== 1 || value.transactions.length !== 0)) return false;
@@ -1376,7 +1565,7 @@ function validBusinessClock(day: unknown): boolean {
 }
 
 /** The ledger proves each item source, purchase quantity, paid sale, daily carry and cash balance. */
-function validateEconomyState(value: unknown, version: 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11): value is EconomySnapshot {
+function validateEconomyState(value: unknown, version: 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12): value is EconomySnapshot {
   if (!validateWorldState(value, version) || value.schemaVersion === 3) return false;
   if (value.customerSeed !== undefined && (!isInteger(value.customerSeed) || value.customerSeed < 0 || value.customerSeed > 0xffffffff)) return false;
   if (value.openingKind !== "first-day" && value.openingKind !== "legacy-s0") return false;
@@ -1387,7 +1576,7 @@ function validateEconomyState(value: unknown, version: 4 | 5 | 6 | 7 | 8 | 9 | 1
     || !Array.isArray(value.purchases) || !isInteger(value.day.purchaseStart) || value.day.purchaseStart < 0 || value.day.purchaseStart > value.purchases.length
     || !Array.isArray(value.settlements)
     || [value.day.openingCashPence, value.day.openingInventoryValuePence, value.day.openingStockUnits].some((amount) => !isInteger(amount) || amount < 0)) return false;
-  if (value.schemaVersion === 9 || value.schemaVersion === 10 || value.schemaVersion === 11) {
+  if (value.schemaVersion === 9 || value.schemaVersion === 10 || value.schemaVersion === 11 || value.schemaVersion === 12) {
     if (!validBusinessClock(value.day)) return false;
     const awaitingCustomer = value.day.phase === "open" && value.customer.phase === "complete";
     if (awaitingCustomer !== (value.day.nextCustomerAtMs !== null)) return false;
@@ -1451,7 +1640,7 @@ function validateEconomyState(value: unknown, version: 4 | 5 | 6 | 7 | 8 | 9 | 1
   if (version === 6 && (value.crates.length !== expectedCrateIds.size || value.crates.some((crate) => !expectedCrateIds.has(crate.id)))) return false;
   let recyclingIncomePence = 0;
   if (value.schemaVersion === 7 || value.schemaVersion === 8 || value.schemaVersion === 9
-    || value.schemaVersion === 10 || value.schemaVersion === 11) {
+    || value.schemaVersion === 10 || value.schemaVersion === 11 || value.schemaVersion === 12) {
     if (!Array.isArray(value.recyclingRecords) || !Array.isArray(value.recyclingBatches)) return false;
     const sourceBatches = new Map<string, string>();
     const batchById = new Map<string, SimRecyclingBatch>();
@@ -1517,7 +1706,7 @@ function validateEconomyState(value: unknown, version: 4 | 5 | 6 | 7 | 8 | 9 | 1
     }
   }
   let communityCashPence = 0;
-  if (value.schemaVersion === 11) {
+  if (value.schemaVersion === 11 || value.schemaVersion === 12) {
     if (!Array.isArray(value.streetSupportRecords)) return false;
     let previousSupportDay = 0;
     for (const record of value.streetSupportRecords) {
@@ -1538,7 +1727,7 @@ function validateEconomyState(value: unknown, version: 4 | 5 | 6 | 7 | 8 | 9 | 1
   }
   const opening = firstDay(value.openingKind);
   const grossPence = value.transactions.reduce((sum, transaction) => sum + transaction.amountPence, 0);
-  const expansionSpendPence = (value.schemaVersion === 10 || value.schemaVersion === 11)
+  const expansionSpendPence = (value.schemaVersion === 10 || value.schemaVersion === 11 || value.schemaVersion === 12)
     && value.renovation.layout.expansion === 1 ? SHOP_EXPANSION_COST_PENCE : 0;
   const expectedCash = opening.openingCashPence + grossPence + recyclingIncomePence - purchaseSpendPence
     - (value.upgraded ? UPGRADE_COST_PENCE : 0) - expansionSpendPence - communityCashPence;
@@ -1570,11 +1759,11 @@ function validateEconomyState(value: unknown, version: 4 | 5 | 6 | 7 | 8 | 9 | 1
     if ((record.targetCustomers === DAY_CUSTOMER_TARGET && (summary.paidCustomers < DAY_CUSTOMER_TARGET || summary.paidCustomers > maxPaid))
       || SUMMARY_FIELDS.some((field) => !isInteger(record[field]) || record[field] !== summary[field])
       || ((value.schemaVersion === 7 || value.schemaVersion === 8 || value.schemaVersion === 9
-          || value.schemaVersion === 10 || value.schemaVersion === 11)
+          || value.schemaVersion === 10 || value.schemaVersion === 11 || value.schemaVersion === 12)
         && RECYCLING_SUMMARY_FIELDS.some((field) => !isInteger(record[field]) || record[field] !== summary[field]))
-      || ((value.schemaVersion === 10 || value.schemaVersion === 11)
+      || ((value.schemaVersion === 10 || value.schemaVersion === 11 || value.schemaVersion === 12)
         && (!isInteger(record.expansionSpendPence) || record.expansionSpendPence !== summary.expansionSpendPence))
-      || (value.schemaVersion === 11
+      || ((value.schemaVersion === 11 || value.schemaVersion === 12)
         && COMMUNITY_SUMMARY_FIELDS.some((field) => !isInteger(record[field]) || record[field] !== summary[field]))
       || summary.closingCashPence < 0 || summary.remainingStockUnits < 0 || summary.remainingInventoryValuePence < 0) return false;
     if (value.purchases.slice(purchaseStart, record.purchaseEnd).some((purchase) => purchase.dayNumber !== number)) return false;
@@ -1602,7 +1791,7 @@ function validateEconomyState(value: unknown, version: 4 | 5 | 6 | 7 | 8 | 9 | 1
   if (value.day.phase === "preparing") {
     if (value.customer.phase !== "outside" || current.paidCustomers !== 0) return false;
   } else if (value.customer.phase === "outside" && (version < 9 || value.day.phase === "open" || current.paidCustomers !== 0)) return false;
-  if (value.schemaVersion === 9 || value.schemaVersion === 10 || value.schemaVersion === 11) {
+  if (value.schemaVersion === 9 || value.schemaVersion === 10 || value.schemaVersion === 11 || value.schemaVersion === 12) {
     if (value.day.phase === "settled" && (!["outside", "complete"].includes(value.customer.phase)
       || value.payment !== null || value.scannedIds.length !== 0
       || value.settlements.at(-1)?.targetCustomers !== (value.day.closeReason === "legacy" ? DAY_CUSTOMER_TARGET : null))) return false;
@@ -1641,6 +1830,10 @@ export function validateV10SimState(value: unknown): value is SimStateV10 {
   return validateEconomyState(value, 10) && value.schemaVersion === 10;
 }
 
-export function validateSimState(value: unknown): value is SimState {
+export function validateV11SimState(value: unknown): value is SimStateV11 {
   return validateEconomyState(value, 11) && value.schemaVersion === 11;
+}
+
+export function validateSimState(value: unknown): value is SimState {
+  return validateEconomyState(value, 12) && value.schemaVersion === 12;
 }

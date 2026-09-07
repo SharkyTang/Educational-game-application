@@ -1,12 +1,16 @@
 import { describe, expect, it } from "vitest";
 import {
   CASH_DENOMINATIONS_PENCE, MAX_CHANGE_PIECES, cashChangeDuePence, cashPaymentCanConfirm,
-  createPaymentForVisit, isCashDenomination, selectedChangeTotalPence, validatePaymentState,
+  cashPiecesForAmount, createPaymentForVisit, isCashDenomination, selectedChangeTotalPence,
+  validateLegacyPaymentState, validatePaymentState,
   type CashPaymentState,
 } from "../../src/sim3d/cashPayment";
 
 function cash(overrides: Partial<CashPaymentState> = {}): CashPaymentState {
-  return { method: "cash", tenderedPence: 500, received: true, selectedChange: [], ...overrides };
+  const tenderedPence = overrides.tenderedPence ?? 500;
+  const tenderedCash = overrides.tenderedCash ?? (Number.isSafeInteger(tenderedPence) && tenderedPence > 0
+    ? cashPiecesForAmount(tenderedPence) : [500]);
+  return { method: "cash", tenderedPence, tenderedCash, tenderedCashRecorded: true, received: true, selectedChange: [], ...overrides };
 }
 
 describe("cash payment scenario selection", () => {
@@ -47,18 +51,20 @@ describe("cash payment scenario selection", () => {
     expect(seenTenders).toEqual(new Set([435, 500, 1000]));
   });
 
-  it("never offers insufficient notes and handles large valid visit numbers or totals in constant space", () => {
-    for (const amountPence of [1, 5, 435, 500, 501, 995, 1000, 1001, Number.MAX_SAFE_INTEGER]) {
+  it("never offers insufficient notes and handles representable totals or large visit numbers in bounded space", () => {
+    for (const amountPence of [1, 5, 435, 500, 501, 995, 1000, 1001, 50_000]) {
       for (let customerNumber = 2; customerNumber <= 100; customerNumber += 1) {
         const payment = createPaymentForVisit({ customerSeed: 22, customerNumber, amountPence });
         expect(validatePaymentState(payment, amountPence)).toBe(true);
         if (payment.method === "cash") {
           expect(payment.tenderedPence).toBeGreaterThanOrEqual(amountPence);
           expect([amountPence, 500, 1000]).toContain(payment.tenderedPence);
+          expect(selectedChangeTotalPence(payment.tenderedCash)).toBe(payment.tenderedPence);
         }
       }
     }
     expect(validatePaymentState(createPaymentForVisit({ customerNumber: Number.MAX_SAFE_INTEGER, amountPence: 435 }), 435)).toBe(true);
+    expect(() => createPaymentForVisit({ customerNumber: 2, amountPence: 100_001 })).toThrow("单笔上限");
   });
 
   it.each([0, -1, .5, NaN, Infinity, Number.MAX_SAFE_INTEGER + 1])("rejects invalid amount or visit number %s", (value) => {
@@ -72,6 +78,20 @@ describe("cash payment scenario selection", () => {
 });
 
 describe("cash denominations, confirmation and snapshot validation", () => {
+  it("decomposes the actual customer tender deterministically and keeps its sum auditable", () => {
+    expect(cashPiecesForAmount(435)).toEqual([200, 200, 20, 10, 5]);
+    expect(cashPiecesForAmount(500)).toEqual([500]);
+    expect(cashPiecesForAmount(1001)).toEqual([1000, 1]);
+    for (const amountPence of [1, 2, 7, 65, 435, 500, 1000, 50_000]) {
+      const pieces = cashPiecesForAmount(amountPence);
+      expect(pieces.length).toBeLessThanOrEqual(MAX_CHANGE_PIECES);
+      expect(selectedChangeTotalPence(pieces)).toBe(amountPence);
+    }
+    for (const amountPence of [0, -1, .5, NaN, Infinity, 100_001]) {
+      expect(() => cashPiecesForAmount(amountPence)).toThrow();
+    }
+  });
+
   it("uses integer pence, including optional 1p and 2p denominations", () => {
     expect(CASH_DENOMINATIONS_PENCE).toEqual([1, 2, 5, 10, 20, 50, 100, 200, 500, 1000]);
     for (const denomination of CASH_DENOMINATIONS_PENCE) expect(isCashDenomination(denomination)).toBe(true);
@@ -121,12 +141,30 @@ describe("cash denominations, confirmation and snapshot validation", () => {
     cash({ tenderedPence: 434 }), cash({ tenderedPence: 501 }), cash({ tenderedPence: .5 }),
     cash({ tenderedPence: NaN }), cash({ tenderedPence: Infinity }),
     { ...cash(), received: "true" }, { ...cash(), selectedChange: "65" },
+    { ...cash(), tenderedCash: [] }, { ...cash(), tenderedCash: [200, 200, 50] },
+    { ...cash(), tenderedCash: [3] }, { ...cash(), tenderedCash: "500" },
+    { ...cash(), tenderedCash: Array<number>(1) },
+    { ...cash(), tenderedCashRecorded: "true" },
+    { method: "cash", tenderedPence: 500, received: true, selectedChange: [] },
     cash({ received: false, selectedChange: [50] }), cash({ selectedChange: [NaN] }),
     cash({ selectedChange: Array<number>(1) }),
     cash({ selectedChange: [Infinity] }), cash({ selectedChange: [-1] }), cash({ selectedChange: [.5] }),
     cash({ selectedChange: [3] }), { ...cash(), arbitraryField: true },
   ])("rejects malformed payment snapshots %j", (payment) => {
     expect(validatePaymentState(payment, 435)).toBe(false);
+  });
+
+  it("requires an explicit recorded-or-derived marker for the tender breakdown", () => {
+    const { tenderedCashRecorded: _marker, ...missingMarker } = cash();
+    expect(validatePaymentState(missingMarker, 435)).toBe(false);
+    expect(validatePaymentState({ ...cash(), tenderedCashRecorded: false }, 435)).toBe(true);
+  });
+
+  it("keeps the old four-field cash shape valid only at the explicit v8-v11 boundary", () => {
+    const legacy = { method: "cash" as const, tenderedPence: 500, received: true, selectedChange: [50, 10, 5] };
+    expect(validateLegacyPaymentState(legacy, 435)).toBe(true);
+    expect(validatePaymentState(legacy, 435)).toBe(false);
+    expect(validateLegacyPaymentState({ ...legacy, tenderedCash: [500] }, 435)).toBe(false);
   });
 
   it.each([0, -1, .5, NaN, Infinity, Number.MAX_SAFE_INTEGER + 1])("rejects payment validation with invalid expected amount %s", (amountPence) => {

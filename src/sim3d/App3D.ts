@@ -1,7 +1,7 @@
 import {
   PRODUCTS, PRODUCT_IDS, UPGRADE_COST_PENCE, capacityFor, countAt,
   createFirstDayState, getCheckoutTotal, getObjective, reduceSim,
-  getDaySummary, getPurchaseOffer, getDeliverySummary, getCustomerOrder, getShoppingProduct,
+  getDaySummary, getPaymentMethodSummary, getPurchaseOffer, getDeliverySummary, getCustomerOrder, getShoppingProduct,
   getRecyclingOffer, getRecyclingSummary, RECYCLING_REWARD_PENCE,
   canSettleDay, canStartCustomer, getShopLayoutObstacles, CRATE_CAPACITY,
   type PlayerPose, type ProductId, type PurchaseLine, type SimCommand, type SimState,
@@ -13,8 +13,9 @@ import { ShopAudio, type ShopEffect } from "./shopAudio";
 import { createCustomerSeed, customerProfileFor, customerSpeechFor, cashTenderSpeechFor, type CustomerSpeechClip } from "./customerSelection";
 import { getBusinessClock } from "./businessTime";
 import { BusinessClockDriver, isBusinessTimeRunning } from "./businessClockDriver";
-import { cashRegisterMarkup } from "./cashRegister";
+import { cashRegisterMarkup, denominationLabel } from "./cashRegister";
 import { CashRegisterController } from "./cashRegisterController";
+import { cashDrawerPieceCount, cashDrawerValuePence } from "./cashDrawer";
 import { LayoutEditor } from "./layoutEditor";
 import { DevelopmentPanel } from "./developmentPanel";
 import { shopRenovationReason } from "./shopDevelopment";
@@ -221,6 +222,7 @@ export class App3D {
       read: () => ({
         payment: this.state.payment,
         amountPence: getCheckoutTotal(this.state),
+        drawer: this.state.cashDrawer,
         atCheckout: this.state.customer.phase === "checkout",
         canWrite: !!this.saveSession?.canWrite,
         customerName: `${customerProfileFor(this.state).name} · 第 ${this.state.customer.number} 位顾客`,
@@ -519,7 +521,8 @@ export class App3D {
             <p id="s3-day-eyebrow" class="s3-eyebrow">TODAY AT THE CORNER SHOP</p><h3 id="s3-day-title">今天的小店</h3>
             <p id="s3-day-progress" class="s3-muted"></p>
             <p id="s3-day-clock" class="s3-day-clock"></p>
-            <dl class="s3-account-lines"><div><dt>今日营业收入</dt><dd id="s3-day-revenue"></dd></div><div><dt>已售商品成本</dt><dd id="s3-day-cogs"></dd></div><div class="s3-account-result"><dt>商品毛利</dt><dd id="s3-day-profit"></dd></div><div><dt>空箱回收收入</dt><dd id="s3-day-recycling"></dd></div><div><dt>今日进货支出</dt><dd id="s3-day-procurement"></dd></div><div><dt>货架扩容支出</dt><dd id="s3-day-investment"></dd></div><div><dt>店面扩建支出</dt><dd id="s3-day-expansion"></dd></div><div><dt>社区现金帮助</dt><dd id="s3-day-community"></dd></div><div><dt>当前剩余资金</dt><dd id="s3-day-cash"></dd></div><div><dt>未售商品 / 成本价值</dt><dd id="s3-day-inventory"></dd></div></dl>
+            <dl class="s3-account-lines"><div><dt>今日营业收入</dt><dd id="s3-day-revenue"></dd></div><div><dt>现金付款</dt><dd id="s3-day-cash-sales"></dd></div><div><dt>刷卡付款</dt><dd id="s3-day-card-sales"></dd></div><div><dt>教学钱箱面额</dt><dd id="s3-day-drawer"></dd></div><div><dt>已售商品成本</dt><dd id="s3-day-cogs"></dd></div><div class="s3-account-result"><dt>商品毛利</dt><dd id="s3-day-profit"></dd></div><div><dt>空箱回收收入</dt><dd id="s3-day-recycling"></dd></div><div><dt>今日进货支出</dt><dd id="s3-day-procurement"></dd></div><div><dt>货架扩容支出</dt><dd id="s3-day-investment"></dd></div><div><dt>店面扩建支出</dt><dd id="s3-day-expansion"></dd></div><div><dt>社区现金帮助</dt><dd id="s3-day-community"></dd></div><div><dt>当前剩余资金</dt><dd id="s3-day-cash"></dd></div><div><dt>未售商品 / 成本价值</dt><dd id="s3-day-inventory"></dd></div></dl>
+            <p id="s3-day-drawer-detail" class="s3-muted"></p>
             <p id="s3-day-recycling-count" class="s3-muted"></p>
             <p class="s3-muted">商品毛利 = 营业收入 − 已售商品成本。回收收入单独记账，自愿现金帮助单独记为社区支出，不计经验或成就。进货中尚未卖出的部分仍是存货；扩容是投资，不把钱包余额当利润。</p>
             <p id="s3-day-reason" class="s3-inline-reason" role="status"></p>
@@ -1407,6 +1410,7 @@ export class App3D {
   private renderManagement(): void {
     const writable = !!this.saveSession?.canWrite;
     const day = getDaySummary(this.state);
+    const paymentMethods = getPaymentMethodSummary(this.state);
     const delivery = getDeliverySummary(this.state);
     this.el("s3-pause").classList.toggle("s3-pause-street", this.managementSection === "street");
     this.el("s3-pause").classList.toggle("s3-pause-supply", this.managementSection === "supply");
@@ -1422,6 +1426,11 @@ export class App3D {
     for (const [suffix, value] of [["revenue", day.revenuePence], ["cogs", day.costOfGoodsPence], ["profit", day.grossProfitPence], ["recycling", day.recyclingIncomePence], ["procurement", day.procurementPence], ["investment", day.upgradeSpendPence], ["expansion", day.expansionSpendPence], ["community", day.communityCashPence], ["cash", day.closingCashPence]] as const) {
       this.text(`s3-day-${suffix}`, money(value));
     }
+    this.text("s3-day-cash-sales", `${paymentMethods.cashTransactions} 单 / ${money(paymentMethods.cashRevenuePence)}`);
+    this.text("s3-day-card-sales", `${paymentMethods.cardTransactions} 单 / ${money(paymentMethods.cardRevenuePence)}`);
+    this.text("s3-day-drawer", `${cashDrawerPieceCount(this.state.cashDrawer)} 枚/张 · ${money(cashDrawerValuePence(this.state.cashDrawer))}`);
+    this.text("s3-day-drawer-detail", `面额库存：${[...Object.entries(this.state.cashDrawer)]
+      .map(([denomination, count]) => `${denominationLabel(Number(denomination))} × ${count}`).join(" · ")}。这是找零教学库存，不重复计入小店资金。`);
     const recycling = getRecyclingSummary(this.state);
     this.text("s3-day-recycling-count", `今日回收 ${recycling.recycledToday} 箱 · 店门旁回收点按 E 投入，无容量上限。新进货空箱每箱 ${money(RECYCLING_REWARD_PENCE)}，同批来源不重复奖励。`);
     this.text("s3-day-inventory", `${day.remainingStockUnits} 件 / ${money(day.remainingInventoryValuePence)}`);
@@ -1600,7 +1609,11 @@ export class App3D {
     this.text("s3-payment-method", method === "cash" ? "现金付款 · CASH" : "刷卡付款 · CARD");
     this.el("s3-receipt-cash-breakdown").hidden = !showPaid || method !== "cash";
     this.text("s3-receipt-cash-breakdown", showPaid && transaction?.paymentMethod === "cash"
-      ? `交付 ${money(transaction.tenderedPence)} · 找零 ${money(transaction.changePence)} · 本单入账 ${money(transaction.amountPence)}` : "");
+      ? `交付 ${money(transaction.tenderedPence)}${transaction.tenderedCashRecorded
+        ? `（${transaction.tenderedCash.map(denominationLabel).join(" + ")}）` : "（旧版未记录面额）"} · 找零 ${money(transaction.changePence)}${transaction.changePence === 0
+        ? "（无需找零）" : transaction.changeCashRecorded
+          ? `（${transaction.changeCash.map(denominationLabel).join(" + ")}）` : "（旧版未记录面额）"} · 本单入账 ${money(transaction.amountPence)}`
+      : "");
     this.el("s3-receipt-items").hidden = !atCheckout && !showPaid;
     const receiptItems = transaction && showPaid
       ? this.state.items.filter((item) => transaction.itemIds.includes(item.id))

@@ -1,25 +1,11 @@
 import { expect, type Page } from "@playwright/test";
-import { CASH_DENOMINATIONS_PENCE } from "../../../src/sim3d/cashPayment";
+import { findExactChange } from "../../../src/sim3d/cashDrawer";
 import {
   getCheckoutTotal, reduceSim, validateSimState, type SimCommand, type SimState,
 } from "../../../src/sim3d/domain";
 import { SIM_STORAGE_KEY } from "../../../src/sim3d/persistence";
 
 const money = (pence: number): string => `£${(pence / 100).toFixed(2)}`;
-
-function changePieces(amountPence: number): number[] {
-  if (!Number.isSafeInteger(amountPence) || amountPence < 0) throw new Error("The fixture has an invalid change amount");
-  const pieces: number[] = [];
-  let remaining = amountPence;
-  for (const denomination of [...CASH_DENOMINATIONS_PENCE].reverse()) {
-    while (remaining >= denomination) {
-      pieces.push(denomination);
-      remaining -= denomination;
-    }
-  }
-  if (remaining !== 0) throw new Error("The fixture change cannot be represented by available denominations");
-  return pieces;
-}
 
 function step(state: SimState, action: SimCommand): SimState {
   const result = reduceSim(state, action);
@@ -32,9 +18,15 @@ export function completeFixturePayment(state: SimState): SimState {
   const payment = state.payment;
   if (!payment) throw new Error("The fixture has no active payment");
   if (payment.method === "card") return step(state, { type: "PAY", success: true });
-  const pieces = changePieces(payment.tenderedPence - getCheckoutTotal(state));
+  const change = payment.tenderedPence - getCheckoutTotal(state);
   if (!payment.received) state = step(state, { type: "RECEIVE_CASH" });
   if (payment.selectedChange.length > 0) state = step(state, { type: "CLEAR_CHANGE" });
+  const pieces = findExactChange(state.cashDrawer, change);
+  if (pieces === null) {
+    state = step(state, { type: "REQUEST_EXACT_CASH" });
+    state = step(state, { type: "RECEIVE_CASH" });
+    return step(state, { type: "CONFIRM_CASH" });
+  }
   for (const denominationPence of pieces) state = step(state, { type: "ADD_CHANGE", denominationPence });
   return step(state, { type: "CONFIRM_CASH" });
 }
@@ -62,13 +54,22 @@ export async function payScannedCheckout(page: Page): Promise<SimState> {
     await expect(page.locator("#s3-cash-tendered")).toHaveText(money(before.payment.tenderedPence));
     if (!before.payment.received) await page.locator("#s3-cash-receive").click();
     if (before.payment.selectedChange.length > 0) await page.locator("#s3-cash-reset").click();
-    const change = before.payment.tenderedPence - amount;
+    let change = before.payment.tenderedPence - amount;
     await expect(page.locator("#s3-cash-change-due")).toHaveText(money(change));
-    for (const denomination of changePieces(change)) {
-      if (denomination < 5 && !(await page.locator(`#s3-cash-add-${denomination}`).isVisible())) {
-        await page.locator("#s3-cash-dialog .s3-cash-small-coins summary").click();
+    const pieces = findExactChange(before.cashDrawer, change);
+    if (pieces === null) {
+      await expect(page.locator("#s3-cash-change-shortage")).toBeVisible();
+      await page.locator("#s3-cash-request-exact").click();
+      await expect(page.locator("#s3-cash-receive")).toBeVisible();
+      await page.locator("#s3-cash-receive").click();
+      change = 0;
+    } else {
+      for (const denomination of pieces) {
+        if (denomination < 5 && !(await page.locator(`#s3-cash-add-${denomination}`).isVisible())) {
+          await page.locator("#s3-cash-dialog .s3-cash-small-coins summary").click();
+        }
+        await page.locator(`#s3-cash-add-${denomination}`).click();
       }
-      await page.locator(`#s3-cash-add-${denomination}`).click();
     }
     await expect(page.locator("#s3-cash-selected-total")).toHaveText(money(change));
     await expect(page.locator("#s3-cash-confirm")).toBeEnabled();

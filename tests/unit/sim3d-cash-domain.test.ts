@@ -1,11 +1,12 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   PRODUCTS, SAFE_DROP_POINTS, capacityFor, countAt, createFirstDayState, getCheckoutTotal, getDaySummary,
-  reduceSim, validateSimState, type ProductId, type SimCommand, type SimState,
+  getPaymentMethodSummary, reduceSim, validateSimState, type ProductId, type SimCommand, type SimState,
 } from "../../src/sim3d/domain";
 import {
-  CASH_DENOMINATIONS_PENCE, MAX_CHANGE_PIECES, cashChangeDuePence,
+  CASH_DENOMINATIONS_PENCE, MAX_CHANGE_PIECES, cashChangeDuePence, cashPiecesForAmount,
 } from "../../src/sim3d/cashPayment";
+import { cashDrawerValuePence } from "../../src/sim3d/cashDrawer";
 
 function apply(state: SimState, command: SimCommand) {
   return reduceSim(state, command);
@@ -83,10 +84,47 @@ function finishCash(state: SimState, selection?: number[]): SimState {
   return act(state, { type: "CONFIRM_CASH" });
 }
 
+function forceFivePoundCash(state: SimState): SimState {
+  const copy = structuredClone(state);
+  copy.payment = {
+    method: "cash", tenderedPence: 500, tenderedCash: [500], tenderedCashRecorded: true,
+    received: false, selectedChange: [],
+  };
+  expect(validateSimState(copy)).toBe(true);
+  return copy;
+}
+
+/** Three real 95p cash sales consume every sub-50p coin except 20p + 20p + 5p. */
+function changeShortageCheckout(): SimState {
+  let state = stocked(["water"], 3);
+  const depletion: number[][] = [
+    [100, ...Array(6).fill(50), 5],
+    [...Array(4).fill(50), ...Array(10).fill(20), 5],
+    [...Array(3).fill(20), ...Array(20).fill(10), ...Array(17).fill(5), ...Array(20).fill(2), ...Array(20).fill(1)],
+  ];
+  for (const selection of depletion) {
+    state = forceFivePoundCash(arrive(state));
+    state = finishCash(state, selection);
+    state = act(state, { type: "CUSTOMER_ADVANCE" });
+  }
+  expect(state.cashDrawer[50]).toBe(0);
+  expect(state.cashDrawer[20]).toBe(2);
+  expect(state.cashDrawer[5]).toBe(1);
+  state = act(state, { type: "PURCHASE_STOCK", orderId: "cash-shortage-target", lines: [
+    { productId: "milk", quantity: 1 }, { productId: "cheese", quantity: 1 },
+  ] });
+  state = act(state, { type: "RECEIVE_DELIVERY" });
+  state = stock(state, "milk", 1);
+  state = stock(state, "cheese", 1);
+  state = forceFivePoundCash(arrive(state));
+  expect(getCheckoutTotal(state)).toBe(435);
+  return scan(state);
+}
+
 describe("cash payment domain lifecycle and atomic settlement", () => {
   it("freezes the method on entry while keeping the original shopping list, models and inventory choice independent", () => {
     let state = stocked();
-    expect(state.schemaVersion).toBe(11);
+    expect(state.schemaVersion).toBe(12);
     expect(state.payment).toBeNull();
     state = act(state, { type: "OPEN_STORE" });
     expect(state.payment).toEqual({ method: "card" });
@@ -96,7 +134,7 @@ describe("cash payment domain lifecycle and atomic settlement", () => {
     state = act(state, { type: "CUSTOMER_ADVANCE" });
     state = act(state, { type: "NEXT_CUSTOMER" });
     const payment = structuredClone(state.payment);
-    expect(payment).toEqual({ method: "cash", tenderedPence: 500, received: false, selectedChange: [] });
+    expect(payment).toEqual({ method: "cash", tenderedPence: 500, tenderedCash: [500], tenderedCashRecorded: true, received: false, selectedChange: [] });
     state = act(state, { type: "INSPECT", productId: "milk" });
     for (let step = 0; step < 3; step += 1) state = act(state, { type: "CUSTOMER_ADVANCE" });
     expect(state.payment).toEqual(payment);
@@ -124,6 +162,7 @@ describe("cash payment domain lifecycle and atomic settlement", () => {
   it("keeps cash, revenue and sold goods unchanged until one correct confirmation commits them together", () => {
     let state = scan(cashCheckout());
     const before = structuredClone(state);
+    const drawerBefore = structuredClone(state.cashDrawer);
     const checkoutIds = state.items.filter((item) => item.location.kind === "checkout").map((item) => item.id);
     expect(getCheckoutTotal(state)).toBe(435);
     state = act(state, { type: "RECEIVE_CASH" });
@@ -143,7 +182,12 @@ describe("cash payment domain lifecycle and atomic settlement", () => {
     expect(state.transactions.at(-1)).toEqual({
       id: "sale-2", customerNumber: 2, itemIds: checkoutIds, amountPence: 435,
       paymentMethod: "cash", tenderedPence: 500, changePence: 65,
+      tenderedCash: [500], changeCash: [50, 10, 5], tenderedCashRecorded: true, changeCashRecorded: true,
+      cashDrawerTracked: true,
     });
+    expect(state.cashDrawer).toEqual({ ...drawerBefore, 5: drawerBefore[5] - 1, 10: drawerBefore[10] - 1,
+      50: drawerBefore[50] - 1, 500: drawerBefore[500] + 1 });
+    expect(cashDrawerValuePence(state.cashDrawer) - cashDrawerValuePence(drawerBefore)).toBe(435);
     expect(state.items.filter((item) => checkoutIds.includes(item.id)).every((item) => item.location.kind === "sold" && item.location.transactionId === "sale-2")).toBe(true);
     expect(state.scannedIds).toEqual([]);
     expect(state.customer.phase).toBe("leaving");
@@ -170,7 +214,10 @@ describe("cash payment domain lifecycle and atomic settlement", () => {
 
   it("handles a valid exact-cash exercise without inventing a change requirement", () => {
     let state = scan(cashCheckout());
-    state.payment = { method: "cash", tenderedPence: 435, received: false, selectedChange: [] };
+    state.payment = {
+      method: "cash", tenderedPence: 435, tenderedCash: cashPiecesForAmount(435), tenderedCashRecorded: true,
+      received: false, selectedChange: [],
+    };
     expect(validateSimState(state)).toBe(true);
     expectRejected(state, { type: "CONFIRM_CASH" });
     state = act(state, { type: "RECEIVE_CASH" });
@@ -194,11 +241,86 @@ describe("cash payment domain lifecycle and atomic settlement", () => {
     for (const denominationPence of [0, -5, .5, 3, 25, 2000, NaN, Infinity]) expectRejected(state, { type: "ADD_CHANGE", denominationPence });
     for (const index of [0, -1, .5, NaN, Infinity]) expectRejected(state, { type: "REMOVE_CHANGE", index });
     expectRejected(state, { type: "CLEAR_CHANGE" });
-    for (let piece = 0; piece < MAX_CHANGE_PIECES; piece += 1) state = act(state, { type: "ADD_CHANGE", denominationPence: 1 });
-    expectRejected(state, { type: "ADD_CHANGE", denominationPence: 1 });
+    let selectedPieces = 0;
+    for (const denominationPence of CASH_DENOMINATIONS_PENCE) {
+      for (let piece = 0; piece < state.cashDrawer[denominationPence] && selectedPieces < MAX_CHANGE_PIECES; piece += 1) {
+        state = act(state, { type: "ADD_CHANGE", denominationPence });
+        selectedPieces += 1;
+      }
+    }
+    expect(state.payment?.method === "cash" ? state.payment.selectedChange : []).toHaveLength(MAX_CHANGE_PIECES);
+    expectRejected(state, { type: "ADD_CHANGE", denominationPence: 50 });
     state = act(state, { type: "CLEAR_CHANGE" });
-    expect(state.payment).toEqual({ method: "cash", tenderedPence: 500, received: true, selectedChange: [] });
+    expect(state.payment).toEqual({ method: "cash", tenderedPence: 500, tenderedCash: [500], tenderedCashRecorded: true, received: true, selectedChange: [] });
     expectRejected(state, { type: "CONFIRM_CASH" });
+  });
+
+  it("never lets one denomination selection exceed the finite drawer inventory", () => {
+    let state = changeShortageCheckout();
+    state = act(state, { type: "RECEIVE_CASH" });
+    expectRejected(state, { type: "ADD_CHANGE", denominationPence: 50 });
+    state = act(state, { type: "ADD_CHANGE", denominationPence: 20 });
+    state = act(state, { type: "ADD_CHANGE", denominationPence: 20 });
+    expectRejected(state, { type: "ADD_CHANGE", denominationPence: 20 });
+    expect(state.payment).toMatchObject({ method: "cash", selectedChange: [20, 20] });
+    expect(state.cashDrawer[20]).toBe(2);
+  });
+
+  it("returns tentative cash and requests exact money when the drawer cannot make change", () => {
+    let state = changeShortageCheckout();
+    expect(validateSimState(state)).toBe(true);
+    const before = structuredClone(state);
+    state = act(state, { type: "RECEIVE_CASH" });
+    state = act(state, { type: "REQUEST_EXACT_CASH" });
+    expect(state.payment).toEqual({
+      method: "cash", tenderedPence: 435, tenderedCash: [200, 200, 20, 10, 5], tenderedCashRecorded: true,
+      received: false, selectedChange: [],
+    });
+    expect(state.cashPence).toBe(before.cashPence);
+    expect(state.cashDrawer).toEqual(before.cashDrawer);
+    expect(state.transactions).toEqual(before.transactions);
+    expect(state.items).toEqual(before.items);
+    state = act(state, { type: "RECEIVE_CASH" });
+    state = act(state, { type: "CONFIRM_CASH" });
+    expect(state.cashPence).toBe(before.cashPence + 435);
+    expect(state.transactions.at(-1)).toMatchObject({
+      paymentMethod: "cash", tenderedPence: 435, changePence: 0,
+      tenderedCash: [200, 200, 20, 10, 5], changeCash: [], tenderedCashRecorded: true, changeCashRecorded: true,
+      cashDrawerTracked: true,
+    });
+  });
+
+  it("returns tentative cash and switches the same unpaid basket to card when change is impossible", () => {
+    let state = changeShortageCheckout();
+    const before = structuredClone(state);
+    state = act(state, { type: "RECEIVE_CASH" });
+    state = act(state, { type: "SWITCH_CASH_TO_CARD" });
+    expect(state.payment).toEqual({ method: "card" });
+    expect(state.cashPence).toBe(before.cashPence);
+    expect(state.cashDrawer).toEqual(before.cashDrawer);
+    expect(state.transactions).toEqual(before.transactions);
+    expect(state.items).toEqual(before.items);
+    state = act(state, { type: "PAY", success: true });
+    expect(state.cashPence).toBe(before.cashPence + 435);
+    expect(state.cashDrawer).toEqual(before.cashDrawer);
+    expect(state.transactions.at(-1)).toMatchObject({
+      paymentMethod: "card", tenderedPence: 435, changePence: 0, tenderedCash: [], changeCash: [],
+      tenderedCashRecorded: false, changeCashRecorded: false, cashDrawerTracked: true,
+    });
+  });
+
+  it("rejects both shortage fallbacks while the drawer can still make the required change", () => {
+    const state = act(scan(cashCheckout()), { type: "RECEIVE_CASH" });
+    expectRejected(state, { type: "REQUEST_EXACT_CASH" });
+    expectRejected(state, { type: "SWITCH_CASH_TO_CARD" });
+  });
+
+  it("derives the current-day cash and card split from the committed ledger", () => {
+    const state = finishCash(cashCheckout());
+    expect(getPaymentMethodSummary(state)).toEqual({
+      cashTransactions: 1, cardTransactions: 1, cashRevenuePence: 435, cardRevenuePence: 435,
+    });
+    expect(getDaySummary(state).revenuePence).toBe(870);
   });
 
   it.each([false, true])("cancels pending cash with receipt=%s without increasing money or keeping change selection", (received) => {
@@ -235,7 +357,7 @@ describe("cash payment domain lifecycle and atomic settlement", () => {
     const unavailable = vi.spyOn(SAFE_DROP_POINTS, "find").mockReturnValue(undefined);
     try { expectRejected(state, { type: "CANCEL_CUSTOMER" }) }
     finally { unavailable.mockRestore() }
-    expect(state.payment).toEqual({ method: "cash", tenderedPence: 500, received: true, selectedChange: [50] });
+    expect(state.payment).toEqual({ method: "cash", tenderedPence: 500, tenderedCash: [500], tenderedCashRecorded: true, received: true, selectedChange: [50] });
     const cancelled = act(state, { type: "CANCEL_CUSTOMER" });
     expect(cancelled.cashPence).toBe(state.cashPence);
     expect(cancelled.payment).toBeNull();
@@ -265,9 +387,10 @@ describe("cash payment domain lifecycle and atomic settlement", () => {
 describe("payment state and ledger tamper rejection", () => {
   it.each([
     ["missing method", (state: SimState) => { state.payment = null }],
-    ["insufficient tender", (state: SimState) => { state.payment = { method: "cash", tenderedPence: 434, received: false, selectedChange: [] } }],
-    ["change before receipt", (state: SimState) => { state.payment = { method: "cash", tenderedPence: 500, received: false, selectedChange: [50] } }],
-    ["receipt before scanning", (state: SimState) => { state.payment = { method: "cash", tenderedPence: 500, received: true, selectedChange: [] } }],
+    ["insufficient tender", (state: SimState) => { state.payment = { method: "cash", tenderedPence: 434, tenderedCash: cashPiecesForAmount(434), tenderedCashRecorded: true, received: false, selectedChange: [] } }],
+    ["change before receipt", (state: SimState) => { state.payment = { method: "cash", tenderedPence: 500, tenderedCash: [500], tenderedCashRecorded: true, received: false, selectedChange: [50] } }],
+    ["receipt before scanning", (state: SimState) => { state.payment = { method: "cash", tenderedPence: 500, tenderedCash: [500], tenderedCashRecorded: true, received: true, selectedChange: [] } }],
+    ["tender piece mismatch", (state: SimState) => { state.payment = { method: "cash", tenderedPence: 500, tenderedCash: [200, 200], tenderedCashRecorded: true, received: false, selectedChange: [] } }],
     ["tentative cash added to funds", (state: SimState) => { state.cashPence += 500 }],
   ] as const)("rejects %s", (_name, mutate) => {
     const state = cashCheckout();
@@ -282,11 +405,27 @@ describe("payment state and ledger tamper rejection", () => {
     const state = cashCheckout();
     state.customer.phase = "to-checkout";
     for (const item of state.items) if (item.location.kind === "checkout") item.location = { kind: "basket" };
-    state.payment = { method: "cash", tenderedPence: 500, received: true, selectedChange: [] };
+    state.payment = { method: "cash", tenderedPence: 500, tenderedCash: [500], tenderedCashRecorded: true, received: true, selectedChange: [] };
     expect(validateSimState(state)).toBe(false);
     const paid = finishCash(cashCheckout());
-    paid.payment = { method: "cash", tenderedPence: 500, received: true, selectedChange: [50, 10, 5] };
+    paid.payment = { method: "cash", tenderedPence: 500, tenderedCash: [500], tenderedCashRecorded: true, received: true, selectedChange: [50, 10, 5] };
     expect(validateSimState(paid)).toBe(false);
+  });
+
+  it("rejects a forged derived tender and over-reserved change in a new v12 payment", () => {
+    const derived = scan(cashCheckout());
+    derived.payment = {
+      method: "cash", tenderedPence: 500, tenderedCash: [200, 200, 100], tenderedCashRecorded: false,
+      received: true, selectedChange: [50, 10, 5],
+    };
+    expect(validateSimState(derived)).toBe(false);
+
+    const overReserved = scan(cashCheckout());
+    overReserved.payment = {
+      method: "cash", tenderedPence: 500, tenderedCash: [500], tenderedCashRecorded: true,
+      received: true, selectedChange: Array.from({ length: overReserved.cashDrawer[1] + 1 }, () => 1),
+    };
+    expect(validateSimState(overReserved)).toBe(false);
   });
 
   it.each([
@@ -294,9 +433,25 @@ describe("payment state and ledger tamper rejection", () => {
     ["fractional tender", (state: SimState) => { state.transactions.at(-1)!.tenderedPence = 500.5 }],
     ["underpaid tender", (state: SimState) => { state.transactions.at(-1)!.tenderedPence = 434 }],
     ["cash relabelled card", (state: SimState) => { state.transactions.at(-1)!.paymentMethod = "card" }],
+    ["cash pieces do not match tender", (state: SimState) => { state.transactions.at(-1)!.tenderedCash = [200, 200] }],
+    ["change pieces do not match change", (state: SimState) => { state.transactions.at(-1)!.changeCash = [50, 10, 2] }],
+    ["drawer count detached from ledger", (state: SimState) => { state.cashDrawer[50] += 1 }],
     ["fabricated revenue", (state: SimState) => { state.transactions.at(-1)!.amountPence += 65; state.cashPence += 65 }],
     ["double sale", (state: SimState) => { state.transactions.push(structuredClone(state.transactions.at(-1)!)); state.cashPence += 435 }],
   ] as const)("rejects a paid ledger with %s", (_name, mutate) => {
+    const state = finishCash(cashCheckout());
+    mutate(state);
+    expect(validateSimState(state)).toBe(false);
+  });
+
+  it.each([
+    ["a changed opening float", (state: SimState) => { state.cashDrawerOpening[50] += 1 }],
+    ["a boundary moved past tracked sales", (state: SimState) => { state.cashDrawerTransactionStart = state.transactions.length }],
+    ["a tracked sale relabelled as legacy", (state: SimState) => { state.transactions.at(-1)!.cashDrawerTracked = false }],
+    ["drawer totals outside the safe integer range", (state: SimState) => {
+      for (const denomination of CASH_DENOMINATIONS_PENCE) state.cashDrawer[denomination] = Number.MAX_SAFE_INTEGER;
+    }],
+  ] as const)("rejects cash-drawer audit data with %s", (_name, mutate) => {
     const state = finishCash(cashCheckout());
     mutate(state);
     expect(validateSimState(state)).toBe(false);

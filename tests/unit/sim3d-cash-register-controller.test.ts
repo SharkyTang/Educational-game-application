@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { CASH_DENOMINATIONS_PENCE, type CashPaymentState } from "../../src/sim3d/cashPayment";
+import { createDefaultCashDrawer, type CashDrawerState } from "../../src/sim3d/cashDrawer";
 import { cashRegisterMarkup } from "../../src/sim3d/cashRegister";
 import { CashRegisterController, type CashRegisterCommand } from "../../src/sim3d/cashRegisterController";
 import type { CustomerSpeechClip } from "../../src/sim3d/customerSelection";
@@ -28,19 +29,28 @@ class ElementDouble extends EventTarget {
   set innerHTML(markup: string) {
     this.markup = markup;
     this.elements.clear();
-    for (const match of markup.matchAll(/<([a-z][a-z\d-]*)\b([^>]*\bid="([^"]+)"[^>]*)>/gi)) {
+    let anonymousIndex = 0;
+    for (const match of markup.matchAll(/<([a-z][a-z\d-]*)\b([^>]*)>/gi)) {
       const element = new ElementDouble(match[1]!.toUpperCase());
       const attributes = match[2]!;
+      const id = /\bid="([^"]+)"/.exec(attributes)?.[1];
+      const className = /\bclass="([^"]+)"/.exec(attributes)?.[1];
+      if (id === undefined && className === undefined) continue;
       element.parentElement = this;
       for (const attribute of attributes.matchAll(/([\w-]+)="([^"]*)"/g)) element.setAttribute(attribute[1]!, attribute[2]!);
       element.hidden = /\bhidden(?:\s|$)/.test(attributes);
       element.disabled = /\bdisabled(?:\s|$)/.test(attributes);
-      this.elements.set(match[3]!, element);
+      this.elements.set(id ?? `anonymous-${anonymousIndex++}`, element);
     }
   }
 
   querySelector(selector: string): ElementDouble | null {
-    const direct = this.elements.get(selector.slice(1));
+    const direct = selector.startsWith("#")
+      ? this.elements.get(selector.slice(1))
+      : selector.startsWith(".")
+        ? [...this.elements.values()].find((element) =>
+          element.attributes.get("class")?.split(/\s+/).includes(selector.slice(1)))
+        : undefined;
     if (direct) return direct;
     for (const element of this.elements.values()) {
       const nested = element.querySelector(selector);
@@ -71,8 +81,16 @@ const TENDER_CLIP: CustomerSpeechClip = {
   src: "/assets/sim3d/audio/customers/female/tender-cash-five-pounds.wav",
 };
 const cash = (selectedChange: number[] = [], received = true, tenderedPence = 500): CashPaymentState => ({
-  method: "cash", tenderedPence, received, selectedChange,
+  method: "cash", tenderedPence,
+  tenderedCash: tenderedPence === 435 ? [200, 200, 20, 10, 5] : tenderedPence === 1000 ? [1000] : [500],
+  tenderedCashRecorded: true, received, selectedChange,
 });
+
+function emptyDrawer(): CashDrawerState {
+  const drawer = createDefaultCashDrawer();
+  for (const denomination of CASH_DENOMINATIONS_PENCE) drawer[denomination] = 0;
+  return drawer;
+}
 
 let windowDouble: EventTarget;
 let controllers: AbortController[];
@@ -93,7 +111,7 @@ function mount(patch: Partial<RegisterSnapshot> = {}) {
   const root = new ElementDouble();
   root.innerHTML = cashRegisterMarkup();
   let snapshot: RegisterSnapshot = {
-    payment: cash([], false), amountPence: 435, atCheckout: true, canWrite: true,
+    payment: cash([], false), amountPence: 435, drawer: createDefaultCashDrawer(), atCheckout: true, canWrite: true,
     customerName: "Clara", clip: TENDER_CLIP, warning: "", ...patch,
   };
   const host = {
@@ -111,6 +129,7 @@ function mount(patch: Partial<RegisterSnapshot> = {}) {
   };
   return {
     controller, host, abort, element, snapshot: () => snapshot,
+    query: (selector: string): ElementDouble | null => root.querySelector(selector),
     update: (next: Partial<RegisterSnapshot>): void => { snapshot = { ...snapshot, ...next } },
     trayClick: (target: ElementDouble | null): void => {
       // EventTarget has no browser bubbling; dispatch the delegated event at the tray.
@@ -235,14 +254,25 @@ describe("cash actions forward commands and render only the host's accepted resu
     expect(view.controller.isOpen).toBe(true);
   });
 
-  it.each(CASH_DENOMINATIONS_PENCE)("forwards the %ip coin/note without locally changing the selection", (denominationPence) => {
+  it.each(CASH_DENOMINATIONS_PENCE.filter((denomination) => denomination < 500))(
+    "forwards the in-stock %ip coin without locally changing the selection", (denominationPence) => {
+      const view = mount({ payment: cash() });
+      const before = structuredClone(view.snapshot());
+      view.controller.open();
+      view.element(`s3-cash-add-${denominationPence}`).click();
+      expect(view.host.dispatch).toHaveBeenCalledExactlyOnceWith({ type: "ADD_CHANGE", denominationPence });
+      expect(view.snapshot()).toEqual(before);
+      expect(view.element("s3-cash-selected-total").textContent).toBe("£0.00");
+    },
+  );
+
+  it.each([500, 1000] as const)("disables the initially exhausted %ip note and never forwards it", (denominationPence) => {
     const view = mount({ payment: cash() });
-    const before = structuredClone(view.snapshot());
     view.controller.open();
+    expect(view.element(`s3-cash-add-${denominationPence}`).disabled).toBe(true);
+    expect(view.element(`s3-cash-stock-${denominationPence}`).textContent).toBe("剩余 0");
     view.element(`s3-cash-add-${denominationPence}`).click();
-    expect(view.host.dispatch).toHaveBeenCalledExactlyOnceWith({ type: "ADD_CHANGE", denominationPence });
-    expect(view.snapshot()).toEqual(before);
-    expect(view.element("s3-cash-selected-total").textContent).toBe("£0.00");
+    expect(view.host.dispatch).not.toHaveBeenCalled();
   });
 
   it("refreshes the selected amount from an accepted command and forwards clear-selection", () => {
@@ -251,11 +281,28 @@ describe("cash actions forward commands and render only the host's accepted resu
     view.host.dispatch.mockImplementationOnce(() => { view.update({ payment: cash([50]) }); return true });
     view.element("s3-cash-add-50").click();
     expect(view.element("s3-cash-selected-total").textContent).toBe("£0.50");
+    view.element("s3-cash-add-50").focus.mockClear();
     view.host.dispatch.mockImplementationOnce(() => { view.update({ payment: cash() }); return true });
     view.element("s3-cash-reset").click();
     expect(view.host.dispatch.mock.calls).toEqual([[{ type: "ADD_CHANGE", denominationPence: 50 }], [{ type: "CLEAR_CHANGE" }]]);
     expect(view.element("s3-cash-selected-total").textContent).toBe("£0.00");
     expect(view.element("s3-cash-reset").disabled).toBe(true);
+    expect(view.element("s3-cash-add-50").focus).toHaveBeenCalledOnce();
+  });
+
+  it("moves focus when an accepted coin exhausts its denomination", () => {
+    const drawer = createDefaultCashDrawer();
+    drawer[50] = 1;
+    const view = mount({ payment: cash(), drawer });
+    view.controller.open();
+    view.element("s3-cash-add-50").focus.mockClear();
+    view.element("s3-cash-add-5").focus.mockClear();
+    view.host.dispatch.mockImplementationOnce(() => { view.update({ payment: cash([50]) }); return true });
+    view.element("s3-cash-add-50").click();
+    expect(view.element("s3-cash-add-50").disabled).toBe(true);
+    expect(view.element("s3-cash-add-50").focus).not.toHaveBeenCalled();
+    expect(view.element("s3-cash-add-5").disabled).toBe(false);
+    expect(view.element("s3-cash-add-5").focus).toHaveBeenCalledOnce();
   });
 
   it.each([
@@ -274,6 +321,36 @@ describe("cash actions forward commands and render only the host's accepted resu
     expect(view.host.dispatch).toHaveBeenCalledExactlyOnceWith({ type: "REMOVE_CHANGE", index });
     expect(view.snapshot().payment).toEqual(cash(remaining));
     expect(view.element(focus).focus).toHaveBeenCalledOnce();
+  });
+
+  it("focuses an enabled visible denomination after removing the last piece when 50p is exhausted", () => {
+    const drawer = createDefaultCashDrawer();
+    drawer[50] = 0;
+    const view = mount({ payment: cash([5]), drawer });
+    view.controller.open();
+    view.element("s3-cash-add-5").focus.mockClear();
+    const button = view.element("s3-cash-remove-0");
+    view.host.dispatch.mockImplementationOnce(() => { view.update({ payment: cash([]) }); return true });
+    view.trayClick(button);
+    expect(view.host.dispatch).toHaveBeenCalledExactlyOnceWith({ type: "REMOVE_CHANGE", index: 0 });
+    expect(view.element("s3-cash-add-50").disabled).toBe(true);
+    expect(view.element("s3-cash-add-50").focus).not.toHaveBeenCalled();
+    expect(view.element("s3-cash-add-5").disabled).toBe(false);
+    expect(view.element("s3-cash-add-5").focus).toHaveBeenCalledOnce();
+  });
+
+  it("expands the small-coin group before focusing it when only 1p and 2p can make the change", () => {
+    const drawer = emptyDrawer();
+    drawer[1] = 1;
+    drawer[2] = 1;
+    const view = mount({ payment: cash(), amountPence: 497, drawer });
+    const smallCoins = view.element("s3-cash-add-1");
+    const details = view.query(".s3-cash-small-coins");
+    expect(details?.open).toBe(false);
+    expect(view.controller.open()).toBe(true);
+    expect(details?.open).toBe(true);
+    expect(smallCoins.disabled).toBe(false);
+    expect(smallCoins.focus).toHaveBeenCalledOnce();
   });
 
   it("ignores tray clicks without a matching in-tray removal button", () => {
@@ -311,6 +388,37 @@ describe("cash actions forward commands and render only the host's accepted resu
     expect(view.host.dispatch).toHaveBeenCalledOnce();
   });
 
+  it("requests exact cash, keeps the register open and replays the customer's replacement tender", () => {
+    const view = mount({ payment: cash([], true), drawer: emptyDrawer() });
+    view.controller.open();
+    expect(view.element("s3-cash-change-shortage").hidden).toBe(false);
+    view.host.dispatch.mockImplementationOnce(() => {
+      view.update({ payment: cash([], false, 435) });
+      return true;
+    });
+    view.element("s3-cash-request-exact").click();
+    expect(view.host.dispatch).toHaveBeenCalledExactlyOnceWith({ type: "REQUEST_EXACT_CASH" });
+    expect(view.snapshot().payment).toEqual(cash([], false, 435));
+    expect(view.controller.isOpen).toBe(true);
+    expect(view.element("s3-cash-receive").focus).toHaveBeenCalled();
+    expect(view.host.speak).toHaveBeenCalledExactlyOnceWith(TENDER_CLIP, 1);
+  });
+
+  it("switches a no-change transaction to card and closes so the normal card flow can resume", () => {
+    const view = mount({ payment: cash([], true), drawer: emptyDrawer() });
+    view.controller.open();
+    view.host.dispatch.mockImplementationOnce(() => {
+      view.update({ payment: { method: "card" } });
+      return true;
+    });
+    view.element("s3-cash-switch-card").click();
+    expect(view.host.dispatch).toHaveBeenCalledExactlyOnceWith({ type: "SWITCH_CASH_TO_CARD" });
+    expect(view.snapshot().payment).toEqual({ method: "card" });
+    expect(view.controller.isOpen).toBe(false);
+    expect(view.host.onClose).toHaveBeenCalledOnce();
+    expect(view.host.speak).not.toHaveBeenCalled();
+  });
+
   it.each([
     { label: "write ownership was lost", patch: { canWrite: false } },
     { label: "the visitor left checkout", patch: { atCheckout: false } },
@@ -341,7 +449,8 @@ describe("cash actions forward commands and render only the host's accepted resu
     view.controller.open();
     if (reason === "closed") view.controller.close();
     else view.update({ canWrite: false });
-    for (const id of ["s3-cash-receive", "s3-cash-add-50", "s3-cash-reset", "s3-cash-confirm"]) view.element(id).click();
+    for (const id of ["s3-cash-receive", "s3-cash-add-50", "s3-cash-reset", "s3-cash-confirm",
+      "s3-cash-request-exact", "s3-cash-switch-card"]) view.element(id).click();
     view.trayClick(view.element("s3-cash-remove-0"));
     expect(view.host.dispatch).not.toHaveBeenCalled();
     expect(view.snapshot().payment).toEqual(cash([50, 10, 5]));

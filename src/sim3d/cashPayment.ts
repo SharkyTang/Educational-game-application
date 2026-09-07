@@ -1,12 +1,22 @@
 export type PaymentMethod = "card" | "cash";
 
-export interface CashPaymentState {
+/** Exact v8-v11 payment shape. Kept read-only for strict old-save validation. */
+export interface LegacyCashPaymentState {
   method: "cash";
   /** Money offered by this visitor, kept out of the shop ledger until confirmation. */
   tenderedPence: number;
   received: boolean;
   /** One denomination per selected piece; alternative correct combinations are valid. */
   selectedChange: number[];
+}
+
+export type LegacyPaymentState = { method: "card" } | LegacyCashPaymentState;
+
+/** v12 records the actual pieces offered by the customer, not just their sum. */
+export interface CashPaymentState extends LegacyCashPaymentState {
+  tenderedCash: CashDenominationPence[];
+  /** False only when v12 had to derive an in-progress v8-v11 tender from its total. */
+  tenderedCashRecorded: boolean;
 }
 
 export type PaymentState = { method: "card" } | CashPaymentState;
@@ -26,9 +36,26 @@ export function isCashDenomination(value: unknown): value is CashDenominationPen
 }
 
 function validChangeSelection(value: unknown): value is number[] {
-  if (!Array.isArray(value) || value.length > MAX_CHANGE_PIECES) return false;
-  for (const denomination of value) if (!isCashDenomination(denomination)) return false;
-  return true;
+  return validPieceArray(value, true);
+}
+
+function validCashPieces(value: unknown): value is CashDenominationPence[] {
+  return validPieceArray(value, false);
+}
+
+function validPieceArray(value: unknown, allowEmpty: boolean): value is CashDenominationPence[] {
+  try {
+    if (!Array.isArray(value) || Object.getPrototypeOf(value) !== Array.prototype
+      || (!allowEmpty && value.length === 0) || value.length > MAX_CHANGE_PIECES) return false;
+    const keys = Reflect.ownKeys(value);
+    if (keys.length !== value.length + 1 || !keys.includes("length")) return false;
+    for (let index = 0; index < value.length; index += 1) {
+      if (!Object.hasOwn(value, index) || !isCashDenomination(value[index])) return false;
+    }
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 function validTender(tenderedPence: unknown, amountPence: number): tenderedPence is number {
@@ -36,12 +63,30 @@ function validTender(tenderedPence: unknown, amountPence: number): tenderedPence
     && (tenderedPence === amountPence || TENDER_NOTES_PENCE.some((note) => note === tenderedPence));
 }
 
-/** Deliberately accepts incorrect selected totals so a learner can correct or resume them. */
-export function validatePaymentState(value: unknown, amountPence: number): value is PaymentState {
+/** Strict validator for unmodified v8-v11 cash snapshots. */
+export function validateLegacyPaymentState(value: unknown, amountPence: number): value is LegacyPaymentState {
   if (!isPositiveAmount(amountPence) || !isRecord(value)) return false;
   if (value.method === "card") return Object.keys(value).length === 1;
   if (value.method !== "cash" || Object.keys(value).length !== 4 || !validTender(value.tenderedPence, amountPence)
     || typeof value.received !== "boolean" || !validChangeSelection(value.selectedChange)) return false;
+  return value.received || value.selectedChange.length === 0;
+}
+
+/** Deliberately accepts incorrect selected totals so a learner can correct or resume them. */
+export function validatePaymentState(value: unknown, amountPence: number): value is PaymentState {
+  if (!isPositiveAmount(amountPence) || !isRecord(value)) return false;
+  if (value.method === "card") return Object.keys(value).length === 1;
+  if (value.method !== "cash" || Object.keys(value).length !== 6 || !validTender(value.tenderedPence, amountPence)
+    || typeof value.received !== "boolean" || !validChangeSelection(value.selectedChange)
+    || !validCashPieces(value.tenderedCash)
+    || typeof value.tenderedCashRecorded !== "boolean"
+    || selectedChangeTotalPence(value.tenderedCash) !== value.tenderedPence) return false;
+  const tenderedCash = value.tenderedCash as CashDenominationPence[];
+  if (!value.tenderedCashRecorded) {
+    const derived = cashPiecesForAmount(value.tenderedPence);
+    if (derived.length !== tenderedCash.length
+      || derived.some((piece, index) => piece !== tenderedCash[index])) return false;
+  }
   return value.received || value.selectedChange.length === 0;
 }
 
@@ -69,6 +114,22 @@ function hash(value: string): number {
   return (result ^ (result >>> 16)) >>> 0;
 }
 
+/** Canonical, deterministic pieces for customer tender and old-save migration. */
+export function cashPiecesForAmount(amountPence: number): CashDenominationPence[] {
+  if (!isPositiveAmount(amountPence)) throw new Error("现金金额无效。");
+  const pieces: CashDenominationPence[] = [];
+  let remaining = amountPence;
+  for (const denomination of [...CASH_DENOMINATIONS_PENCE].reverse()) {
+    while (remaining >= denomination) {
+      pieces.push(denomination);
+      remaining -= denomination;
+      if (pieces.length > MAX_CHANGE_PIECES) throw new Error("现金面额数量超过单笔上限。");
+    }
+  }
+  if (remaining !== 0) throw new Error("现金金额无法由现有英镑面额组成。");
+  return pieces;
+}
+
 export interface PaymentVisit {
   customerSeed?: number;
   customerNumber: number;
@@ -93,5 +154,8 @@ export function createPaymentForVisit({ customerSeed = LEGACY_CUSTOMER_SEED, cus
     const candidates = [...new Set([amountPence, ...TENDER_NOTES_PENCE.filter((note) => note >= amountPence)])];
     tenderedPence = candidates[hash(`${customerSeed}:${customerNumber}:cash-tender`) % candidates.length]!;
   }
-  return { method: "cash", tenderedPence, received: false, selectedChange: [] };
+  return {
+    method: "cash", tenderedPence, tenderedCash: cashPiecesForAmount(tenderedPence), tenderedCashRecorded: true,
+    received: false, selectedChange: [],
+  };
 }

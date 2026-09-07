@@ -5,7 +5,8 @@ import {
   type ProductId, type SimCommand, type SimState, type SimStateV8,
 } from "../../src/sim3d/domain";
 import { BUSINESS_DURATION_MS, customerArrivalDelayMs, getBusinessClock } from "../../src/sim3d/businessTime";
-import { CASH_DENOMINATIONS_PENCE, cashChangeDuePence } from "../../src/sim3d/cashPayment";
+import { cashChangeDuePence, cashPiecesForAmount } from "../../src/sim3d/cashPayment";
+import { findExactChange } from "../../src/sim3d/cashDrawer";
 import {
   SIM_BACKUP_KEY, SIM_STORAGE_KEY, SIM_V8_BACKUP_KEY, SIM_V8_STORAGE_KEY, SIM_WRITER_LOCK,
   SimSaveConflictError, SimSaveSession, loadSimState, parseImportedSimState, saveSimState, type StorageLike,
@@ -63,14 +64,14 @@ function pay(state: SimState): SimState {
   if (state.payment?.method !== "cash") throw new Error("Cash payment lost during receipt");
   if (state.payment.selectedChange.length) state = act(state, { type: "CLEAR_CHANGE" });
   if (state.payment?.method !== "cash") throw new Error("Cash payment lost during selection");
-  let remaining = cashChangeDuePence(state.payment, getCheckoutTotal(state));
-  for (const denominationPence of [...CASH_DENOMINATIONS_PENCE].reverse()) {
-    while (remaining >= denominationPence) {
-      state = act(state, { type: "ADD_CHANGE", denominationPence });
-      remaining -= denominationPence;
-    }
+  const changePence = cashChangeDuePence(state.payment, getCheckoutTotal(state));
+  const pieces = findExactChange(state.cashDrawer, changePence);
+  if (pieces === null) {
+    state = act(state, { type: "REQUEST_EXACT_CASH" });
+    state = act(state, { type: "RECEIVE_CASH" });
+    return act(state, { type: "CONFIRM_CASH" });
   }
-  expect(remaining).toBe(0);
+  for (const denominationPence of pieces) state = act(state, { type: "ADD_CHANGE", denominationPence });
   return act(state, { type: "CONFIRM_CASH" });
 }
 
@@ -86,18 +87,54 @@ function closedDay(customers = 3): SimState {
 
 /** Reconstruct the exact pre-clock shape; never merely relabel a current timed snapshot. */
 function v8Snapshot(state: SimState): SimStateV8 {
-  const current = structuredClone(state);
+  const {
+    renovation: _renovation,
+    streetSupportRecords: _streetSupportRecords,
+    cashDrawer: _cashDrawer,
+    cashDrawerOpening: _cashDrawerOpening,
+    cashDrawerTransactionStart: _cashDrawerTransactionStart,
+    customer,
+    payment,
+    transactions,
+    settlements,
+    day: currentDay,
+    ...current
+  } = structuredClone(state);
+  const { contentVersion: _contentVersion, ...oldCustomer } = customer;
+  const oldPayment: SimStateV8["payment"] = payment?.method === "cash"
+    ? { method: "cash", tenderedPence: payment.tenderedPence, received: payment.received, selectedChange: [...payment.selectedChange] }
+    : payment ? { method: "card" } : null;
   const { elapsedOpenMs: _elapsedOpenMs, nextCustomerAtMs: _nextCustomerAtMs, closeReason: _closeReason,
-    phase, targetCustomers: _targetCustomers, ...day } = current.day;
+    phase, targetCustomers: _targetCustomers, ...day } = currentDay;
   if (phase === "closing") throw new Error("v8 did not have a closing phase");
-  return { ...current, schemaVersion: 8, day: { ...day, phase, targetCustomers: 3 },
-    settlements: current.settlements.map((record) => ({ ...record, targetCustomers: 3 })) };
+  return {
+    ...current,
+    schemaVersion: 8,
+    customer: oldCustomer,
+    payment: oldPayment,
+    transactions: transactions.map(({
+      tenderedCash: _tenderedCash,
+      changeCash: _changeCash,
+      tenderedCashRecorded: _tenderedCashRecorded,
+      changeCashRecorded: _changeCashRecorded,
+      cashDrawerTracked: _cashDrawerTracked,
+      ...transaction
+    }) => transaction),
+    day: { ...day, phase, targetCustomers: 3 },
+    settlements: settlements.map(({
+      targetCustomers: _settlementTarget,
+      expansionSpendPence: _expansionSpendPence,
+      communitySupportCount: _communitySupportCount,
+      communityCashPence: _communityCashPence,
+      ...record
+    }) => ({ ...record, targetCustomers: 3 })),
+  };
 }
 
 describe("v9 active-time days and a lightweight clock path", () => {
   it("starts preparation at 08:30 with no customer-count target or running timer", () => {
     const state = createFirstDayState();
-    expect(state.schemaVersion).toBe(11);
+    expect(state.schemaVersion).toBe(12);
     expect(state.day).toMatchObject({ phase: "preparing", elapsedOpenMs: 0, nextCustomerAtMs: null, closeReason: null, targetCustomers: null });
     expect(getBusinessClock(state.day).timeLabel).toBe("08:30");
     expect(getDaySummary(state).targetCustomers).toBeNull();
@@ -117,6 +154,11 @@ describe("v9 active-time days and a lightweight clock path", () => {
       expect(state.day.nextCustomerAtMs).toBe(customerArrivalDelayMs(state.customerSeed, 1, visitor + 1));
     }
     expect(state.transactions).toHaveLength(4);
+    for (const transaction of state.transactions) {
+      expect(transaction.cashDrawerTracked).toBe(true);
+      expect(transaction.tenderedCashRecorded).toBe(transaction.paymentMethod === "cash");
+      expect(transaction.changeCashRecorded).toBe(transaction.paymentMethod === "cash");
+    }
     expect(state.customer.number).toBe(4);
     expect(getDaySummary(state)).toMatchObject({ targetCustomers: null, revenuePence: 1_600, costOfGoodsPence: 920, grossProfitPence: 680 });
     expect(canStartCustomer(state)).toBe(false);
@@ -310,7 +352,7 @@ describe("strict v8 migration and persisted business time", () => {
     state = act(state, { type: "ADVANCE_BUSINESS_TIME", elapsedMs: 2345.75 });
     const storage = new MemoryStorage();
     saveSimState(state, storage);
-    expect(SIM_STORAGE_KEY).toBe("english-high-street:sim3d:v11");
+    expect(SIM_STORAGE_KEY).toBe("english-high-street:sim3d:v12");
     expect(SIM_WRITER_LOCK).toBe("english-high-street:sim3d:v4:writer");
     expect(loadSimState(storage)).toEqual({ source: "primary", state });
     expect(parseImportedSimState(JSON.stringify(state))).toEqual(state);
@@ -327,13 +369,32 @@ describe("strict v8 migration and persisted business time", () => {
     const migrated = migrateV8SimState(old);
     expect(old).toEqual(before);
     expect(migrated.day).toMatchObject({ phase: "open", targetCustomers: null, elapsedOpenMs: 0, nextCustomerAtMs: null, closeReason: null });
-    for (const key of ["payment", "items", "transactions", "purchases", "recyclingBatches", "recyclingRecords", "settlements"] as const) expect(migrated[key]).toEqual(old[key]);
+    for (const key of ["items", "purchases", "recyclingBatches", "recyclingRecords"] as const) expect(migrated[key]).toEqual(old[key]);
+    expect(migrated.payment).toEqual(old.payment?.method === "cash"
+      ? { ...old.payment, tenderedCash: cashPiecesForAmount(old.payment.tenderedPence), tenderedCashRecorded: false }
+      : old.payment);
+    expect(migrated.transactions).toEqual(old.transactions.map((transaction) => ({
+      ...transaction,
+      tenderedCash: transaction.paymentMethod === "cash" ? cashPiecesForAmount(transaction.tenderedPence) : [],
+      changeCash: transaction.paymentMethod === "cash" && transaction.changePence > 0 ? cashPiecesForAmount(transaction.changePence) : [],
+      tenderedCashRecorded: false,
+      changeCashRecorded: false,
+      cashDrawerTracked: false,
+    })));
+    expect(migrated.settlements).toEqual(old.settlements.map((record) => ({
+      ...record, expansionSpendPence: 0, communitySupportCount: 0, communityCashPence: 0,
+    })));
+    expect(migrated.cashDrawerTransactionStart).toBe(old.transactions.length);
+    expect(migrated.cashDrawerOpening).toEqual(migrated.cashDrawer);
     expect(migrated.cashPence).toBe(old.cashPence);
     expect(parseImportedSimState(JSON.stringify(old))).toEqual(migrated);
     let paid = act(migrated, { type: "CLOSE_STORE" });
     paid = act(paid, { type: "ADD_CHANGE", denominationPence: 50 });
     paid = act(paid, { type: "CONFIRM_CASH" });
     expect(paid.cashPence).toBe(old.cashPence + 400);
+    expect(paid.transactions.at(-1)).toMatchObject({
+      paymentMethod: "cash", tenderedCashRecorded: false, changeCashRecorded: true, cashDrawerTracked: true,
+    });
   });
 
   it("resumes a completed old three-sale day at 09:00 and schedules the fourth visit", () => {
@@ -353,7 +414,9 @@ describe("strict v8 migration and persisted business time", () => {
     expect(validateV8SimState(old)).toBe(true);
     let state = migrateV8SimState(old);
     expect(state.day).toMatchObject({ phase: "settled", closeReason: "legacy", elapsedOpenMs: 0, targetCustomers: null });
-    expect(state.settlements).toEqual(old.settlements);
+    expect(state.settlements).toEqual(old.settlements.map((record) => ({
+      ...record, expansionSpendPence: 0, communitySupportCount: 0, communityCashPence: 0,
+    })));
     expect(getDaySummary(state).targetCustomers).toBeNull();
     rejected(state, { type: "SETTLE_DAY" });
     state = act(state, { type: "BUY_UPGRADE" });
@@ -391,7 +454,7 @@ describe("strict v8 migration and persisted business time", () => {
   it("prefers current backup, then v8 backup, and preserves every old source while warning about missing clocks", () => {
     const old = v8Snapshot(serve(stocked(2)));
     const storage = new MemoryStorage();
-    storage.setItem(SIM_STORAGE_KEY, "{corrupt-v9");
+    storage.setItem(SIM_STORAGE_KEY, "{corrupt-v12");
     storage.setItem(SIM_V8_STORAGE_KEY, "{corrupt-v8");
     storage.setItem(SIM_V8_BACKUP_KEY, JSON.stringify(old, null, 2));
     const before = [...storage.values];

@@ -1,4 +1,5 @@
 import { createInitialRenovation } from "../../src/sim3d/shopDevelopment";
+import { createDefaultCashDrawer } from "../../src/sim3d/cashDrawer";
 import { describe, expect, it } from "vitest";
 import { payScannedCheckout, preCashTransactions } from "../helpers/sim3dPayment";
 import {
@@ -66,9 +67,23 @@ function settledDay(): SimState {
 /** Genuine v6 has fixed three-customer days, no timed-day fields and no recycling ledger. */
 function v6Snapshot(state = heldEmptyCrate()): SimStateV6 {
   expect(state.recyclingRecords).toEqual([]);
-  const { payment: _payment, recyclingBatches: _recyclingBatches, recyclingRecords: _recyclingRecords, settlements, ...previous } = structuredClone(state);
+  const {
+    payment: _payment,
+    recyclingBatches: _recyclingBatches,
+    recyclingRecords: _recyclingRecords,
+    renovation: _renovation,
+    streetSupportRecords: _streetSupportRecords,
+    cashDrawer: _cashDrawer,
+    cashDrawerOpening: _cashDrawerOpening,
+    cashDrawerTransactionStart: _cashDrawerTransactionStart,
+    customer,
+    settlements,
+    ...previous
+  } = structuredClone(state);
+  const { contentVersion: _contentVersion, ...oldCustomer } = customer;
   return {
     ...previous, schemaVersion: 6,
+    customer: oldCustomer,
     day: {
       number: previous.day.number, phase: previous.day.phase === "closing" ? "open" : previous.day.phase,
       targetCustomers: 3, transactionStart: previous.day.transactionStart, purchaseStart: previous.day.purchaseStart,
@@ -76,7 +91,15 @@ function v6Snapshot(state = heldEmptyCrate()): SimStateV6 {
       openingInventoryValuePence: previous.day.openingInventoryValuePence,
     },
     transactions: preCashTransactions(previous.transactions),
-    settlements: settlements.map(({ recycledCrates: _recycledCrates, recyclingIncomePence: _recyclingIncomePence, ...record }) => ({ ...record, targetCustomers: 3 })),
+    settlements: settlements.map(({
+      targetCustomers: _targetCustomers,
+      recycledCrates: _recycledCrates,
+      recyclingIncomePence: _recyclingIncomePence,
+      expansionSpendPence: _expansionSpendPence,
+      communitySupportCount: _communitySupportCount,
+      communityCashPence: _communityCashPence,
+      ...record
+    }) => ({ ...record, targetCustomers: 3 })),
   };
 }
 
@@ -106,7 +129,8 @@ describe("read-only v6 migration into the recycling ledger", () => {
     expect(loaded.source).toBe("v6");
     expect(loaded.warning).toContain("不会额外发钱");
     expect(loaded.state).toEqual({
-      ...old, schemaVersion: 11, renovation: createInitialRenovation(), payment: null, recyclingRecords: [], streetSupportRecords: [],
+      ...old, schemaVersion: 12, renovation: createInitialRenovation(), payment: null, recyclingRecords: [], streetSupportRecords: [],
+      cashDrawer: createDefaultCashDrawer(), cashDrawerOpening: createDefaultCashDrawer(), cashDrawerTransactionStart: 0,
       customer: { ...old.customer, contentVersion: 1 },
       day: { ...old.day, targetCustomers: null, elapsedOpenMs: 0, nextCustomerAtMs: null, closeReason: null },
       recyclingBatches: [
@@ -139,10 +163,17 @@ describe("read-only v6 migration into the recycling ledger", () => {
     const restored = parseImportedSimState(JSON.stringify(old));
     expect(restored.cashPence).toBe(1710);
     expect(restored.items).toEqual(old.items);
-    expect(restored.transactions).toEqual(old.transactions.map((transaction) => ({ ...transaction, paymentMethod: "card", tenderedPence: transaction.amountPence, changePence: 0 })));
+    expect(restored.transactions).toEqual(old.transactions.map((transaction) => ({
+      ...transaction, paymentMethod: "card", tenderedPence: transaction.amountPence, changePence: 0,
+      tenderedCash: [], changeCash: [], tenderedCashRecorded: false, changeCashRecorded: false,
+      cashDrawerTracked: false,
+    })));
     expect(restored.held).toEqual(old.held);
     expect(restored.day).toEqual({ ...old.day, targetCustomers: null, elapsedOpenMs: 0, nextCustomerAtMs: null, closeReason: "legacy" });
-    expect(restored.settlements).toEqual(old.settlements.map((record) => ({ ...record, recycledCrates: 0, recyclingIncomePence: 0 })));
+    expect(restored.settlements).toEqual(old.settlements.map((record) => ({
+      ...record, recycledCrates: 0, recyclingIncomePence: 0, expansionSpendPence: 0,
+      communitySupportCount: 0, communityCashPence: 0,
+    })));
     expect(reduceSim(restored, { type: "SETTLE_DAY" }).state).toBe(restored);
     const recycled = act(restored, { type: "RECYCLE_CRATE" });
     expect(recycled.cashPence).toBe(1715);

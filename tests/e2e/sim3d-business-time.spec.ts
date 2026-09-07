@@ -148,7 +148,7 @@ test("business time: 19:00 stops new arrivals without interrupting a received ca
   const errors = runtimeErrors(page);
   let fixture = checkoutFixture(2);
   fixture = step(fixture, { type: "ADVANCE_BUSINESS_TIME", elapsedMs: BUSINESS_DURATION_MS - 15_000 - fixture.day.elapsedOpenMs });
-  expect(fixture.payment).toEqual({ method: "cash", tenderedPence: 500, received: false, selectedChange: [] });
+  expect(fixture.payment).toEqual({ method: "cash", tenderedPence: 500, tenderedCash: [500], tenderedCashRecorded: true, received: false, selectedChange: [] });
   await launchFixture(page, fixture);
   await expect(page.locator("#s3-clock-state")).toHaveText("营业中");
   await expect(page.locator("#s3-receipt-title")).toHaveText("顾客想结账");
@@ -159,7 +159,7 @@ test("business time: 19:00 stops new arrivals without interrupting a received ca
   await page.locator("#s3-cash-add-50").click();
   const partial = await readBrowserSnapshot(page);
   expect(partial.day).toMatchObject({ phase: "open", closeReason: null });
-  expect(partial.payment).toEqual({ method: "cash", tenderedPence: 500, received: true, selectedChange: [50] });
+  expect(partial.payment).toEqual({ method: "cash", tenderedPence: 500, tenderedCash: [500], tenderedCashRecorded: true, received: true, selectedChange: [50] });
   await expect(page.locator("#s3-cash-confirm")).toBeDisabled();
 
   // Ordinary cashier work keeps time running; the business clock itself reaches the closing boundary.

@@ -252,7 +252,8 @@ describe("3D customer, scanning and transactional payment", () => {
     state = act(state, { type: "PAY", success: true });
     expect(state.cashPence).toBe(400);
     expect(state.transactions).toEqual([{ id: "sale-1", customerNumber: 1, itemIds: ["milk-1", "bread-1"], amountPence: 400,
-      paymentMethod: "card", tenderedPence: 400, changePence: 0 }]);
+      paymentMethod: "card", tenderedPence: 400, changePence: 0, tenderedCash: [], changeCash: [],
+      tenderedCashRecorded: false, changeCashRecorded: false, cashDrawerTracked: true }]);
     expect(state.scannedIds).toEqual([]);
     expect(getCheckoutTotal(state)).toBe(0);
     expect(reduceSim(state, { type: "PAY", success: true }).state).toBe(state);

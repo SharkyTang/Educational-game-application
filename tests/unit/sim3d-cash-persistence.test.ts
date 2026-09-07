@@ -8,6 +8,8 @@ import {
   SIM_BACKUP_KEY, SIM_STORAGE_KEY, SIM_WRITER_LOCK, SimSaveConflictError, SimSaveSession,
   loadSimState, parseImportedSimState, saveSimState, type StorageLike,
 } from "../../src/sim3d/persistence";
+import { cashPiecesForAmount, type LegacyPaymentState } from "../../src/sim3d/cashPayment";
+import { createDefaultCashDrawer } from "../../src/sim3d/cashDrawer";
 
 const V7_PRIMARY = "english-high-street:sim3d:v7";
 const V7_BACKUP = `${V7_PRIMARY}:backup`;
@@ -51,7 +53,10 @@ function pendingCash(): SimState {
   state = act(arrive(state), { type: "PAY", success: true });
   state = act(state, { type: "CUSTOMER_ADVANCE" });
   state = arrive(state);
-  expect(state.payment).toEqual({ method: "cash", tenderedPence: 500, received: false, selectedChange: [] });
+  expect(state.payment).toEqual({
+    method: "cash", tenderedPence: 500, tenderedCash: [500], tenderedCashRecorded: true,
+    received: false, selectedChange: [],
+  });
   return state;
 }
 
@@ -64,9 +69,19 @@ function readyCash(): SimState {
 }
 
 function v8Snapshot(state: SimState = partialCash()): SimStateV8 {
-  const previous = structuredClone(state);
+  const current = structuredClone(state);
+  const { cashDrawer: _cashDrawer, cashDrawerOpening: _cashDrawerOpening,
+    cashDrawerTransactionStart: _cashDrawerTransactionStart, payment: currentPayment,
+    transactions: currentTransactions, ...previous } = current;
+  const payment: LegacyPaymentState | null = currentPayment?.method === "cash"
+    ? { method: "cash", tenderedPence: currentPayment.tenderedPence,
+      received: currentPayment.received, selectedChange: [...currentPayment.selectedChange] }
+    : currentPayment;
   return {
-    ...previous, schemaVersion: 8,
+    ...previous, schemaVersion: 8, payment,
+    transactions: currentTransactions.map(({ tenderedCash: _tenderedCash, changeCash: _changeCash,
+      tenderedCashRecorded: _tenderedCashRecorded, changeCashRecorded: _changeCashRecorded,
+      cashDrawerTracked: _cashDrawerTracked, ...transaction }) => transaction),
     day: {
       number: previous.day.number, phase: previous.day.phase === "closing" ? "open" : previous.day.phase,
       targetCustomers: 3, transactionStart: previous.day.transactionStart, purchaseStart: previous.day.purchaseStart,
@@ -85,10 +100,10 @@ function v7Snapshot(state: SimState = partialCash()): SimStateV7 {
   };
 }
 
-describe("v11 read-only migration of cash and pre-cash save sources", () => {
-  it("uses the current v11 namespace, preserving the cross-version writer lock", () => {
-    expect(SIM_STORAGE_KEY).toBe("english-high-street:sim3d:v11");
-    expect(SIM_BACKUP_KEY).toBe("english-high-street:sim3d:v11:backup");
+describe("v12 read-only migration of cash and pre-cash save sources", () => {
+  it("uses the current v12 namespace, preserving the cross-version writer lock", () => {
+    expect(SIM_STORAGE_KEY).toBe("english-high-street:sim3d:v12");
+    expect(SIM_BACKUP_KEY).toBe("english-high-street:sim3d:v12:backup");
     expect(SIM_WRITER_LOCK).toBe("english-high-street:sim3d:v4:writer");
   });
 
@@ -109,15 +124,33 @@ describe("v11 read-only migration of cash and pre-cash save sources", () => {
     const before = [...storage.data];
     const loaded = loadSimState(storage);
     expect(loaded.source).toBe("v8");
-    const expected = { ...current, customer: { ...current.customer, contentVersion: 1 as const } };
-    expect(loaded.state).toEqual(expected);
-    expect(parseImportedSimState(original)).toEqual(expected);
-    expect(loaded.state.payment).toEqual(old.payment);
-    expect(loaded.state.transactions).toEqual(old.transactions);
+    const expectedPayment = old.payment?.method === "cash"
+      ? { ...old.payment, tenderedCash: cashPiecesForAmount(old.payment.tenderedPence), tenderedCashRecorded: false } : old.payment;
+    expect(loaded.state).toMatchObject({
+      schemaVersion: 12, customer: { ...current.customer, contentVersion: 1 }, payment: expectedPayment,
+      cashDrawer: createDefaultCashDrawer(), cashDrawerOpening: createDefaultCashDrawer(),
+      cashDrawerTransactionStart: old.transactions.length,
+    });
+    expect(parseImportedSimState(original)).toEqual(loaded.state);
+    expect(loaded.state.transactions).toEqual(old.transactions.map((transaction) => ({ ...transaction,
+      tenderedCash: transaction.paymentMethod === "cash" ? cashPiecesForAmount(transaction.tenderedPence) : [],
+      changeCash: transaction.paymentMethod === "cash" && transaction.changePence > 0 ? cashPiecesForAmount(transaction.changePence) : [],
+      tenderedCashRecorded: false, changeCashRecorded: false, cashDrawerTracked: false,
+    })));
     expect(loaded.state.cashPence).toBe(old.cashPence);
     expect([...storage.data]).toEqual(before);
     saveSimState(loaded.state, storage);
     for (const [key, value] of before) expect(storage.getItem(key)).toBe(value);
+  });
+
+  it("keeps a migrated in-progress tender labelled as derived when it is confirmed in v12", () => {
+    const migrated = parseImportedSimState(JSON.stringify(v8Snapshot(readyCash())));
+    expect(migrated.payment).toMatchObject({ method: "cash", tenderedCashRecorded: false, selectedChange: [50, 50] });
+    const paid = act(migrated, { type: "CONFIRM_CASH" });
+    expect(paid.transactions.at(-1)).toMatchObject({
+      paymentMethod: "cash", tenderedCashRecorded: false, changeCashRecorded: true, cashDrawerTracked: true,
+      tenderedCash: [500], changeCash: [50, 50],
+    });
   });
 
   it("recovers genuine v8 cash from its backup before a v7 source without overwriting either", () => {
@@ -131,7 +164,7 @@ describe("v11 read-only migration of cash and pre-cash save sources", () => {
     const before = [...storage.data];
     const loaded = loadSimState(storage);
     expect(loaded.source).toBe("v8-backup");
-    expect(loaded.state).toEqual({ ...cash, customer: { ...cash.customer, contentVersion: 1 } });
+    expect(loaded.state).toEqual(parseImportedSimState(JSON.stringify(v8Snapshot(cash))));
     expect(loaded.warning).toBeTruthy();
     expect([...storage.data]).toEqual(before);
   });
@@ -162,10 +195,13 @@ describe("v11 read-only migration of cash and pre-cash save sources", () => {
     const loaded = loadSimState(storage);
     expect(loaded.source).toBe("v7");
     expect(loaded.state).toEqual({
-      ...old, schemaVersion: 11, renovation: createInitialRenovation(), payment: { method: "card" }, streetSupportRecords: [],
+      ...old, schemaVersion: 12, renovation: createInitialRenovation(), payment: { method: "card" }, streetSupportRecords: [],
+      cashDrawer: createDefaultCashDrawer(), cashDrawerOpening: createDefaultCashDrawer(), cashDrawerTransactionStart: old.transactions.length,
       customer: { ...old.customer, contentVersion: 1 },
       day: { ...old.day, targetCustomers: null, elapsedOpenMs: 0, nextCustomerAtMs: null, closeReason: null },
-      transactions: old.transactions.map((transaction) => ({ ...transaction, paymentMethod: "card", tenderedPence: transaction.amountPence, changePence: 0 })),
+      transactions: old.transactions.map((transaction) => ({ ...transaction, paymentMethod: "card", tenderedPence: transaction.amountPence,
+        changePence: 0, tenderedCash: [], changeCash: [], tenderedCashRecorded: false,
+        changeCashRecorded: false, cashDrawerTracked: false })),
     });
     expect(loaded.state.cashPence).toBe(current.cashPence);
     expect(loaded.state.scannedIds).toEqual(current.scannedIds);
@@ -225,7 +261,7 @@ describe("v11 read-only migration of cash and pre-cash save sources", () => {
     expect(storage.getItem(SIM_STORAGE_KEY)).toBeNull();
   });
 
-  it("detects an old page changing the v7 migration source before this page can write v9", async () => {
+  it("detects an old page changing the v7 migration source before this page can write v12", async () => {
     const storage = new MemoryStorage();
     const old = v7Snapshot();
     storage.data.set(V7_PRIMARY, JSON.stringify(old));
@@ -301,7 +337,7 @@ describe("cash selection recovery, write failure and exactly-once saves", () => 
     await session.release();
   });
 
-  it("keeps the original v7 source intact if the initial migrated v9 write fails", async () => {
+  it("keeps the original v7 source intact if the initial migrated v12 write fails", async () => {
     const storage = new MemoryStorage();
     const raw = JSON.stringify(v7Snapshot());
     storage.data.set(V7_PRIMARY, raw);
@@ -344,7 +380,10 @@ describe("cash selection recovery, write failure and exactly-once saves", () => 
     const premature = structuredClone(current);
     premature.cashPence += 500;
     const malformed = structuredClone(current);
-    malformed.payment = { method: "cash", tenderedPence: 500, received: false, selectedChange: [50] };
+    malformed.payment = {
+      method: "cash", tenderedPence: 500, tenderedCash: [500], tenderedCashRecorded: true,
+      received: false, selectedChange: [50],
+    };
     const badPaid = act(readyCash(), { type: "CONFIRM_CASH" });
     badPaid.transactions.at(-1)!.changePence += 1;
     for (const bad of [premature, malformed, badPaid]) {

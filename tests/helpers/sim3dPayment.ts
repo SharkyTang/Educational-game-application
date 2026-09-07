@@ -1,5 +1,6 @@
 import { getCheckoutTotal, reduceSim, type SimCommand, type SimState, type SimTransactionV7 } from "../../src/sim3d/domain";
-import { CASH_DENOMINATIONS_PENCE, cashChangeDuePence } from "../../src/sim3d/cashPayment";
+import { cashChangeDuePence } from "../../src/sim3d/cashPayment";
+import { findExactChange } from "../../src/sim3d/cashDrawer";
 
 function act(state: SimState, command: SimCommand): SimState {
   const result = reduceSim(state, command);
@@ -10,15 +11,16 @@ function act(state: SimState, command: SimCommand): SimState {
 /** Economy/layout fixtures still complete real commands; PAY is never used to bypass cash. */
 export function payScannedCheckout(state: SimState): SimState {
   if (state.payment?.method !== "cash") return act(state, { type: "PAY", success: true });
-  let change = cashChangeDuePence(state.payment, getCheckoutTotal(state));
+  const change = cashChangeDuePence(state.payment, getCheckoutTotal(state));
   if (!state.payment.received) state = act(state, { type: "RECEIVE_CASH" });
   if (state.payment?.method === "cash" && state.payment.selectedChange.length) state = act(state, { type: "CLEAR_CHANGE" });
-  for (const denominationPence of [...CASH_DENOMINATIONS_PENCE].reverse()) {
-    while (change >= denominationPence) {
-      state = act(state, { type: "ADD_CHANGE", denominationPence });
-      change -= denominationPence;
-    }
+  const pieces = findExactChange(state.cashDrawer, change);
+  if (pieces === null) {
+    state = act(state, { type: "REQUEST_EXACT_CASH" });
+    state = act(state, { type: "RECEIVE_CASH" });
+    return act(state, { type: "CONFIRM_CASH" });
   }
+  for (const denominationPence of pieces) state = act(state, { type: "ADD_CHANGE", denominationPence });
   return act(state, { type: "CONFIRM_CASH" });
 }
 

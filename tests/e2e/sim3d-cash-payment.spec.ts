@@ -5,6 +5,7 @@ import {
   type PlayerPose, type ProductId, type SimCommand, type SimState,
 } from "../../src/sim3d/domain";
 import { cashTenderSpeechFor } from "../../src/sim3d/customerSelection";
+import { cashDrawerValuePence } from "../../src/sim3d/cashDrawer";
 import { readBrowserSnapshot as savedSnapshot } from "./helpers/sim3d-payment";
 import { beginNextFixtureCustomer } from "./helpers/sim3d-business-time";
 
@@ -53,6 +54,70 @@ function checkoutFixture(visitor: 1 | 2 = 2, products: readonly ProductId[] = ["
     state = walkToCheckout(beginNextFixtureCustomer(state));
     expect(state.payment?.method).toBe("cash");
   }
+  return step(state, { type: "SAVE_POSE", pose: checkoutPose });
+}
+
+function stockFixtureOrder(state: SimState, orderId: string, products: readonly ProductId[], quantity = 1): SimState {
+  state = step(state, { type: "PURCHASE_STOCK", orderId,
+    lines: products.map((productId) => ({ productId, quantity })) });
+  state = step(state, { type: "RECEIVE_DELIVERY" });
+  for (const productId of products) {
+    const crate = state.crates.find((entry) => entry.productId === productId)!;
+    state = step(state, { type: "PICK_CRATE", crateId: crate.id });
+    for (let slot = 0; slot < quantity; slot += 1) state = step(state, { type: "STOCK", productId, slot });
+    state = step(state, { type: "DROP_HELD", position: crate.position });
+  }
+  return state;
+}
+
+function nextFixtureCheckout(state: SimState): SimState {
+  return walkToCheckout(state.customer.phase === "outside"
+    ? step(state, { type: "OPEN_STORE" })
+    : beginNextFixtureCustomer(state));
+}
+
+function forceFixturePayment(state: SimState, method: "card" | "cash"): SimState {
+  const payment: SimState["payment"] = method === "card" ? { method: "card" } : {
+    method: "cash", tenderedPence: 500, tenderedCash: [500], tenderedCashRecorded: true,
+    received: false, selectedChange: [],
+  };
+  const updated = { ...state, payment };
+  expect(validateSimState(updated)).toBe(true);
+  return updated;
+}
+
+function scanFixture(state: SimState): SimState {
+  for (const item of state.items.filter((entry) => entry.location.kind === "checkout")) {
+    state = step(state, { type: "SCAN", itemId: item.id });
+  }
+  return state;
+}
+
+/** Real reducer history leaves only 20p + 20p + 5p below £1, so the next 65p change is impossible. */
+function changeShortageFixture(): SimState {
+  let state = stockFixtureOrder(createFirstDayState(), "cash-shortage-water", ["water"], 3);
+  const depletion: number[][] = [
+    [100, ...Array(6).fill(50), 5],
+    [...Array(4).fill(50), ...Array(10).fill(20), 5],
+    [...Array(3).fill(20), ...Array(20).fill(10), ...Array(17).fill(5), ...Array(20).fill(2), ...Array(20).fill(1)],
+  ];
+  for (const selection of depletion) {
+    state = scanFixture(forceFixturePayment(nextFixtureCheckout(state), "cash"));
+    state = step(state, { type: "RECEIVE_CASH" });
+    for (const denominationPence of selection) state = step(state, { type: "ADD_CHANGE", denominationPence });
+    state = step(state, { type: "CONFIRM_CASH" });
+    state = step(state, { type: "CUSTOMER_ADVANCE" });
+  }
+  expect(state.cashDrawer).toMatchObject({ 1: 0, 2: 0, 5: 1, 10: 0, 20: 2, 50: 0 });
+
+  state = stockFixtureOrder(state, "cash-shortage-card", ["cola"]);
+  state = scanFixture(forceFixturePayment(nextFixtureCheckout(state), "card"));
+  state = step(state, { type: "PAY", success: true });
+  state = step(state, { type: "CUSTOMER_ADVANCE" });
+
+  state = stockFixtureOrder(state, "cash-shortage-target", ["milk", "cheese"]);
+  state = forceFixturePayment(nextFixtureCheckout(state), "cash");
+  expect(getCheckoutTotal(state)).toBe(435);
   return step(state, { type: "SAVE_POSE", pose: checkoutPose });
 }
 
@@ -130,7 +195,7 @@ test("cash checkout: real scans, receive, under/over change, undo and one audite
   const due = getCheckoutTotal(fixture);
   const tenderClip = cashTenderSpeechFor(fixture)!;
   expect(due).toBe(400);
-  expect(fixture.payment).toEqual({ method: "cash", tenderedPence: 500, received: false, selectedChange: [] });
+  expect(fixture.payment).toEqual({ method: "cash", tenderedPence: 500, tenderedCash: [500], tenderedCashRecorded: true, received: false, selectedChange: [] });
   await launchFixture(page, fixture);
   await expect(page.locator("#s3-customer-line")).toContainText(/cash/i);
   await expect(page.locator("#s3-open-cash:enabled:visible")).toHaveCount(0);
@@ -200,7 +265,7 @@ test("cash checkout: close, Escape and reload retain received cash and selected 
   await page.locator("#s3-cash-receive").click();
   await page.locator("#s3-cash-add-50").click();
   const partial = await savedSnapshot(page);
-  expect(partial.payment).toEqual({ method: "cash", tenderedPence: 500, received: true, selectedChange: [50] });
+  expect(partial.payment).toEqual({ method: "cash", tenderedPence: 500, tenderedCash: [500], tenderedCashRecorded: true, received: true, selectedChange: [50] });
   await page.locator("#s3-cash-close").click();
   await expect(page.locator("#s3-cash-dialog")).toBeHidden();
   await expect(page.locator("#s3-pause")).toBeHidden();
@@ -279,7 +344,7 @@ test("cash checkout: exact tender requires receiving the money but no invented c
   // Bread (£2.40) plus cereal (£2.60) is an honest £5 basket with a £5 tender.
   const fixture = checkoutFixture(2, ["bread", "cereal"]);
   expect(getCheckoutTotal(fixture)).toBe(500);
-  expect(fixture.payment).toEqual({ method: "cash", tenderedPence: 500, received: false, selectedChange: [] });
+  expect(fixture.payment).toEqual({ method: "cash", tenderedPence: 500, tenderedCash: [500], tenderedCashRecorded: true, received: false, selectedChange: [] });
   await launchFixture(page, fixture);
   await scanOrder(page, fixture);
   await openCash(page);
@@ -300,6 +365,88 @@ test("cash checkout: exact tender requires receiving the money but no invented c
   const paid = await savedSnapshot(page);
   expect(paid.transactions).toHaveLength(fixture.transactions.length + 1);
   expect(paid.transactions.at(-1)!.amountPence).toBe(500);
+  expect(errors).toEqual([]);
+});
+
+test("cash checkout v2: a legitimately depleted till requests exact cash, preserves funds, then records real pieces and the day split", async ({ page }) => {
+  test.setTimeout(120_000);
+  const errors = runtimeErrors(page);
+  const fixture = changeShortageFixture();
+  const amount = getCheckoutTotal(fixture);
+  expect(amount).toBe(435);
+  const drawerBefore = cashDrawerValuePence(fixture.cashDrawer);
+  await launchFixture(page, fixture);
+  await scanOrder(page, fixture);
+  await openCash(page);
+  await page.locator("#s3-cash-receive").click();
+  await expect(page.locator("#s3-cash-change-shortage")).toBeVisible();
+  await expect(page.locator("#s3-cash-request-exact")).toContainText("Could I have the exact amount, please?");
+  await expect(page.locator("#s3-cash-switch-card")).toContainText("Could you pay by card, please?");
+  await expect(page.locator("#s3-cash-stock-50")).toHaveText("剩余 0");
+  await expect(page.locator("#s3-cash-add-50")).toBeDisabled();
+  const beforeRecovery = await savedSnapshot(page);
+  await page.locator("#s3-cash-request-exact").click();
+  await expect(page.locator("#s3-cash-dialog")).toBeVisible();
+  await expect(page.locator("#s3-cash-tendered")).toHaveText("£4.35");
+  await expect(page.locator("#s3-cash-change-due")).toHaveText("£0.00");
+  await expect(page.locator("#s3-cash-line")).toContainText("exact amount");
+  await expect(page.locator("#s3-cash-receive")).toBeVisible();
+  const exact = await savedSnapshot(page);
+  expect(exact.payment).toEqual({
+    method: "cash", tenderedPence: 435, tenderedCash: [200, 200, 20, 10, 5], tenderedCashRecorded: true,
+    received: false, selectedChange: [],
+  });
+  expect(exact.cashPence).toBe(beforeRecovery.cashPence);
+  expect(exact.cashDrawer).toEqual(beforeRecovery.cashDrawer);
+  expect(exact.transactions).toEqual(beforeRecovery.transactions);
+  await page.locator("#s3-cash-receive").click();
+  await expect(page.locator("#s3-cash-confirm")).toBeEnabled();
+  await page.locator("#s3-cash-confirm").click();
+  await expect(page.locator("#s3-cash-dialog")).toBeHidden();
+  const paid = await savedSnapshot(page);
+  expect(paid.cashPence).toBe(fixture.cashPence + amount);
+  expect(paid.transactions.at(-1)).toMatchObject({
+    paymentMethod: "cash", tenderedPence: 435, changePence: 0, tenderedCash: [200, 200, 20, 10, 5], changeCash: [],
+    tenderedCashRecorded: true, changeCashRecorded: true, cashDrawerTracked: true,
+  });
+  expect(cashDrawerValuePence(paid.cashDrawer)).toBe(drawerBefore + amount);
+  await page.keyboard.press("b");
+  await expect(page.locator("#s3-pause")).toBeVisible();
+  await page.locator("#s3-tab-day").click();
+  await expect(page.locator("#s3-day-cash-sales")).toHaveText("4 单 / £7.20");
+  await expect(page.locator("#s3-day-card-sales")).toHaveText("1 单 / £1.20");
+  await expect(page.locator("#s3-day-drawer")).toContainText(money(drawerBefore + amount));
+  await expect(page.locator("#s3-day-drawer-detail")).toContainText("不重复计入小店资金");
+  expect(errors).toEqual([]);
+});
+
+test("cash checkout v2: a legitimately depleted till can return tentative cash and switch the same order to card", async ({ page }) => {
+  test.setTimeout(110_000);
+  const errors = runtimeErrors(page);
+  const fixture = changeShortageFixture();
+  const amount = getCheckoutTotal(fixture);
+  await launchFixture(page, fixture);
+  await scanOrder(page, fixture);
+  await openCash(page);
+  await page.locator("#s3-cash-receive").click();
+  await expect(page.locator("#s3-cash-change-shortage")).toBeVisible();
+  await page.locator("#s3-cash-switch-card").click();
+  await expect(page.locator("#s3-cash-dialog")).toBeHidden();
+  await expect(page.locator("#s3-payment-method")).toContainText("CARD");
+  const switched = await savedSnapshot(page);
+  expect(switched.payment).toEqual({ method: "card" });
+  expect(switched.cashPence).toBe(fixture.cashPence);
+  expect(switched.cashDrawer).toEqual(fixture.cashDrawer);
+  expect(switched.transactions).toEqual(fixture.transactions);
+  await page.keyboard.press("e");
+  await expect(page.locator("#s3-receipt-title")).toHaveText("本单已收款");
+  const paid = await savedSnapshot(page);
+  expect(paid.cashPence).toBe(fixture.cashPence + amount);
+  expect(paid.cashDrawer).toEqual(fixture.cashDrawer);
+  expect(paid.transactions.at(-1)).toMatchObject({
+    paymentMethod: "card", tenderedPence: amount, changePence: 0, tenderedCash: [], changeCash: [],
+    tenderedCashRecorded: false, changeCashRecorded: false, cashDrawerTracked: true,
+  });
   expect(errors).toEqual([]);
 });
 
@@ -353,7 +500,7 @@ test("card checkout: the original first visitor still pays once and the next vis
   await expect(page.locator("#s3-customer-line")).toContainText(/cash/i);
   const next = await savedSnapshot(page);
   expect(next.customer.number).toBe(2);
-  expect(next.payment).toEqual({ method: "cash", tenderedPence: 500, received: false, selectedChange: [] });
+  expect(next.payment).toEqual({ method: "cash", tenderedPence: 500, tenderedCash: [500], tenderedCashRecorded: true, received: false, selectedChange: [] });
   expect(next.transactions).toHaveLength(1);
   expect(next.cashPence).toBe(fixture.cashPence + getCheckoutTotal(fixture));
   expect(errors).toEqual([]);

@@ -103,7 +103,10 @@ describe("3D accessible interaction decisions", () => {
   });
 
   it("routes a scanned cash customer to the cash register, never the old PAY shortcut", () => {
-    let state: SimState = { ...checkoutState(), payment: { method: "cash", tenderedPence: 500, received: false, selectedChange: [] } };
+    let state: SimState = { ...checkoutState(), payment: {
+      method: "cash", tenderedPence: 500, tenderedCash: [500], tenderedCashRecorded: true,
+      received: false, selectedChange: [],
+    } };
     const counter = target({ id: "counter", kind: "counter", inspectable: false });
     for (let index = 0; index < 2; index += 1) {
       const decision = commandForInteraction(state, counter);

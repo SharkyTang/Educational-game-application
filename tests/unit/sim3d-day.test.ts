@@ -75,7 +75,7 @@ describe("first-day paired purchasing and conserved goods", () => {
   it("opens with £12 capital, two empty reusable crates and no free merchandise", () => {
     const state = createFirstDayState();
     expect(validateSimState(state)).toBe(true);
-    expect(state.schemaVersion).toBe(11);
+    expect(state.schemaVersion).toBe(12);
     expect(state.cashPence).toBe(INITIAL_CAPITAL_PENCE);
     expect(state.items).toEqual([]);
     expect(state.crates).toHaveLength(2);
@@ -455,7 +455,11 @@ describe("v3 legacy baseline migration", () => {
     expect(result.held).toEqual(legacy.held);
     expect(result.customer).toEqual({ ...legacy.customer, contentVersion: 1 });
     expect(result.scannedIds).toEqual(legacy.scannedIds);
-    expect(result.transactions).toEqual(legacy.transactions.map((transaction) => ({ ...transaction, paymentMethod: "card", tenderedPence: transaction.amountPence, changePence: 0 })));
+    expect(result.transactions).toEqual(legacy.transactions.map((transaction) => ({
+      ...transaction, paymentMethod: "card", tenderedPence: transaction.amountPence, changePence: 0,
+      tenderedCash: [], changeCash: [], tenderedCashRecorded: false, changeCashRecorded: false,
+      cashDrawerTracked: false,
+    })));
     expect(result.day.phase).toBe("open");
     expect(result.day.openingInventoryValuePence).toBe(920);
     result.items[0]!.id = "mutated-copy";
@@ -473,7 +477,11 @@ describe("v3 legacy baseline migration", () => {
     const legacy = asLegacy(state);
     expect(validateLegacySimState(legacy)).toBe(true);
     let result = migrateLegacySimState(legacy);
-    expect(result.transactions).toEqual(legacy.transactions.map((transaction) => ({ ...transaction, paymentMethod: "card", tenderedPence: transaction.amountPence, changePence: 0 })));
+    expect(result.transactions).toEqual(legacy.transactions.map((transaction) => ({
+      ...transaction, paymentMethod: "card", tenderedPence: transaction.amountPence, changePence: 0,
+      tenderedCash: [], changeCash: [], tenderedCashRecorded: false, changeCashRecorded: false,
+      cashDrawerTracked: false,
+    })));
     expect(result.cashPence).toBe(800);
     expect(result.upgraded).toBe(true);
     expect(result.upgradeDay).toBe(1);

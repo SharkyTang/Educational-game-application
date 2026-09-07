@@ -5,7 +5,7 @@ import {
   type ProductId, type SimCommand, type SimState,
 } from "../../src/sim3d/domain";
 import { BUSINESS_DURATION_MS } from "../../src/sim3d/businessTime";
-import { CASH_DENOMINATIONS_PENCE } from "../../src/sim3d/cashPayment";
+import { findExactChange } from "../../src/sim3d/cashDrawer";
 import { loadSimState, parseImportedSimState, saveSimState, type StorageLike } from "../../src/sim3d/persistence";
 
 const SHOP_PRODUCTS = ["milk", "bread"] as const;
@@ -155,12 +155,15 @@ class ContinuityRun {
     } else {
       this.step({ type: "RECEIVE_CASH" });
       this.reject({ type: "RECEIVE_CASH" });
-      let change = payment.tenderedPence - amountPence;
-      for (const denominationPence of [...CASH_DENOMINATIONS_PENCE].reverse()) while (change >= denominationPence) {
-        this.step({ type: "ADD_CHANGE", denominationPence });
-        change -= denominationPence;
+      const changePence = payment.tenderedPence - amountPence;
+      const changeCash = findExactChange(this.state.cashDrawer, changePence);
+      if (changeCash === null) {
+        this.step({ type: "REQUEST_EXACT_CASH" });
+        this.step({ type: "RECEIVE_CASH" });
+        this.reject({ type: "RECEIVE_CASH" });
+      } else {
+        for (const denominationPence of changeCash) this.step({ type: "ADD_CHANGE", denominationPence });
       }
-      expect(change).toBe(0);
       this.step({ type: "CONFIRM_CASH" });
       this.reject({ type: "CONFIRM_CASH" });
     }

@@ -1,11 +1,13 @@
 import { describe, expect, it } from "vitest";
 import { preCashTransactions } from "../helpers/sim3dPayment";
 import { SAFE_DROP_POINTS, createFirstDayState, createInitialSimState, getDeliverySummary, migrateV4SimState, migrateV5SimState,
-  reduceSim, validateSimState, validateV4SimState, validateV5SimState, type LegacySimState, type SimState, type SimStateV4, type SimStateV5 } from "../../src/sim3d/domain";
+  migrateV11SimState, reduceSim, validateSimState, validateV4SimState, validateV5SimState, validateV11SimState,
+  type LegacySimState, type SimCommand, type SimState, type SimStateV4, type SimStateV5, type SimStateV11 } from "../../src/sim3d/domain";
 import {
   SIM_BACKUP_KEY, SIM_STORAGE_KEY, SIM_LEGACY_STORAGE_KEY, SIM_LEGACY_BACKUP_KEY, SimSaveConflictError, SimSaveSession,
   SIM_V4_STORAGE_KEY, SIM_V4_BACKUP_KEY, SIM_WRITER_LOCK,
   SIM_V5_STORAGE_KEY, SIM_V5_BACKUP_KEY,
+  SIM_V11_STORAGE_KEY, SIM_V11_BACKUP_KEY,
   loadSimState, parseImportedSimState, saveSimState,
   type SimLockManager, type StorageLike,
 } from "../../src/sim3d/persistence";
@@ -42,6 +44,64 @@ function paidSnapshot(): SimState {
   for (let i = 0; i < 3; i += 1) state = reduceSim(state, { type: "CUSTOMER_ADVANCE" }).state;
   for (const itemId of ["milk-1", "bread-1"]) state = reduceSim(state, { type: "SCAN", itemId }).state;
   return reduceSim(state, { type: "PAY", success: true }).state;
+}
+
+function fixtureStep(state: SimState, command: SimCommand): SimState {
+  const result = reduceSim(state, command);
+  if (!result.changed) throw new Error(`${command.type}: ${result.message ?? "fixture command rejected"}`);
+  return result.state;
+}
+
+function pendingCashSnapshot(): SimState {
+  let state = createFirstDayState();
+  state.customerSeed = 239;
+  state = fixtureStep(state, { type: "PURCHASE_STOCK", orderId: "v11-cash-migration", pairs: 3 });
+  state = fixtureStep(state, { type: "RECEIVE_DELIVERY" });
+  for (const productId of ["milk", "bread"] as const) {
+    state = fixtureStep(state, { type: "PICK_CRATE", crateId: `${productId}-crate` });
+    for (let slot = 0; slot < 3; slot += 1) state = fixtureStep(state, { type: "STOCK", productId, slot });
+    const position = state.crates.find((crate) => crate.productId === productId)!.position;
+    state = fixtureStep(state, { type: "DROP_HELD", position });
+  }
+  state = fixtureStep(state, { type: "OPEN_STORE" });
+  for (let step = 0; step < 3; step += 1) state = fixtureStep(state, { type: "CUSTOMER_ADVANCE" });
+  for (const item of state.items.filter((entry) => entry.location.kind === "checkout")) {
+    state = fixtureStep(state, { type: "SCAN", itemId: item.id });
+  }
+  state = fixtureStep(state, { type: "PAY", success: true });
+  state = fixtureStep(state, { type: "CUSTOMER_ADVANCE" });
+  state = fixtureStep(state, { type: "NEXT_CUSTOMER" });
+  for (let step = 0; step < 3; step += 1) state = fixtureStep(state, { type: "CUSTOMER_ADVANCE" });
+  for (const item of state.items.filter((entry) => entry.location.kind === "checkout")) {
+    state = fixtureStep(state, { type: "SCAN", itemId: item.id });
+  }
+  state = fixtureStep(state, { type: "RECEIVE_CASH" });
+  return fixtureStep(state, { type: "ADD_CHANGE", denominationPence: 50 });
+}
+
+function v11Snapshot(state: SimState = pendingCashSnapshot()): SimStateV11 {
+  const {
+    schemaVersion: _schemaVersion,
+    cashDrawer: _cashDrawer,
+    cashDrawerOpening: _cashDrawerOpening,
+    cashDrawerTransactionStart: _cashDrawerTransactionStart,
+    payment,
+    transactions,
+    ...previous
+  } = structuredClone(state);
+  return {
+    ...previous,
+    schemaVersion: 11,
+    payment: payment?.method === "cash" ? {
+      method: "cash",
+      tenderedPence: payment.tenderedPence,
+      received: payment.received,
+      selectedChange: [...payment.selectedChange],
+    } : payment,
+    transactions: transactions.map(({ tenderedCash: _tenderedCash, changeCash: _changeCash,
+      tenderedCashRecorded: _tenderedCashRecorded, changeCashRecorded: _changeCashRecorded,
+      cashDrawerTracked: _cashDrawerTracked, ...transaction }) => transaction),
+  };
 }
 
 function oldSnapshot(state = paidSnapshot()): LegacySimState {
@@ -249,14 +309,120 @@ describe("safe crate placement around the player", () => {
   });
 });
 
-describe("v11 snapshot persistence and read-only v3 migration", () => {
+describe("audited v11 to v12 finite cash-drawer migration", () => {
+  it("uses separate v12 keys while retaining both v11 keys as read-only migration sources", () => {
+    expect(SIM_STORAGE_KEY).toBe("english-high-street:sim3d:v12");
+    expect(SIM_BACKUP_KEY).toBe("english-high-street:sim3d:v12:backup");
+    expect(SIM_V11_STORAGE_KEY).toBe("english-high-street:sim3d:v11");
+    expect(SIM_V11_BACKUP_KEY).toBe("english-high-street:sim3d:v11:backup");
+    expect(SIM_WRITER_LOCK).toBe("english-high-street:sim3d:v4:writer");
+  });
+
+  it("preserves old money and a 100-piece pending tray while starting denomination tracking at the migration boundary", () => {
+    const old = v11Snapshot();
+    if (old.payment?.method !== "cash") throw new Error("expected a cash migration fixture");
+    old.payment.selectedChange = Array.from({ length: 100 }, () => 1);
+    expect(validateV11SimState(old)).toBe(true);
+    const expected = migrateV11SimState(old);
+    const primary = JSON.stringify(old, null, 2);
+    const backup = JSON.stringify(v11Snapshot(paidSnapshot()));
+    const storage = new MemoryStorage();
+    storage.data.set(SIM_STORAGE_KEY, "{corrupt-v12");
+    storage.data.set(SIM_V11_STORAGE_KEY, primary);
+    storage.data.set(SIM_V11_BACKUP_KEY, backup);
+    const before = [...storage.data];
+
+    const loaded = loadSimState(storage);
+    expect(loaded.source).toBe("v11");
+    expect(loaded.state).toEqual(expected);
+    expect(parseImportedSimState(primary)).toEqual(expected);
+    expect(loaded.state.schemaVersion).toBe(12);
+    expect(loaded.state.cashPence).toBe(old.cashPence);
+    expect(loaded.state.cashDrawerTransactionStart).toBe(old.transactions.length);
+    expect(loaded.state.cashDrawerOpening).toEqual(loaded.state.cashDrawer);
+    expect(loaded.state.cashDrawer[1]).toBe(20);
+    expect(loaded.state.payment).toEqual({ ...old.payment, tenderedCash: [500], tenderedCashRecorded: false });
+    expect(reduceSim(loaded.state, { type: "CONFIRM_CASH" }).changed).toBe(false);
+    const removed = reduceSim(loaded.state, { type: "REMOVE_CHANGE", index: 0 });
+    expect(removed.changed).toBe(true);
+    expect(removed.state.payment?.method === "cash" ? removed.state.payment.selectedChange : []).toHaveLength(99);
+    const cleared = reduceSim(removed.state, { type: "CLEAR_CHANGE" });
+    expect(cleared.changed).toBe(true);
+    expect(cleared.state.payment?.method === "cash" ? cleared.state.payment.selectedChange : null).toEqual([]);
+    expect(loaded.warning).toContain("小店资金");
+    expect(loaded.warning).toContain("迁移边界");
+    expect(loaded.warning).toContain("不把备用零钱另加到小店资金");
+    expect(loaded.warning).toContain("找零托盘保持原样");
+    expect([...storage.data]).toEqual(before);
+
+    saveSimState(loaded.state, storage);
+    expect(storage.getItem(SIM_V11_STORAGE_KEY)).toBe(primary);
+    expect(storage.getItem(SIM_V11_BACKUP_KEY)).toBe(backup);
+    expect(loadSimState(storage)).toEqual({ state: loaded.state, source: "primary" });
+  });
+
+  it("recovers the valid v11 backup without rewriting either old snapshot", () => {
+    const storage = new MemoryStorage();
+    const backup = JSON.stringify(v11Snapshot(), null, 2);
+    storage.data.set(SIM_V11_STORAGE_KEY, "{corrupt-v11");
+    storage.data.set(SIM_V11_BACKUP_KEY, backup);
+    const before = [...storage.data];
+    const loaded = loadSimState(storage);
+    expect(loaded.source).toBe("v11-backup");
+    expect(loaded.warning).toContain("旧 v11 主存档不可用");
+    expect(loaded.state.cashPence).toBe(v11Snapshot().cashPence);
+    expect([...storage.data]).toEqual(before);
+  });
+
+  it.each([SIM_V11_STORAGE_KEY, SIM_V11_BACKUP_KEY])("freezes before the first v12 save when an old page changes %s", async (sourceKey) => {
+    const storage = new MemoryStorage();
+    const old = v11Snapshot();
+    storage.data.set(SIM_V11_STORAGE_KEY, JSON.stringify(old));
+    storage.data.set(SIM_V11_BACKUP_KEY, JSON.stringify(v11Snapshot(paidSnapshot())));
+    const session = new SimSaveSession(storage, null);
+    expect(await session.acquire()).toBe(true);
+    const loaded = session.load();
+    expect(loaded.source).toBe("v11");
+    storage.data.set(sourceKey, JSON.stringify({ ...old, revision: old.revision + 1 }));
+    expect(() => session.save(loaded.state)).toThrow("迁移源");
+    expect(session.canWrite).toBe(false);
+    expect(storage.getItem(SIM_STORAGE_KEY)).toBeNull();
+  });
+
+  it("rejects a forged v12 drawer and falls back read-only to a valid v11 source", () => {
+    const forged = pendingCashSnapshot();
+    forged.cashDrawer[50] -= 1;
+    expect(validateSimState(forged)).toBe(false);
+    expect(() => parseImportedSimState(JSON.stringify(forged))).toThrow("校验未通过");
+    const storage = new MemoryStorage();
+    const badRaw = JSON.stringify(forged);
+    const v11Raw = JSON.stringify(v11Snapshot());
+    storage.data.set(SIM_STORAGE_KEY, badRaw);
+    storage.data.set(SIM_V11_STORAGE_KEY, v11Raw);
+    const loaded = loadSimState(storage);
+    expect(loaded.source).toBe("v11");
+    expect(storage.getItem(SIM_STORAGE_KEY)).toBe(badRaw);
+    expect(storage.getItem(SIM_V11_STORAGE_KEY)).toBe(v11Raw);
+  });
+
+  it("rejects v12-only payment metadata disguised inside a v11 snapshot", () => {
+    const forged = v11Snapshot();
+    if (forged.payment?.method !== "cash") throw new Error("expected a cash migration fixture");
+    Object.assign(forged.payment, { tenderedCash: [forged.payment.tenderedPence] });
+    expect(validateV11SimState(forged)).toBe(false);
+    expect(() => migrateV11SimState(forged)).toThrow("v11 存档校验失败");
+    expect(() => parseImportedSimState(JSON.stringify(forged))).toThrow("校验未通过");
+  });
+});
+
+describe("v12 snapshot persistence and read-only v3 migration", () => {
   it("starts the new namespace with £12 and empty crates without rewriting unrelated 2D data", () => {
     const storage = new MemoryStorage();
     storage.data.set("english-high-street:save:v2", "legacy-2d-content");
     const before = [...storage.data];
     expect(loadSimState(storage)).toEqual({ state: createFirstDayState(), source: "new" });
     expect([...storage.data]).toEqual(before);
-    expect(SIM_STORAGE_KEY).toBe("english-high-street:sim3d:v11");
+    expect(SIM_STORAGE_KEY).toBe("english-high-street:sim3d:v12");
   });
 
   it("migrates the valid v3 world once and leaves both original v3 keys byte-for-byte intact", () => {
@@ -270,8 +436,11 @@ describe("v11 snapshot persistence and read-only v3 migration", () => {
     expect(migrated.source).toBe("legacy");
     expect(migrated.warning).toContain("不会额外发放");
     expect(migrated.state.cashPence).toBe(400);
-    expect(migrated.state.schemaVersion).toBe(11);
-    expect(migrated.state.transactions).toEqual(oldSnapshot().transactions.map((transaction) => ({ ...transaction, paymentMethod: "card", tenderedPence: transaction.amountPence, changePence: 0 })));
+    expect(migrated.state.schemaVersion).toBe(12);
+    expect(migrated.state.transactions).toEqual(oldSnapshot().transactions.map((transaction) => ({
+      ...transaction, paymentMethod: "card", tenderedPence: transaction.amountPence, changePence: 0, tenderedCash: [], changeCash: [],
+      tenderedCashRecorded: false, changeCashRecorded: false, cashDrawerTracked: false,
+    })));
     expect([...storage.data]).toEqual(before);
     saveSimState(migrated.state, storage);
     expect(storage.getItem(SIM_LEGACY_STORAGE_KEY)).toBe(primary);
@@ -537,11 +706,14 @@ describe("strict v5 selected-stock migration to the current schema", () => {
     const untouched = [...storage.data];
     const result = loadSimState(storage);
     expect(result.source).toBe("v5");
-    expect(result.state.schemaVersion).toBe(11);
+    expect(result.state.schemaVersion).toBe(12);
     expect(validateSimState(result.state)).toBe(true);
     expect(result.state.cashPence).toBe(old.cashPence);
     expect(result.state.items).toEqual(old.items);
-    expect(result.state.transactions).toEqual(old.transactions.map((transaction) => ({ ...transaction, paymentMethod: "card", tenderedPence: transaction.amountPence, changePence: 0 })));
+    expect(result.state.transactions).toEqual(old.transactions.map((transaction) => ({
+      ...transaction, paymentMethod: "card", tenderedPence: transaction.amountPence, changePence: 0, tenderedCash: [], changeCash: [],
+      tenderedCashRecorded: false, changeCashRecorded: false, cashDrawerTracked: false,
+    })));
     expect(result.state.crates).toEqual(old.crates);
     expect(result.state.playerPose).toEqual(old.playerPose);
     expect(result.state.customerSeed).toBe(old.customerSeed);
