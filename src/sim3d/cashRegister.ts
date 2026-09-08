@@ -21,7 +21,7 @@ function denominationButton(pence: number): string {
 }
 
 export function cashRegisterMarkup(): string {
-  return `<dialog id="s3-cash-dialog" class="s3-cash-dialog" aria-labelledby="s3-cash-title" aria-describedby="s3-cash-intro">
+  return `<dialog id="s3-cash-dialog" class="s3-cash-dialog s3-cash-has-visual" aria-labelledby="s3-cash-title" aria-describedby="s3-cash-intro">
     <header class="s3-cash-heading">
       <div><p class="s3-eyebrow">CASH DESK · POUNDS &amp; PENCE</p><h2 id="s3-cash-title">收下现金，找好零钱</h2></div>
       <button id="s3-cash-close" class="s3-secondary-button" type="button">暂时离开 <kbd>Esc</kbd></button>
@@ -38,15 +38,6 @@ export function cashRegisterMarkup(): string {
         <div class="s3-cash-dialogue"><p id="s3-cash-line" lang="en"></p><p id="s3-cash-zh" class="s3-muted"></p><button id="s3-cash-replay" class="s3-text-button" type="button">重听交款金额 <kbd>R</kbd></button><p id="s3-cash-audio-status" class="s3-muted" role="status" aria-live="polite"></p></div>
         <button id="s3-cash-receive" class="s3-primary-button" type="button">收下现金</button>
         <p id="s3-cash-received-note" class="s3-cash-received-note" hidden>现金已暂收。完成找零后，才会计入小店资金。</p>
-      </section>
-      <section class="s3-cash-drawer" aria-labelledby="s3-cash-drawer-title">
-        <div class="s3-cash-section-heading"><h3 id="s3-cash-drawer-title">点选零钱</h3><span>教学钱箱 · 按面额记录库存</span></div>
-        <p id="s3-cash-drawer-help" class="s3-muted">先收下现金，再从钱箱中点选面额。</p>
-        <div class="s3-cash-denominations" role="group" aria-label="常用找零面额">${CASH_DENOMINATIONS_PENCE.filter((pence) => pence >= 5).map(denominationButton).join("")}</div>
-        <details class="s3-cash-small-coins"><summary>小额硬币 · 1p / 2p</summary><div class="s3-cash-denominations" role="group" aria-label="小额找零面额">${CASH_DENOMINATIONS_PENCE.filter((pence) => pence < 5).map(denominationButton).join("")}</div></details>
-        <div class="s3-cash-section-heading s3-cash-tray-heading"><h3>找零托盘</h3><button id="s3-cash-reset" class="s3-text-button" type="button" disabled>清空重选</button></div>
-        <div id="s3-cash-tray" class="s3-cash-tray" role="group" aria-label="已选零钱，点击可撤回"><p class="s3-cash-empty">还没有放入零钱</p></div>
-        <div class="s3-cash-selected"><span>已选零钱 <small>Selected</small></span><strong id="s3-cash-selected-total">£0.00</strong></div>
         <p id="s3-cash-feedback" class="s3-cash-feedback" role="status" aria-live="polite">请先收下现金。</p>
         <section id="s3-cash-change-shortage" class="s3-cash-change-shortage" aria-labelledby="s3-cash-change-shortage-title" hidden>
           <h4 id="s3-cash-change-shortage-title">钱箱没有足够的零钱</h4>
@@ -57,6 +48,16 @@ export function cashRegisterMarkup(): string {
           </div>
         </section>
         <button id="s3-cash-confirm" class="s3-primary-button" type="button" disabled>确认找零</button>
+      </section>
+      <section class="s3-cash-drawer" aria-labelledby="s3-cash-drawer-title">
+        <div id="s3-cash-visual-host"></div>
+        <div class="s3-cash-section-heading"><h3 id="s3-cash-drawer-title">面额按钮 / 键盘操作</h3><span>与实体钱箱使用同一库存</span></div>
+        <p id="s3-cash-drawer-help" class="s3-muted">先收下现金，再从钱箱中点选面额。</p>
+        <div class="s3-cash-denominations" role="group" aria-label="常用找零面额">${CASH_DENOMINATIONS_PENCE.filter((pence) => pence >= 5).map(denominationButton).join("")}</div>
+        <details class="s3-cash-small-coins"><summary>小额硬币 · 1p / 2p</summary><div class="s3-cash-denominations" role="group" aria-label="小额找零面额">${CASH_DENOMINATIONS_PENCE.filter((pence) => pence < 5).map(denominationButton).join("")}</div></details>
+        <div class="s3-cash-section-heading s3-cash-tray-heading"><h3>找零托盘</h3><button id="s3-cash-reset" class="s3-text-button" type="button" disabled>清空重选</button></div>
+        <div id="s3-cash-tray" class="s3-cash-tray" role="group" aria-label="已选零钱，点击可撤回"><p class="s3-cash-empty">还没有放入零钱</p></div>
+        <div class="s3-cash-selected"><span>已选零钱 <small>Selected</small></span><strong id="s3-cash-selected-total">£0.00</strong></div>
       </section>
     </div>
     <p id="s3-cash-business-clock" class="s3-cash-footer" role="timer" aria-live="off"></p>

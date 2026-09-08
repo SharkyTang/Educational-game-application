@@ -34,6 +34,7 @@ import {
 } from "./streetNeighbourContent";
 import "./styles.css";
 import "./cashRegister.css";
+import "./cashVisualViewport.css";
 import "./cashManagementPanel.css";
 import "./businessTime.css";
 import "./developmentPanel.css";
@@ -244,6 +245,7 @@ export class App3D {
         payment: this.state.payment,
         amountPence: getCheckoutTotal(this.state),
         drawer: this.state.cashDrawer,
+        reducedMotion: this.settings.reducedMotion,
         atCheckout: this.state.customer.phase === "checkout",
         canWrite: !!this.saveSession?.canWrite,
         customerName: `${customerProfileFor(this.state).name} · 第 ${this.state.customer.number} 位顾客`,
@@ -251,6 +253,7 @@ export class App3D {
         warning: this.saveError || this.writerWarning,
       }),
       canOpen: () => this.canOpenCashRegister(),
+      onDrawerChange: (open) => this.world?.setCashDrawerOpen?.(open),
       dispatch: (command) => this.dispatch(command),
       onOpen: () => {
         this.stopSpeech();

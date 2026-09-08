@@ -3,6 +3,8 @@ import { CASH_DENOMINATIONS_PENCE, type CashPaymentState } from "../../src/sim3d
 import { createDefaultCashDrawer, type CashDrawerState } from "../../src/sim3d/cashDrawer";
 import { cashRegisterMarkup } from "../../src/sim3d/cashRegister";
 import { CashRegisterController, type CashRegisterCommand } from "../../src/sim3d/cashRegisterController";
+import { CashVisualViewport, type CashVisualRuntimeFactory } from "../../src/sim3d/cashVisualViewport";
+import type { CashVisualPick, CashVisualSnapshot } from "../../src/sim3d/cashVisualState";
 import type { CustomerSpeechClip } from "../../src/sim3d/customerSelection";
 
 type RegisterHost = ConstructorParameters<typeof CashRegisterController>[1];
@@ -74,6 +76,7 @@ class ElementDouble extends EventTarget {
   }
 
   click(): void { if (!this.disabled) this.dispatchEvent(new Event("click", { cancelable: true })) }
+  replaceChildren(): void { this.innerHTML = ""; }
 }
 
 const TENDER_CLIP: CustomerSpeechClip = {
@@ -117,7 +120,8 @@ function mount(patch: Partial<RegisterSnapshot> = {}) {
   const host = {
     read: vi.fn(() => snapshot), canOpen: vi.fn(() => true),
     dispatch: vi.fn<(command: CashRegisterCommand) => boolean>(() => false),
-    onOpen: vi.fn(), onClose: vi.fn(), speak: vi.fn<(clip: CustomerSpeechClip, rate: number) => void>(),
+    onOpen: vi.fn(), onClose: vi.fn(), onDrawerChange: vi.fn<(open: boolean) => void>(),
+    speak: vi.fn<(clip: CustomerSpeechClip, rate: number) => void>(),
   } satisfies RegisterHost;
   const abort = new AbortController();
   controllers.push(abort);
@@ -147,6 +151,140 @@ function key(code: string, patch: Partial<KeyboardEvent> = {}): Event {
   windowDouble.dispatchEvent(event);
   return event;
 }
+
+/** Keep the real viewport lifecycle and controller; replace only the GPU runtime. */
+function instrumentCashVisualRuntime() {
+  const sessions: Array<{
+    pick(pick: CashVisualPick): void;
+    unavailable(): void;
+    update: ReturnType<typeof vi.fn<(snapshot: CashVisualSnapshot) => void>>;
+    dispose: ReturnType<typeof vi.fn<() => void>>;
+  }> = [];
+  const factory: CashVisualRuntimeFactory = (_canvas, pick, unavailable) => {
+    const session = { pick, unavailable, update: vi.fn<(snapshot: CashVisualSnapshot) => void>(), dispose: vi.fn<() => void>() };
+    sessions.push(session);
+    return session;
+  };
+  const show = CashVisualViewport.prototype.show;
+  vi.spyOn(CashVisualViewport.prototype, "show").mockImplementation(function (this: CashVisualViewport, snapshot) {
+    // The runtime factory is already an explicit viewport test seam. The controller
+    // still constructs the actual viewport and owns all modal/action decisions.
+    Reflect.set(this, "factory", factory);
+    show.call(this, snapshot);
+  });
+  return sessions;
+}
+
+describe("cash v4 drawer and modal integration", () => {
+  it("synchronizes real drawer opening, folding, reopening and modal close without dispatching money", () => {
+    const sessions = instrumentCashVisualRuntime();
+    const view = mount({ payment: cash([50]) });
+    const before = structuredClone(view.snapshot());
+    view.controller.open();
+    expect(sessions).toHaveLength(1);
+    expect(view.host.onDrawerChange.mock.calls).toEqual([[true]]);
+    expect(view.element("s3-cash-visual-toggle").textContent).toBe("合上钱箱");
+    view.element("s3-cash-visual-toggle").click();
+    expect(view.host.onDrawerChange.mock.calls).toEqual([[true], [false]]);
+    expect(sessions[0]!.update.mock.lastCall?.[0]).toMatchObject({ open: false, canInteract: false });
+    expect(view.element("s3-cash-save-note").textContent).toContain("钱箱已合上");
+    view.element("s3-cash-visual-toggle").click();
+    expect(view.host.onDrawerChange.mock.calls).toEqual([[true], [false], [true]]);
+    expect(view.element("s3-cash-add-50").disabled).toBe(false);
+    view.controller.close();
+    expect(view.host.onDrawerChange.mock.calls).toEqual([[true], [false], [true], [false]]);
+    expect(view.host.onClose).toHaveBeenCalledOnce();
+    expect(sessions[0]!.dispose).toHaveBeenCalledOnce();
+    expect(view.snapshot()).toEqual(before);
+    expect(view.host.dispatch).not.toHaveBeenCalled();
+  });
+
+  it("blocks every legacy cash button and close-up pick while the physical drawer is folded", () => {
+    const sessions = instrumentCashVisualRuntime();
+    const view = mount({ payment: cash([50, 10, 5]) });
+    view.controller.open();
+    view.element("s3-cash-visual-toggle").click();
+    for (const id of ["s3-cash-receive", "s3-cash-reset", "s3-cash-confirm", "s3-cash-request-exact", "s3-cash-switch-card",
+      ...CASH_DENOMINATIONS_PENCE.map((piece) => `s3-cash-add-${piece}`), "s3-cash-remove-0"]) {
+      expect(view.element(id).disabled, id).toBe(true);
+      // Even synthetic events that bypass native disabled-button suppression must not dispatch.
+      view.element(id).dispatchEvent(new Event("click"));
+    }
+    view.trayClick(view.element("s3-cash-remove-0"));
+    for (const pick of [{ kind: "receive" }, { kind: "add", denominationPence: 20 }, { kind: "remove", index: 0 }] as const) {
+      sessions[0]!.pick(pick);
+    }
+    expect(view.host.dispatch).not.toHaveBeenCalled();
+  });
+
+  it("immediately restores legacy buttons when the closed 3D runtime becomes unavailable", () => {
+    const sessions = instrumentCashVisualRuntime();
+    const view = mount({ payment: cash([50]) });
+    view.controller.open();
+    view.element("s3-cash-visual-toggle").click();
+    expect(view.element("s3-cash-add-20").disabled).toBe(true);
+    sessions[0]!.unavailable();
+    expect(view.element("s3-cash-visual-host").attributes.get("data-renderer")).toBe("fallback");
+    expect(view.element("s3-cash-add-20").disabled).toBe(false);
+    expect(view.element("s3-cash-reset").disabled).toBe(false);
+    expect(view.element("s3-cash-remove-0").disabled).toBe(false);
+    view.host.dispatch.mockImplementationOnce(() => { view.update({ payment: cash([50, 20]) }); return true; });
+    view.element("s3-cash-add-20").click();
+    expect(view.host.dispatch).toHaveBeenCalledExactlyOnceWith({ type: "ADD_CHANGE", denominationPence: 20 });
+    expect(view.element("s3-cash-selected-total").textContent).toBe("£0.70");
+    expect(view.snapshot().payment).toEqual(cash([50, 20]));
+  });
+
+  it("keeps close-up receipt on the canvas instead of moving focus to the legacy buttons", () => {
+    const sessions = instrumentCashVisualRuntime();
+    const view = mount({ payment: cash([], false) });
+    view.controller.open();
+    view.element("s3-cash-add-50").focus.mockClear();
+    view.element("s3-cash-confirm").focus.mockClear();
+    view.host.dispatch.mockImplementationOnce(() => { view.update({ payment: cash() }); return true; });
+    sessions[0]!.pick({ kind: "receive" });
+    expect(view.host.dispatch).toHaveBeenCalledExactlyOnceWith({ type: "RECEIVE_CASH" });
+    expect(view.element("s3-cash-add-50").focus).not.toHaveBeenCalled();
+    expect(view.element("s3-cash-confirm").focus).not.toHaveBeenCalled();
+    expect(sessions[0]!.update.mock.lastCall?.[0].stage).toBe("received");
+  });
+
+  it("resolves close-up picks against current stock and write permission before forwarding commands", () => {
+    const sessions = instrumentCashVisualRuntime();
+    const view = mount({ payment: cash() });
+    view.controller.open();
+    view.update({ payment: cash(Array(10).fill(50)) });
+    // No controller redraw: the old mesh still claims 50p is available.
+    sessions[0]!.pick({ kind: "add", denominationPence: 50 });
+    expect(view.host.dispatch).not.toHaveBeenCalled();
+    view.update({ canWrite: false });
+    sessions[0]!.pick({ kind: "add", denominationPence: 20 });
+    expect(view.host.dispatch).not.toHaveBeenCalled();
+    view.controller.render();
+    expect(view.controller.isOpen).toBe(false);
+    expect(view.host.onDrawerChange.mock.lastCall).toEqual([false]);
+  });
+
+  it("ignores callbacks from a disposed close-up after a different cash customer opens", () => {
+    const sessions = instrumentCashVisualRuntime();
+    const view = mount({ payment: cash([50]) });
+    view.controller.open();
+    const old = sessions[0]!;
+    view.controller.close();
+    view.update({ payment: cash([], false), customerName: "Oliver · new sale" });
+    view.controller.open();
+    expect(sessions).toHaveLength(2);
+    old.pick({ kind: "receive" });
+    old.pick({ kind: "add", denominationPence: 20 });
+    old.pick({ kind: "remove", index: 0 });
+    old.unavailable();
+    expect(view.host.dispatch).not.toHaveBeenCalled();
+    expect(view.element("s3-cash-visual-host").attributes.get("data-renderer")).toBe("ready");
+    expect(view.snapshot().payment).toEqual(cash([], false));
+    sessions[1]!.pick({ kind: "receive" });
+    expect(view.host.dispatch).toHaveBeenCalledExactlyOnceWith({ type: "RECEIVE_CASH" });
+  });
+});
 
 describe("cash register modal opening and read-only boundaries", () => {
   it.each([

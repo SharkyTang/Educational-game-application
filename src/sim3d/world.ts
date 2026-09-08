@@ -14,6 +14,8 @@ import { WORKSTATION_ID, workstationServicePoint } from "./workstation";
 import { CUSTOMER_DOORSTEP, customerArrivalOrigins, customerJourneyRoute } from "./customerJourney";
 import { PointerAccess, type PointerMode } from "./pointerAccess";
 import { playerMovementSpeed } from "./playerMovement";
+import { CashDrawerVisual } from "./cashDrawerVisual";
+import { deriveCashVisualState } from "./cashVisualState";
 import { createCrate, createPlayerHands, createShop, setCheckoutDisplay, setShelfCapacity, setShopSignState, type ShopEnvironment } from "./assets";
 import { createCatalogFixtures, createReceivingPads, type CatalogFixtures } from "./productFixtures";
 import { basketPlacement, checkoutPlacement, crateDimensions, cratePlacement, fitProduct, PRODUCT_DISPLAYS, type ProductDisplay } from "./productLayout";
@@ -82,6 +84,8 @@ export class ShopWorld {
   private readonly shadow: ShadowGenerator;
   private readonly street: StreetEnvironment;
   private readonly shop: ShopEnvironment;
+  private readonly cashVisual: CashDrawerVisual;
+  private cashDrawerOpen = false;
   private readonly catalogFixtures: CatalogFixtures;
   private readonly equipmentFixtures: EquipmentSceneFixtures;
   private readonly workstation: ReturnType<typeof createWorkstation>;
@@ -198,6 +202,7 @@ export class ShopWorld {
 
     const shop = createShop(this.scene, { catalogFixtures: true, layout: initialState.renovation.layout });
     this.shop = shop;
+    this.cashVisual = this.createCashVisual();
     this.colliders.push(...shop.colliders);
     const fixtures = createCatalogFixtures(this.scene, PRODUCTS, initialState.renovation.layout);
     this.catalogFixtures = fixtures;
@@ -248,6 +253,7 @@ export class ShopWorld {
     this.basket.position.set(.34, .47, .04);
     this.customerPhase = initialState.customer.phase;
     this.syncInventory();
+    this.syncCashVisual();
     this.setCustomerRoute(true);
     this.syncStreet();
     this.ensureSafePose();
@@ -316,6 +322,7 @@ export class ShopWorld {
     this.syncDeliveryTruck();
     this.syncInventory();
     const obstacles = this.crateObstacleSignature();
+    this.syncCashVisual();
     const shoppingTargetChanged = this.shoppingTargetSignature() !== this.customerShoppingTargetSignature;
     if (phaseChanged || newCustomer || freshRun || layoutChanged || streetNeighbourChanged
       || obstacles !== this.customerObstacleSignature || shoppingTargetChanged) {
@@ -324,6 +331,46 @@ export class ShopWorld {
     this.syncStreet();
     this.ensureSafePose();
     this.updateTarget();
+  }
+
+  private createCashVisual(): CashDrawerVisual {
+    const counter = this.shop.targets.find((target) => target.kind === "counter")!.mesh;
+    // Replace the old decorative box, retaining the existing POS and its counter.
+    this.scene.getMeshByName("counter-drawer")?.dispose(false, false);
+    const visual = new CashDrawerVisual(this.scene, counter, {
+      name: "shop-cash",
+      reducedMotion: this.cashReducedMotion(),
+      tenderPosition: { x: -.12, y: -.02, z: -.95 },
+      changePosition: { x: .49, y: -.02, z: .16 },
+    });
+    visual.root.position.set(-.19, .566, .49);
+    return visual;
+  }
+
+  private syncCashVisual(): void {
+    // Non-rendering world test harnesses intentionally omit visual resources.
+    if (!this.cashVisual) return;
+    this.cashVisual.update(deriveCashVisualState({
+      payment: this.state.payment,
+      cashDrawer: this.state.cashDrawer,
+      amountPence: getCheckoutTotal(this.state),
+      checkout: this.state.customer.phase === "checkout",
+      open: this.cashDrawerOpen,
+      canInteract: false,
+      reducedMotion: this.reducedMotion,
+    }));
+    // World movement still targets the counter; cash picks belong to the close-up.
+    for (const mesh of this.cashVisual.root.getChildMeshes()) mesh.isPickable = false;
+  }
+
+  setCashDrawerOpen(open: boolean): void {
+    this.cashDrawerOpen = open;
+    this.cashVisual?.setReducedMotion(this.cashReducedMotion());
+    this.syncCashVisual();
+  }
+
+  private cashReducedMotion(): boolean {
+    return this.reducedMotion || (typeof window !== "undefined" && window.matchMedia?.("(prefers-reduced-motion: reduce)").matches === true);
   }
 
   private createDisplays(layout: ShopLayout): Record<ProductId, ProductDisplay> {
@@ -959,7 +1006,7 @@ export class ShopWorld {
   }
 
   setSensitivity(value: number): void { this.sensitivity = Math.max(.25, Math.min(2, value)); }
-  setReducedMotion(value: boolean): void { this.reducedMotion = value; }
+  setReducedMotion(value: boolean): void { this.reducedMotion = value; this.cashVisual?.setReducedMotion(this.cashReducedMotion()); }
   setQuality(value: Quality): void {
     this.engine.setHardwareScalingLevel(value === "low" ? 1.25 : 1 / Math.min(window.devicePixelRatio || 1, 1.5));
     this.shadow.filteringQuality = value === "low" ? ShadowGenerator.QUALITY_LOW : ShadowGenerator.QUALITY_MEDIUM;
@@ -1196,6 +1243,7 @@ export class ShopWorld {
     this.frameClock += dt;
     this.viewClock += dt;
     this.poseClock += frameSeconds;
+    this.cashVisual?.tick(frameSeconds * 1000);
     if (this.active) {
       // Retain real-time player speed at low FPS, checking collisions at each
       // small step so sprinting cannot jump through counters, walls or crates.
@@ -1232,6 +1280,7 @@ export class ShopWorld {
     this.engine.stopRenderLoop();
     this.customerActors.dispose();
     this.streetNeighbourActors?.dispose();
+    this.cashVisual?.dispose();
     this.scene.dispose();
     this.engine.dispose();
   }

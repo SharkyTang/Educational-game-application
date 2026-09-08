@@ -2,6 +2,8 @@ import { CASH_DENOMINATIONS_PENCE, cashPaymentCanConfirm, type PaymentState } fr
 import { renderCashRegister } from "./cashRegister";
 import { canMakeExactChange, selectedChangeFitsDrawer, type CashDrawerState } from "./cashDrawer";
 import type { CustomerSpeechClip } from "./customerSelection";
+import { CashVisualViewport } from "./cashVisualViewport";
+import { cashVisualPickCommand, deriveCashVisualState } from "./cashVisualState";
 
 export type CashRegisterCommand =
   | { type: "RECEIVE_CASH" }
@@ -18,6 +20,7 @@ interface RegisterSnapshot {
   drawer: CashDrawerState;
   atCheckout: boolean;
   canWrite: boolean;
+  reducedMotion?: boolean;
   customerName: string;
   clip: CustomerSpeechClip | null;
   warning: string;
@@ -30,15 +33,19 @@ interface RegisterHost {
   dispatch(command: CashRegisterCommand): boolean;
   onOpen(): void;
   onClose(): void;
+  onDrawerChange?(open: boolean): void;
   speak(clip: CustomerSpeechClip, rate: number): void;
 }
 
 /** Owns DOM and focus only. Money, pending tender and selected coins live in the save. */
 export class CashRegisterController {
   private readonly dialog: HTMLDialogElement;
+  private visual: CashVisualViewport | null = null;
+  private drawerOpen = true;
 
   constructor(private readonly root: HTMLElement, private readonly host: RegisterHost, signal: AbortSignal) {
     this.dialog = this.el<HTMLDialogElement>("s3-cash-dialog");
+    signal.addEventListener("abort", () => { this.visual?.dispose(); this.visual = null; }, { once: true });
     const click = (id: string, action: () => void): void => { this.el(id).addEventListener("click", action, { signal }) };
     click("s3-cash-close", () => this.close());
     click("s3-cash-replay", () => this.replay());
@@ -100,6 +107,26 @@ export class CashRegisterController {
     if (!this.host.canOpen() || !state.atCheckout || !state.canWrite || state.payment?.method !== "cash") return false;
     this.host.onOpen();
     this.dialog.showModal();
+    this.drawerOpen = true;
+    const visualHost = this.root.querySelector<HTMLElement>("#s3-cash-visual-host");
+    if (visualHost) {
+      this.visual ??= new CashVisualViewport(visualHost, {
+        onPick: (pick) => {
+          const command = cashVisualPickCommand(this.visualSnapshot(this.host.read()), pick);
+          if (!command || !this.act(command)) return false;
+          return true;
+        },
+        onUnavailable: () => this.render(),
+        onDrawerChange: (open) => {
+          if (!this.isOpen || !this.host.read().canWrite) return;
+          this.drawerOpen = open;
+          this.host.onDrawerChange?.(open);
+          this.render();
+        },
+      });
+      this.visual.show(this.visualSnapshot(state));
+    }
+    this.host.onDrawerChange?.(true);
     this.render();
     this.focusNextControl(state);
     return true;
@@ -107,6 +134,8 @@ export class CashRegisterController {
 
   close(): void {
     if (!this.isOpen) return;
+    this.visual?.hide();
+    this.host.onDrawerChange?.(false);
     this.dialog.close();
     this.host.onClose();
   }
@@ -122,19 +151,38 @@ export class CashRegisterController {
     const state = this.host.read();
     if (!state.canWrite || !state.atCheckout || state.payment?.method !== "cash") { this.close(); return }
     renderCashRegister(this.root, state.payment, state.amountPence, state.drawer);
+    this.visual?.update(this.visualSnapshot(state));
+    const drawerClosed = this.visual?.available === true && !this.drawerOpen;
+    for (const id of ["s3-cash-reset", "s3-cash-confirm",
+      ...CASH_DENOMINATIONS_PENCE.map((piece) => `s3-cash-add-${piece}`)]) {
+      const button = this.el<HTMLButtonElement>(id);
+      button.disabled = button.disabled || drawerClosed;
+    }
+    for (const [index] of state.payment.selectedChange.entries()) this.el<HTMLButtonElement>(`s3-cash-remove-${index}`).disabled = drawerClosed;
+    // These three controls otherwise remain enabled across redraws.
+    this.el<HTMLButtonElement>("s3-cash-receive").disabled = drawerClosed;
+    this.el<HTMLButtonElement>("s3-cash-request-exact").disabled = drawerClosed;
+    this.el<HTMLButtonElement>("s3-cash-switch-card").disabled = drawerClosed;
     this.el("s3-cash-customer-name").textContent = state.customerName;
     this.el("s3-cash-line").textContent = state.clip ? `“${state.clip.text}”` : "";
     this.el("s3-cash-zh").textContent = state.clip?.zh ?? "";
     const note = this.el("s3-cash-save-note");
-    note.textContent = state.warning || "钱箱会按面额记录收钱与找零；暂时离开会保留本单。取消订单请返回小店，在暂停菜单中操作。";
+    note.textContent = state.warning || (drawerClosed ? "钱箱已合上，请打开后继续；本单现金与找零均保留。"
+      : "钱箱会按面额记录收钱与找零；暂时离开会保留本单。取消订单请返回小店，在暂停菜单中操作。");
     note.setAttribute("data-error", state.warning ? "true" : "false");
   }
 
   private act(command: CashRegisterCommand): boolean {
-    if (!this.isOpen || !this.host.read().canWrite) return false;
+    if (!this.isOpen || !this.host.read().canWrite || (this.visual?.available && !this.drawerOpen)) return false;
     const changed = this.host.dispatch(command);
     this.render();
     return changed;
+  }
+
+  private visualSnapshot(state: RegisterSnapshot) {
+    return deriveCashVisualState({ payment: state.payment, cashDrawer: state.drawer, amountPence: state.amountPence,
+      checkout: state.atCheckout, open: this.drawerOpen || !this.visual?.available,
+      canInteract: this.isOpen && state.canWrite && state.atCheckout, reducedMotion: state.reducedMotion === true });
   }
 
   private nextControlId(state: RegisterSnapshot): string {

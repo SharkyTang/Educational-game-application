@@ -73,7 +73,7 @@ describe("cash register guidance and accessible controls", () => {
     expect(markup).toContain('id="s3-cash-stock-50" class="s3-cash-stock">剩余 0');
     expect(markup).toContain('role="status" aria-live="polite"');
     expect(markup).toContain("暂时离开会保留本单");
-    expect(markup).toContain("按面额记录库存");
+    expect(markup).toContain("与实体钱箱使用同一库存");
   });
 
   it("offers two explicit bilingual recovery actions without imitating real cash", () => {
