@@ -1,10 +1,14 @@
+import { openSettings, openComputer, resumeScene, walkTo, facePoint } from "./helpers/sim3d-computer";
+import { receiveFixtureDeliveries } from "./helpers/sim3d-delivery";
 import { expect, test, type Page } from "@playwright/test";
 import {
   createFirstDayState, getDaySummary, reduceSim, validateSimState,
-  type PlayerPose, type SimCommand, type SimState,
+  type SimCommand, type SimState,
 } from "../../src/sim3d/domain";
 import { CASH_DENOMINATIONS_PENCE } from "../../src/sim3d/cashPayment";
 import { cashDrawerValuePence, type CashDrawerState } from "../../src/sim3d/cashDrawer";
+import { workstationServicePoint } from "../../src/sim3d/workstation";
+import { CHECKOUT_CLERK_POINT, transformLayoutPoint } from "../../src/sim3d/shopLayout";
 import { beginNextFixtureCustomer } from "./helpers/sim3d-business-time";
 import { completeFixturePayment, payScannedCheckout, readBrowserSnapshot } from "./helpers/sim3d-payment";
 
@@ -13,8 +17,6 @@ import { completeFixturePayment, payScannedCheckout, readBrowserSnapshot } from 
 test.describe.configure({ mode: "default" });
 test.use({ viewport: { width: 1365, height: 860 } });
 
-const checkoutPose: PlayerPose = { x: -2.62, z: -1.06, yaw: Math.PI, pitch: .56 };
-const money = (pence: number): string => `£${(pence / 100).toFixed(2)}`;
 const management = (suffix: string): string => `#s3-cash-management-${suffix}`;
 
 function step(state: SimState, command: SimCommand): SimState {
@@ -31,7 +33,7 @@ function paidFixture(visitors: 1 | 2): SimState {
     type: "PURCHASE_STOCK", orderId: `cash-management-${visitors}-visits`,
     lines: [{ productId: "milk", quantity: visitors }, { productId: "bread", quantity: visitors }],
   });
-  state = step(state, { type: "RECEIVE_DELIVERY" });
+  state = receiveFixtureDeliveries(state);
   for (const productId of ["milk", "bread"] as const) {
     const crate = state.crates.find((entry) => entry.productId === productId)!;
     state = step(state, { type: "PICK_CRATE", crateId: crate.id });
@@ -50,7 +52,11 @@ function paidFixture(visitors: 1 | 2): SimState {
   }
   expect(state.transactions.map((transaction) => transaction.paymentMethod)).toEqual(visitors === 1 ? ["card"] : ["card", "cash"]);
   expect(state.items.every((item) => item.location.kind === "sold")).toBe(true);
-  return step(state, { type: "SAVE_POSE", pose: checkoutPose });
+  // Start the management scenario in front of the real computer before the next
+  // 2–4 second arrival; it still opens through the normal targeted E interaction.
+  return step(state, { type: "SAVE_POSE", pose: {
+    ...workstationServicePoint(state.renovation.layout.workstation), yaw: Math.PI, pitch: .49,
+  } });
 }
 
 function runtimeErrors(page: Page): string[] {
@@ -69,13 +75,12 @@ async function start(page: Page): Promise<void> {
 }
 
 async function openManagement(page: Page): Promise<void> {
-  if (!(await page.locator("#s3-pause").isVisible())) await page.keyboard.press("b");
+  await openSettings(page);
   await expect(page.locator("#s3-pause")).toBeVisible();
 }
 
 async function openCashManagement(page: Page): Promise<void> {
-  await openManagement(page);
-  await page.locator("#s3-tab-cash").click();
+  await openComputer(page, "cash");
   await expect(page.locator(management("drawer"))).toBeVisible();
   await expect.poll(() => page.evaluate(() => document.pointerLockElement === null)).toBe(true);
 }
@@ -216,7 +221,12 @@ test("cash management v3: a cash return refunds once to cash and the same return
   expect((await readBrowserSnapshot(page)).cashJournal).toEqual(refunded.cashJournal);
   await page.screenshot({ path: testInfo.outputPath("cash-management-refunded-stock.png") });
 
-  await page.locator("#s3-resume").click();
+  await resumeScene(page);
+  // The old imported camera spot clips the nearby pantry's walking envelope.
+  // Use the real counter service point when physically returning from the PC.
+  const layout = refunded.renovation.layout;
+  await walkTo(page, transformLayoutPoint(layout, "checkout-counter", CHECKOUT_CLERK_POINT));
+  await facePoint(page, transformLayoutPoint(layout, "checkout-counter", { x: -2.2, z: -2.2, y: .94 }));
   await expect(page.locator("#s3-customer-name")).toContainText("第 3 位顾客", { timeout: 25_000 });
   await expect(page.locator("#s3-receipt-title")).toHaveText("顾客想结账", { timeout: 35_000 });
   const nextCheckout = await readBrowserSnapshot(page);
@@ -276,8 +286,7 @@ test("cash management v3: closing count requires a discrepancy note, survives re
   const errors = runtimeErrors(page);
   const fixture = step(paidFixture(2), { type: "CLOSE_STORE" });
   await launchFixture(page, fixture);
-  await openManagement(page);
-  await page.locator("#s3-tab-day").click();
+  await openComputer(page, "day");
   await expect(page.locator("#s3-day-to-cash")).toContainText("打烊钱箱盘点");
   await page.locator("#s3-day-to-cash").click();
   await expect(page.locator(management("count-save"))).toBeDisabled();
@@ -332,7 +341,7 @@ test("cash management v3: closing count requires a discrepancy note, survives re
   expect(recounted.cashJournal.filter((event) => event.kind === "count")).toHaveLength(2);
   expect(recounted.cashJournal.at(-1)).toMatchObject({ kind: "count", differencePence: 0, note: "", counts: afterRefund.cashDrawer });
   await expect(page.locator(management("count-history"))).toContainText(note);
-  await page.locator("#s3-tab-day").click();
+  await openComputer(page, "day");
   await expect(page.locator("#s3-settle-day")).toBeEnabled();
   await page.locator("#s3-settle-day").click();
   await expect(page.locator("#s3-day-title")).toContainText("日结完成");

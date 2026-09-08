@@ -66,13 +66,14 @@ export class CustomerActors {
     this.play(false);
   }
 
-  play(walking: boolean): void {
+  play(walking: boolean, speedRatio = 1): void {
     if (!this.active || this.disposed) return;
     const animation = walking ? this.active.walk : this.active.idle;
-    if (animation === this.playing) return;
+    const rate = walking ? CUSTOMER_WALK_ANIMATION_RATE * speedRatio : 1;
+    if (animation === this.playing) { animation.speedRatio = rate; return; }
     this.playing?.stop();
     this.playing = animation;
-    animation.start(true, walking ? CUSTOMER_WALK_ANIMATION_RATE : 1);
+    animation.start(true, rate);
   }
 
   dispose(): void {

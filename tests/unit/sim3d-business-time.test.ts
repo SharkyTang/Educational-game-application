@@ -6,12 +6,12 @@ import {
 } from "../../src/sim3d/businessTime";
 
 describe("active-play business clock", () => {
-  it("defines preparation and the ten-hour opening interval in seven real minutes", () => {
+  it("defines preparation and the ten-hour opening interval in twelve real minutes", () => {
     expect(BUSINESS_PREPARE_MINUTE).toBe(510);
     expect(BUSINESS_OPEN_MINUTE).toBe(540);
     expect(BUSINESS_CLOSE_MINUTE).toBe(1140);
     expect(BUSINESS_WARNING_MINUTE).toBe(1110);
-    expect(BUSINESS_DURATION_MS).toBe(420_000);
+    expect(BUSINESS_DURATION_MS).toBe(720_000);
   });
 
   it("keeps preparation at 08:30 and does not consume the opening interval", () => {
@@ -23,22 +23,22 @@ describe("active-play business clock", () => {
 
   it.each([
     [0, 540, "09:00", 600, 0],
-    [700, 541, "09:01", 599, 1 / 600],
-    [210_000, 840, "14:00", 300, .5],
-    [420_000, 1140, "19:00", 0, 1],
-    [450_000, 1140, "19:00", 0, 1],
+    [1_200, 541, "09:01", 599, 1 / 600],
+    [360_000, 840, "14:00", 300, .5],
+    [720_000, 1140, "19:00", 0, 1],
+    [750_000, 1140, "19:00", 0, 1],
   ] as const)("converts %i active milliseconds without using the computer clock", (elapsedOpenMs, minute, timeLabel, remainingMinutes, progress) => {
     expect(getBusinessClock({ phase: "open", elapsedOpenMs })).toEqual({ minute, timeLabel, remainingMinutes, progress, closingSoon: false });
   });
 
   it("rounds the displayed minute down and remaining time up between minute boundaries", () => {
-    expect(getBusinessClock({ phase: "open", elapsedOpenMs: 699.5 })).toMatchObject({ timeLabel: "09:00", remainingMinutes: 600 });
-    expect(getBusinessClock({ phase: "open", elapsedOpenMs: 700.5 })).toMatchObject({ timeLabel: "09:01", remainingMinutes: 599 });
+    expect(getBusinessClock({ phase: "open", elapsedOpenMs: 1199.5 })).toMatchObject({ timeLabel: "09:00", remainingMinutes: 600 });
+    expect(getBusinessClock({ phase: "open", elapsedOpenMs: 1200.5 })).toMatchObject({ timeLabel: "09:01", remainingMinutes: 599 });
     expect(getBusinessClock({ phase: "open", elapsedOpenMs: BUSINESS_DURATION_MS - .5 })).toMatchObject({ timeLabel: "18:59", remainingMinutes: 1 });
   });
 
   it("warns from exactly 18:30 until the scheduled close, and only while open", () => {
-    const warningElapsedMs = 399_000;
+    const warningElapsedMs = 684_000;
     expect(getBusinessClock({ phase: "open", elapsedOpenMs: warningElapsedMs - 1 })).toMatchObject({ timeLabel: "18:29", closingSoon: false });
     expect(getBusinessClock({ phase: "open", elapsedOpenMs: warningElapsedMs })).toMatchObject({ timeLabel: "18:30", remainingMinutes: 30, closingSoon: true });
     expect(getBusinessClock({ phase: "open", elapsedOpenMs: BUSINESS_DURATION_MS - 1 }).closingSoon).toBe(true);
@@ -49,7 +49,7 @@ describe("active-play business clock", () => {
   });
 
   it.each(["closing", "settled"] as const)("preserves the actual early-close time in %s", (phase) => {
-    expect(getBusinessClock({ phase, elapsedOpenMs: 210_000 })).toEqual({
+    expect(getBusinessClock({ phase, elapsedOpenMs: 360_000 })).toEqual({
       minute: 840, timeLabel: "14:00", remainingMinutes: 300, progress: .5, closingSoon: false,
     });
     expect(getBusinessClock({ phase, elapsedOpenMs: 0 }).timeLabel).toBe("09:00");
@@ -74,11 +74,11 @@ describe("active-play business clock", () => {
 
   it("produces the same result for small steps and one large active step", () => {
     let elapsed = 0;
-    for (let step = 0; step < 12_000; step += 1) elapsed = advanceBusinessElapsedMs(elapsed, 17.5);
-    expect(elapsed).toBe(advanceBusinessElapsedMs(0, 210_000));
+    for (let step = 0; step < 12_000; step += 1) elapsed = advanceBusinessElapsedMs(elapsed, 30);
+    expect(elapsed).toBe(advanceBusinessElapsedMs(0, 360_000));
     expect(getBusinessClock({ phase: "open", elapsedOpenMs: elapsed }).timeLabel).toBe("14:00");
-    for (let step = 0; step < 24_000; step += 1) elapsed = advanceBusinessElapsedMs(elapsed, 17.5);
-    expect(elapsed).toBe(advanceBusinessElapsedMs(210_000, 420_000));
+    for (let step = 0; step < 24_000; step += 1) elapsed = advanceBusinessElapsedMs(elapsed, 30);
+    expect(elapsed).toBe(advanceBusinessElapsedMs(360_000, 720_000));
     expect(elapsed).toBe(BUSINESS_DURATION_MS);
   });
 
@@ -117,14 +117,14 @@ describe("daytime labels", () => {
 });
 
 describe("deterministic customer arrival delays", () => {
-  it("keeps an 8–12 second integer-millisecond delay for ordinary and very large visit numbers", () => {
+  it("keeps a 2–4 second integer-millisecond delay for ordinary and very large visit numbers", () => {
     for (const seed of [0, 1, 31, 0xffffffff]) {
       for (const day of [1, 2, 10, Number.MAX_SAFE_INTEGER]) {
         for (const customer of [1, 2, 8, 50, Number.MAX_SAFE_INTEGER]) {
           const delay = customerArrivalDelayMs(seed, day, customer);
           expect(Number.isInteger(delay)).toBe(true);
-          expect(delay).toBeGreaterThanOrEqual(8_000);
-          expect(delay).toBeLessThanOrEqual(12_000);
+          expect(delay).toBeGreaterThanOrEqual(2_000);
+          expect(delay).toBeLessThanOrEqual(4_000);
         }
       }
     }

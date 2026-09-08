@@ -38,9 +38,10 @@ export const LEGACY_CUSTOMER_CORPUS_LENGTHS = {
   checkoutCash: 4,
   tenderCash: 3,
 } as const;
-export const CUSTOMER_WALK_SPEED = 1.41; // Was .94 m/s; +50%, independent of frame rate.
-export const CUSTOMER_WALK_ANIMATION_RATE = 1.575; // Keep stride cadence with translation.
-export const CUSTOMER_STOP_SECONDS = .35; // Was 1.1 s at every stage.
+export const CUSTOMER_WALK_SPEED = 1.7;
+export const CUSTOMER_STREET_WALK_SPEED = 2.2;
+export const CUSTOMER_WALK_ANIMATION_RATE = 1.575 * CUSTOMER_WALK_SPEED / 1.41;
+export const CUSTOMER_STOP_SECONDS = .2;
 export const CUSTOMER_EXIT_STOP_SECONDS = .1;
 
 const LEGACY_CUSTOMER_SEED = 31;

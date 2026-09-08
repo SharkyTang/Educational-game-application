@@ -1,7 +1,9 @@
+import { waitForDelivery, receiveAllDeliveries } from "../helpers/sim3dDelivery";
 import { describe, expect, it, vi } from "vitest";
 import { createFirstDayState, createInitialSimState, getDeliverySummary, PRODUCTS, reduceSim, type ProductId, type SimState } from "../../src/sim3d/domain";
 import type { InteractionTarget } from "../../src/sim3d/world";
 import { payScannedCheckout } from "../helpers/sim3dPayment";
+import { computerPurchaseOrders, computerPurchaseOrdersMarkup } from "../../src/sim3d/shopComputer";
 
 // Pure UI decisions do not require a WebGL engine or a browser document.
 vi.mock("../../src/sim3d/world", () => ({ ShopWorld: class {} }));
@@ -39,15 +41,15 @@ describe("3D accessible interaction decisions", () => {
     const sign = target({ kind: "open-sign", id: "open-sign", inspectable: false });
     expect(commandForInteraction(createFirstDayState(), sign)).toEqual({ command: { type: "OPEN_STORE" } });
     let state = checkoutState();
-    expect(commandForInteraction(state, sign)).toEqual({ management: "day" });
+    expect(commandForInteraction(state, sign)).toEqual({ message: expect.stringContaining("电脑") });
     for (const item of state.items.filter((entry) => entry.location.kind === "checkout")) state = reduceSim(state, { type: "SCAN", itemId: item.id }).state;
     state = reduceSim(payScannedCheckout(state), { type: "CUSTOMER_ADVANCE" }).state;
     expect(state.day.nextCustomerAtMs).toBeGreaterThan(state.day.elapsedOpenMs);
-    expect(commandForInteraction(state, sign)).toEqual({ management: "day" });
+    expect(commandForInteraction(state, sign)).toEqual({ message: expect.stringContaining("电脑") });
     state = reduceSim(state, { type: "CLOSE_STORE" }).state;
-    expect(commandForInteraction(state, sign)).toEqual({ management: "day" });
+    expect(commandForInteraction(state, sign)).toEqual({ message: expect.stringContaining("电脑") });
     state = reduceSim(state, { type: "SETTLE_DAY" }).state;
-    expect(commandForInteraction(state, sign)).toEqual({ management: "day" });
+    expect(commandForInteraction(state, sign)).toEqual({ message: expect.stringContaining("电脑") });
   });
 
   it("keeps the real counter available to finish an unpaid order after closing", () => {
@@ -136,34 +138,35 @@ describe("3D accessible interaction decisions", () => {
   });
 
   it("receives paid delivery only through an in-reach target and never charges again", () => {
-    const state = reduceSim(createFirstDayState(), { type: "PURCHASE_STOCK", orderId: "ui-delivery", pairs: 3 }).state;
+    const state = waitForDelivery(reduceSim(createFirstDayState(), { type: "PURCHASE_STOCK", orderId: "ui-delivery", pairs: 3 }).state);
     const truck = target({ kind: "delivery", id: "delivery-truck", inspectable: false });
     expect(commandForInteraction(state, { ...truck, distance: 2.61 }).command).toBeUndefined();
     expect(getDeliverySummary(state).pendingUnits).toBe(6);
     const receive = commandForInteraction(state, truck).command!;
-    expect(receive).toEqual({ type: "RECEIVE_DELIVERY" });
+    expect(receive).toEqual({ type: "RECEIVE_DELIVERY", orderId: "ui-delivery" });
     const delivered = reduceSim(state, receive).state;
     expect(delivered.cashPence).toBe(state.cashPence);
     expect(getDeliverySummary(delivered).pendingUnits).toBe(0);
-    expect(commandForInteraction(delivered, truck)).toEqual({ management: "supply" });
+    expect(commandForInteraction(delivered, truck)).toEqual({ message: expect.stringContaining("电脑") });
   });
 
   it("explains why a delivery cannot unload when the player's hands are full", () => {
     let state = reduceSim(createFirstDayState(), { type: "PURCHASE_STOCK", orderId: "first-batch", pairs: 1 }).state;
-    state = reduceSim(state, { type: "RECEIVE_DELIVERY" }).state;
+    state = receiveAllDeliveries(state);
     state = reduceSim(state, { type: "PICK_CRATE", crateId: "milk-crate" }).state;
     state = reduceSim(state, { type: "PURCHASE_STOCK", orderId: "second-batch", pairs: 1 }).state;
+    state = waitForDelivery(state);
     const decision = commandForInteraction(state, target({ kind: "delivery", inspectable: false }));
     expect(decision.command).toBeUndefined();
-    expect(decision.management).toBeUndefined();
+    expect(decision.computer).toBeUndefined();
     expect(decision.message).toContain("先放下");
     expect(getDeliverySummary(state).pendingOrders).toBe(1);
   });
 
   it("routes nearby future shop signs to their requirements without creating an entry command", () => {
     const sign = target({ kind: "venue", id: "restaurant-sign", venueId: "restaurant", inspectable: false });
-    expect(commandForInteraction(createFirstDayState(), sign)).toEqual({ management: "street", venueId: "restaurant" });
-    expect(commandForInteraction(createFirstDayState(), { ...sign, distance: 10 }).management).toBeUndefined();
+    expect(commandForInteraction(createFirstDayState(), sign)).toEqual({ venueId: "restaurant" });
+    expect(commandForInteraction(createFirstDayState(), { ...sign, distance: 10 }).computer).toBeUndefined();
     expect(inspectableProduct(createFirstDayState(), sign)).toBeNull();
   });
 
@@ -183,7 +186,7 @@ describe("3D accessible interaction decisions", () => {
 
   it("recycles only a held empty box through the real, nearby recycling target", () => {
     let state = reduceSim(createFirstDayState(), { type: "PURCHASE_STOCK", orderId: "recycling-ui", lines: [{ productId: "milk", quantity: 1 }] }).state;
-    state = reduceSim(state, { type: "RECEIVE_DELIVERY" }).state;
+    state = receiveAllDeliveries(state);
     const station = target({ id: "cardboard-recycling", kind: "recycling", productId: undefined, crateId: undefined, inspectable: false });
     expect(commandForInteraction(state, station).command).toBeUndefined();
     state = reduceSim(state, { type: "PICK_CRATE", crateId: "milk-crate" }).state;
@@ -227,7 +230,7 @@ describe("3D accessible interaction decisions", () => {
     state = reduceSim(state, { type: "PURCHASE_STOCK", orderId: "end-of-day-delivery", pairs: 1 }).state;
     expect(getDeliverySummary(state).pendingUnits).toBe(2);
     expect(state.transactions).toHaveLength(3);
-    expect(commandForInteraction(state, target({ kind: "open-sign", inspectable: false }))).toEqual({ management: "day" });
+    expect(commandForInteraction(state, target({ kind: "open-sign", inspectable: false }))).toEqual({ message: expect.stringContaining("电脑") });
   });
 });
 
@@ -253,7 +256,7 @@ describe("manually selected procurement quantities", () => {
 
   it("scans and pays for a single newly integrated product without assuming a second item", () => {
     let state = reduceSim(createFirstDayState(), { type: "PURCHASE_STOCK", orderId: "one-soap", lines: [{ productId: "soap", quantity: 1 }] }).state;
-    state = reduceSim(state, { type: "RECEIVE_DELIVERY" }).state;
+    state = receiveAllDeliveries(state);
     const item = state.items.find((entry) => entry.productId === "soap")!;
     state = reduceSim(state, { type: "TAKE_ITEM", itemId: item.id }).state;
     expect(inspectableProduct(state, null)).toBe("soap");
@@ -266,5 +269,64 @@ describe("manually selected procurement quantities", () => {
     expect(commandForInteraction(state, counter).command).toEqual({ type: "PAY", success: true });
     state = reduceSim(state, commandForInteraction(state, counter).command!).state;
     expect(state.transactions[0]?.amountPence).toBe(PRODUCTS.soap.pricePence);
+  });
+});
+
+describe("computer per-order delivery ledger", () => {
+  function orderedState(): SimState {
+    let state = createFirstDayState();
+    for (const [orderId, productId, quantity] of [["ledger-1", "apple", 2], ["ledger-2", "soap", 1], ["ledger-3", "bread", 1]] as const) {
+      const purchase = reduceSim(state, { type: "PURCHASE_STOCK", orderId, lines: [{ productId, quantity }] });
+      expect(purchase.changed).toBe(true);
+      state = purchase.state;
+    }
+    return state;
+  }
+
+  it("shows exact line quantities and paid amounts in purchase order without giving every order a 12-second ETA", () => {
+    const state = orderedState();
+    const rows = computerPurchaseOrders(state);
+    expect(rows.map((row) => row.id)).toEqual(["ledger-1", "ledger-2", "ledger-3"]);
+    expect(rows[0]).toMatchObject({ title: "第 1 单 · 第 1 天采购", products: "苹果 × 2", amount: `£${(PRODUCTS.apple.costPence * 2 / 100).toFixed(2)}`, status: "备货中 · 约 12 秒后停稳" });
+    expect(rows.slice(1).map((row) => row.status)).toEqual(["排队中 · 前方 1 单", "排队中 · 前方 2 单"]);
+    expect(state.purchases.every((order) => order.receivedDay === null)).toBe(true);
+  });
+
+  it("keeps a received but departing vehicle ahead of queued orders, then advances their count only after departure", () => {
+    let state = waitForDelivery(orderedState());
+    expect(computerPurchaseOrders(state)[0]?.status).toContain("待签收");
+    state = reduceSim(state, { type: "RECEIVE_DELIVERY", orderId: "ledger-1" }).state;
+    const afterReceipt = computerPurchaseOrders(state);
+    expect(afterReceipt[0]).toMatchObject({ awaitingReceipt: false, status: "已签收 · 货车驶离中，约 4 秒" });
+    expect(afterReceipt.slice(1).map((row) => [row.awaitingReceipt, row.status])).toEqual([[true, "排队中 · 前方 1 单"], [true, "排队中 · 前方 2 单"]]);
+    expect(state.purchases.slice(1).every((order) => order.receivedDay === null)).toBe(true);
+    state = reduceSim(state, { type: "ADVANCE_DELIVERY_TIME", elapsedMs: 4000, blocked: false }).state;
+    expect(computerPurchaseOrders(state).map((row) => row.status)).toEqual(["已签收 · 第 1 天", "备货中 · 约 12 秒后停稳", "排队中 · 前方 1 单"]);
+    state = reduceSim(state, { type: "ADVANCE_DELIVERY_TIME", elapsedMs: 6000, blocked: false }).state;
+    state = reduceSim(state, { type: "ADVANCE_DELIVERY_TIME", elapsedMs: 1000, blocked: true }).state;
+    expect(computerPurchaseOrders(state)[1]?.status).toContain("驶入暂停 · 让行中");
+  });
+
+  it("retains all pending and current-day orders plus the most recent historical receipt", () => {
+    const base = orderedState();
+    const historical = [0, 1, 2].map((index) => ({ ...base.purchases[0]!, id: `history-${index}`, dayNumber: index + 1, receivedDay: index + 1 }));
+    const state = { ...base, day: { ...base.day, number: 5 }, purchases: [
+      ...historical,
+      { ...base.purchases[0]!, id: "current-received", dayNumber: 5, receivedDay: 5 },
+      { ...base.purchases[1]!, dayNumber: 5 },
+    ], delivery: { ...base.delivery, orderId: "ledger-2" } };
+    expect(computerPurchaseOrders(state).map((row) => row.id)).toEqual(["current-received", "ledger-2"]);
+    state.day.number = 6;
+    expect(computerPurchaseOrders(state).map((row) => row.id)).toEqual(["current-received", "ledger-2"]);
+    expect(computerPurchaseOrders(state)[0]?.title).toBe("第 4 单 · 第 5 天采购");
+  });
+
+  it("escapes every dynamic markup field and explains an empty ledger", () => {
+    const attack = '<img src=x onerror="alert(1)">';
+    const markup = computerPurchaseOrdersMarkup([{ id: '" onmouseover="oops', title: attack, products: attack, amount: attack, status: attack, awaitingReceipt: true }]);
+    expect(markup).not.toContain("<img");
+    expect(markup).toContain("&lt;img");
+    expect(markup).toContain('data-order-id="&quot; onmouseover=&quot;oops"');
+    expect(computerPurchaseOrdersMarkup([])).toContain("还没有进货订单");
   });
 });

@@ -24,6 +24,9 @@ import { EquipmentStore } from "./equipmentStore";
 import { shopRenovationReason } from "./shopDevelopment";
 import { STREET_VENUES, getStreetProgress, getVenueProgress } from "./progression";
 import { PRODUCT_ASSETS, PRODUCT_CATEGORIES, type ProductCategoryId } from "./product-library/catalog";
+import { isDeliveryTimeRunning } from "./delivery";
+import { computerDesktopMarkup, computerShortcut, isComputerTextEntry, computerPurchaseOrders, computerPurchaseOrdersMarkup } from "./shopComputer";
+import "./shopComputer.css";
 import type { PointerMode } from "./pointerAccess";
 import {
   STREET_NEIGHBOUR_PROFILES, streetNeighbourForDay, streetNeighbourSpeechFor,
@@ -43,7 +46,7 @@ const MANAGEMENT_SECTIONS: readonly ManagementSection[] = ["supply", "day", "cas
 interface InteractionDecision {
   command?: SimCommand;
   message?: string;
-  management?: ManagementSection;
+  computer?: true;
   venueId?: StreetVenueId;
   streetNeighbourId?: StreetNeighbourId;
   cashRegister?: true;
@@ -103,11 +106,12 @@ export function commandForInteraction(state: SimState, target: InteractionTarget
     }
     case "delivery": {
       const delivery = getDeliverySummary(state);
-      if (!delivery.pendingOrders) return { management: "supply" };
-      return delivery.canReceive ? { command: { type: "RECEIVE_DELIVERY" } }
+      if (!delivery.pendingOrders) return { message: "暂时没有配送订单。到店内电脑选择商品下单，货车会按单送来。" };
+      return delivery.canReceive && delivery.orderId ? { command: { type: "RECEIVE_DELIVERY", orderId: delivery.orderId } }
         : { message: delivery.reason ?? "暂时不能卸货，请先腾出双手与门口卸货位。" };
     }
-    case "venue": return { management: "street", venueId: target.venueId };
+    case "computer": return { computer: true };
+    case "venue": return { venueId: target.venueId };
     case "street-neighbour": return target.streetNeighbourId ? { streetNeighbourId: target.streetNeighbourId }
       : { message: "这位街头邻居暂时不能交谈。" };
     case "crate": return target.crateId ? { command: { type: "PICK_CRATE", crateId: target.crateId } } : {};
@@ -135,7 +139,8 @@ export function commandForInteraction(state: SimState, target: InteractionTarget
       return state.payment?.method === "cash" ? { cashRegister: true } : { command: { type: "PAY", success: true } };
     }
     case "open-sign":
-      return state.day.phase === "preparing" ? { command: { type: "OPEN_STORE" } } : { management: "day" };
+      return state.day.phase === "preparing" ? { command: { type: "OPEN_STORE" } }
+        : { message: state.day.phase === "open" ? "小店正在营业。到店内电脑查看账本或提前打烊。" : "今天已停止接客。完成店内订单和配送后，到电脑办理日结或开始次日。" };
     case "drop-zone":
       return state.held.kind === "item" ? { command: { type: "RETURN_ITEM" } }
         : target.position ? { command: { type: "DROP_HELD", position: target.position } } : {};
@@ -186,6 +191,10 @@ export class App3D {
   private streetNeighbourInteractionNumber = 0;
   private lastCustomerCue = "";
   private readonly businessClock = new BusinessClockDriver();
+  private readonly deliveryClock = new BusinessClockDriver();
+  private computerSession = false;
+  private computerDesktop = true;
+  private venueInfoUntil = 0;
   private learningPlayback = false;
   private closingWarningDay = 0;
   private closeConfirmation = false;
@@ -196,6 +205,7 @@ export class App3D {
   private purchaseSelectedOnly = false;
   private purchaseOrderId = "";
   private purchaseBusy = false;
+  private purchaseOrdersMarkup = "";
   private managementSection: ManagementSection = "supply";
   private selectedVenue: StreetVenueId = "cafe";
   private pendingImport: SimState | null = null;
@@ -207,7 +217,7 @@ export class App3D {
   private readonly layoutEditor: LayoutEditor;
   private readonly developmentPanel: DevelopmentPanel;
   private readonly equipmentStore: EquipmentStore;
-  private pendingLayoutExit: ManagementSection | "resume" | null = null;
+  private pendingLayoutExit: ManagementSection | "desktop" | "resume" | null = null;
   private audioForeground = true;
 
   constructor(root: HTMLElement) {
@@ -256,7 +266,7 @@ export class App3D {
         if (this.mode !== "cashier" || this.disposed) return;
         this.stopSpeech();
         this.mode = "playing";
-        this.businessClock.resume(performance.now());
+        this.resumeClocks(performance.now());
         this.world?.setActive(true);
         this.releasePointer();
         this.renderCaptureHint();
@@ -293,7 +303,9 @@ export class App3D {
     const isCurrent = (): boolean => !this.disposed && generation === this.initGeneration;
     this.ready = false;
     this.mode = "loading";
-    this.businessClock.reset();
+    this.computerSession = false;
+    this.computerDesktop = true;
+    this.resetClocks();
     this.dismissStreetDialogue();
     this.cashRegister.close();
     this.shopAudio.setActive(false);
@@ -396,7 +408,7 @@ export class App3D {
   private renderShell(): void {
     this.root.innerHTML = `
       <main class="sim3d-app" aria-label="英语商业街 3D 小店">
-        <canvas id="s3-canvas" class="s3-canvas" tabindex="0" aria-label="第一人称小店与商业街：WASD 移动，按住 Shift 加速，鼠标观察，E 互动、签收与空箱回收，F 近看商品，G 放下货箱，P 装修，M 商业街，Esc 暂停"></canvas>
+        <canvas id="s3-canvas" class="s3-canvas" tabindex="0" aria-label="第一人称小店与商业街：WASD 移动，按住 Shift 加速，鼠标观察，E 互动、签收与空箱回收，F 近看商品，G 放下货箱，走近电脑按 E 管理，Esc 暂停"></canvas>
         <audio id="s3-word-audio" preload="none" hidden></audio>
         <div id="s3-hud" class="s3-hud" hidden>
           <div class="s3-top-left">
@@ -411,14 +423,6 @@ export class App3D {
               <div class="s3-stock-line"><span id="s3-shelf-stock"></span><span id="s3-crate-stock"></span></div>
             </details>
             <p id="s3-delivery-hud" class="s3-delivery-hud" role="status" aria-live="polite" hidden></p>
-            <nav class="s3-business-nav" aria-label="小店经营">
-              <button id="s3-open-supply" type="button">进货 <kbd>B</kbd></button>
-              <button id="s3-open-day" type="button">营业 / 日结</button>
-              <button id="s3-open-upgrade" type="button">扩容 <kbd>U</kbd></button>
-              <button id="s3-open-equipment" type="button">设备商店</button>
-              <button id="s3-open-layout" type="button">装修 <kbd>P</kbd></button>
-              <button id="s3-open-street" type="button">商业街 <kbd>M</kbd></button>
-            </nav>
           </div>
           <div class="s3-top-right">
             <div class="s3-wallet"><span class="s3-small-label">小店资金</span><strong id="s3-cash">£0.00</strong><span id="s3-sold">售出 0 / 8 件</span></div>
@@ -467,7 +471,7 @@ export class App3D {
             <h1 id="s3-start-title">Corner<br>Shop<span>一条商业街，从你的小店开始。</span></h1>
             <p class="s3-start-description">从 30 种商品里挑选你的小店要卖什么。<br>选好数量、门口签收，再亲手摆上货架，迎接街坊的第一笔生意。</p>
             <div class="s3-start-stock"><span><span id="s3-start-capital">£12</span><small id="s3-start-capital-label">首日本金 · 进货会扣钱</small></span><span>09:00–19:00 <small>持续来客 · 打烊后安心收尾</small></span></div>
-            <p id="s3-start-note" class="s3-muted">按 B 打开进货清单，商品与数量都由你选择。至少上架一种商品就能迎客；按 M 看看商业街。</p>
+            <p id="s3-start-note" class="s3-muted">先走到店内电脑旁，看向屏幕按 E。选商品下单，货车送达后签收上架，再开门迎客。</p>
             <button id="s3-start-button" class="s3-primary-button" type="button" disabled>开始第一天</button>
             <a id="s3-asset-library-link" class="s3-asset-library-link" href="?assets=1">商品素材库 <span>30 种模型 · 预览与导出 ↗</span></a>
             <p id="s3-readonly-note" class="s3-pause-alert" role="status" hidden></p>
@@ -476,7 +480,7 @@ export class App3D {
             <p id="s3-loading" class="s3-loading" role="status">正在载入小店…</p>
             <p id="s3-load-detail" class="s3-error-detail" hidden></p>
             <button id="s3-retry" class="s3-secondary-button" type="button" hidden>重新加载小店</button>
-            <p class="s3-start-controls"><kbd>W A S D</kbd> 走动 · <kbd>Shift</kbd> 按住加速 · <kbd>E</kbd> 互动 / 签收<br><kbd>Tab</kbd> 释放鼠标 · <kbd>B</kbd> 进货 · <kbd>M</kbd> 商业街</p>
+            <p class="s3-start-controls"><kbd>W A S D</kbd> 走动 · <kbd>Shift</kbd> 按住加速 · <kbd>E</kbd> 互动 / 签收<br><kbd>Tab</kbd> 释放鼠标 · 走近电脑 <kbd>E</kbd> 经营管理</p>
           </div>
           <p class="s3-start-footer">第一人称街角经营 · 本地语音与存档 · 无需登录或开麦</p>
         </section>
@@ -496,26 +500,23 @@ export class App3D {
         </section>
 
         <dialog id="s3-pause" class="s3-pause" aria-labelledby="s3-pause-title">
-          <div class="s3-pause-heading"><div><p class="s3-eyebrow">YOUR LITTLE BUSINESS</p><h2 id="s3-pause-title">小店管理</h2></div><button id="s3-resume" class="s3-primary-button" type="button">返回小店</button></div>
-          <p class="s3-muted">这里会暂停营业，顾客会等你。返回后鼠标保持可点击；按 Tab 再切回自由转头。</p>
+          <div class="s3-pause-heading"><div><p class="s3-eyebrow">CORNER SHOP</p><h2 id="s3-pause-title">小店暂停</h2></div><div class="s3-computer-heading-actions"><button id="s3-computer-back" class="s3-secondary-button" type="button" hidden>返回桌面</button><button id="s3-resume" class="s3-primary-button" type="button">返回小店</button></div></div>
+          <p id="s3-pause-description" class="s3-muted">营业与配送已暂停。返回后按 Tab 可切回鼠标转头。</p>
+          <div id="s3-computer-status" class="s3-computer-status" hidden><span id="s3-computer-day-status"></span><strong id="s3-computer-cash"></strong></div>
+          <p id="s3-computer-delivery" class="s3-computer-delivery" hidden></p>
           <p id="s3-pause-alert" class="s3-pause-alert" role="alert" hidden></p>
           <p id="s3-pause-notice" class="s3-pause-notice" role="status" hidden></p>
+          ${computerDesktopMarkup()}
+          <div id="s3-computer-apps" hidden>
           <section id="s3-layout-exit-confirm" class="s3-confirm" aria-labelledby="s3-layout-exit-title" hidden><h3 id="s3-layout-exit-title">还有未应用的装修修改</h3><p>当前只是平面图草稿，尚未改变店内设备。可以继续装修并应用，或放弃草稿后离开。</p><div><button id="s3-layout-exit-keep" class="s3-primary-button" type="button">继续装修</button><button id="s3-layout-exit-discard" class="s3-secondary-button" type="button">放弃修改并离开</button></div></section>
-          <nav class="s3-management-tabs" aria-label="经营管理分类">
-            <button id="s3-tab-supply" type="button" aria-pressed="true">进货</button>
-            <button id="s3-tab-day" type="button" aria-pressed="false">营业与日结</button>
-            <button id="s3-tab-cash" type="button" aria-pressed="false">现金管理</button>
-            <button id="s3-tab-upgrade" type="button" aria-pressed="false">普通扩容</button>
-            <button id="s3-tab-development" type="button" aria-pressed="false">店铺成长</button>
-            <button id="s3-tab-equipment" type="button" aria-pressed="false">设备商店</button>
-            <button id="s3-tab-layout" type="button" aria-pressed="false">自由装修</button>
-            <button id="s3-tab-street" type="button" aria-pressed="false">商业街</button>
-          </nav>
+          <nav id="s3-computer-day-subnav" class="s3-computer-subnav" aria-label="营业与现金" hidden><button id="s3-tab-day" type="button" aria-pressed="true">营业与日结</button><button id="s3-tab-cash" type="button" aria-pressed="false">现金管理</button></nav>
+          <nav id="s3-computer-upgrade-subnav" class="s3-computer-subnav" aria-label="扩容与成长" hidden><button id="s3-tab-upgrade" type="button" aria-pressed="true">普通扩容</button><button id="s3-tab-development" type="button" aria-pressed="false">店铺成长</button></nav>
           <section id="s3-panel-supply" class="s3-management-panel" aria-labelledby="s3-supply-title">
-            <p class="s3-eyebrow">DAILY DOORSTEP DELIVERY</p><h3 id="s3-supply-title">今天的货，送到小店门口</h3>
-            <p class="s3-muted">30 种商品自由选购。数量默认为 0，选好后才下单；送货车每天来店门口，签收后还需亲手上架。</p>
-            <ol class="s3-delivery-steps" aria-label="进货流程"><li><span>01</span>下单扣款</li><li><span>02</span>门口按 E 签收</li><li><span>03</span>抱箱搬货上架</li></ol>
+            <p class="s3-eyebrow">ORDER & DOORSTEP DELIVERY</p><h3 id="s3-supply-title">今天的货，送到小店门口</h3>
+            <p class="s3-muted">准备期和营业中随时下单，每天不限次数。30 种商品数量默认为 0；退出电脑后货车按单送来，签收后亲手上架。</p>
+            <ol class="s3-delivery-steps" aria-label="进货流程"><li><span>01</span>下单扣款</li><li><span>02</span>等车停稳，按 E 签收</li><li><span>03</span>抱箱搬货上架</li></ol>
             <p id="s3-delivery-summary" class="s3-delivery-summary" role="status" aria-live="polite"></p>
+            <details id="s3-purchase-orders" class="s3-purchase-orders"><summary id="s3-purchase-orders-summary">订单与配送进度</summary><p class="s3-muted">按采购顺序显示全部待收货、当日订单及最近一笔已签收订单。前方订单包含正在驶离的货车；退出电脑后配送继续。</p><div id="s3-purchase-orders-content"></div></details>
             <div class="s3-supply-filters">
               <label class="s3-supply-search-label" for="s3-supply-search"><span>找商品</span><input id="s3-supply-search" type="search" placeholder="搜索中文或英文商品名" autocomplete="off"></label>
               <label for="s3-supply-category"><span>商品分类</span><select id="s3-supply-category"><option value="all">全部分类</option>${PRODUCT_CATEGORIES.map((category) => `<option value="${category.id}">${category.nameZh}</option>`).join("")}</select></label>
@@ -549,7 +550,7 @@ export class App3D {
             <p id="s3-day-recycling-count" class="s3-muted"></p>
             <p class="s3-muted">商品毛利 = 退款后销售净额 − 净售出商品成本。退回的商品重新计入库存。回收收入单独记账，自愿现金帮助单独记为社区支出，不计经验或成就。进货中尚未卖出的部分仍是存货；扩容是投资，不把钱包余额当利润。</p>
             <p id="s3-day-reason" class="s3-inline-reason" role="status"></p>
-            <div class="s3-management-buttons"><button id="s3-day-to-cash" class="s3-secondary-button" type="button">配置开店备用金</button><button id="s3-close-shop" class="s3-secondary-button" type="button">提前打烊</button><button id="s3-settle-day" class="s3-primary-button" type="button" hidden>完成日结</button><button id="s3-next-day" class="s3-primary-button" type="button" hidden>开始下一天</button><button id="s3-day-to-upgrade" class="s3-secondary-button" type="button">看看 £8 普通扩容</button></div>
+            <div class="s3-management-buttons"><button id="s3-computer-open-shop" class="s3-primary-button" type="button">开门营业</button><button id="s3-day-to-cash" class="s3-secondary-button" type="button">配置开店备用金</button><button id="s3-close-shop" class="s3-secondary-button" type="button">提前打烊</button><button id="s3-settle-day" class="s3-primary-button" type="button" hidden>完成日结</button><button id="s3-next-day" class="s3-primary-button" type="button" hidden>开始下一天</button><button id="s3-day-to-upgrade" class="s3-secondary-button" type="button">看看 £8 普通扩容</button></div>
             <div id="s3-close-confirm" class="s3-close-confirm" role="group" aria-label="确认提前打烊" hidden>
               <p>今天不再接新顾客或新采购。店里的顾客仍可完成购物，已付款配送仍可签收；收尾后才能日结。确认提前打烊吗？</p>
               <div class="s3-management-buttons"><button id="s3-close-confirm-button" class="s3-primary-button" type="button">确认打烊，开始收尾</button><button id="s3-close-cancel" class="s3-secondary-button" type="button">继续营业</button></div>
@@ -580,7 +581,9 @@ export class App3D {
               </section>`).join("")}
             <p class="s3-street-walk-note">返回场景，沿店门前的人行道走近店铺门牌，按 E 也能查看这家店的条件。当前版本尚未开放这些店铺的内部经营。</p>
           </section>
-          <details class="s3-pause-section"><summary>看看怎么操作</summary><dl class="s3-controls-list"><div><dt>走动 / 观察</dt><dd><kbd>W A S D</kbd> / 鼠标</dd></div><div><dt>按住加速 / 松开恢复</dt><dd><kbd>Shift</kbd>（左右均可）</dd></div><div><dt>签收、拿箱、上架、扫描、收款</dt><dd><kbd>E</kbd> / 鼠标左键</dd></div><div><dt>近看商品 / 返回</dt><dd><kbd>F</kbd></dd></div><div><dt>安全放下货箱 / 放回单品</dt><dd><kbd>G</kbd></dd></div><div><dt>切换可点击鼠标 / 转头</dt><dd><kbd>Tab</kbd></dd></div><div><dt>重听顾客</dt><dd><kbd>R</kbd></dd></div><div><dt>进货 / 普通扩容 / 商业街</dt><dd><kbd>B</kbd> / <kbd>U</kbd> / <kbd>M</kbd></dd></div><div><dt>自由装修 / 布局中旋转</dt><dd><kbd>P</kbd> / <kbd>R</kbd></dd></div><div><dt>暂停与管理</dt><dd><kbd>Esc</kbd></dd></div><div><dt>视角备用按键</dt><dd><kbd>I J K L</kbd></dd></div></dl><p class="s3-muted">先看向物品并走近，再按键操作。鼠标锁定且抱着货箱上架时，单击左键摆放 1 件，按住左键会逐件连续摆放，松开立即停止。也可以释放鼠标后点击底部操作按钮；按钮不会隔空操作。浏览器不允许锁定鼠标时，可按住画面左键拖动视角。</p></details>
+          </div>
+          <div id="s3-pause-options">
+          <details class="s3-pause-section"><summary>看看怎么操作</summary><dl class="s3-controls-list"><div><dt>走动 / 观察</dt><dd><kbd>W A S D</kbd> / 鼠标</dd></div><div><dt>按住加速 / 松开恢复</dt><dd><kbd>Shift</kbd>（左右均可）</dd></div><div><dt>签收、拿箱、上架、扫描、收款</dt><dd><kbd>E</kbd> / 鼠标左键</dd></div><div><dt>近看商品 / 返回</dt><dd><kbd>F</kbd></dd></div><div><dt>安全放下货箱 / 放回单品</dt><dd><kbd>G</kbd></dd></div><div><dt>切换可点击鼠标 / 转头</dt><dd><kbd>Tab</kbd></dd></div><div><dt>重听顾客</dt><dd><kbd>R</kbd></dd></div><div><dt>电脑内：进货 / 扩容 / 商业街</dt><dd><kbd>B</kbd> / <kbd>U</kbd> / <kbd>M</kbd></dd></div><div><dt>电脑内装修 / 布局中旋转</dt><dd><kbd>P</kbd> / <kbd>R</kbd></dd></div><div><dt>暂停 / 电脑返回上一层</dt><dd><kbd>Esc</kbd></dd></div><div><dt>视角备用按键</dt><dd><kbd>I J K L</kbd></dd></div></dl><p class="s3-muted">先看向物品并走近，再按键操作。鼠标锁定且抱着货箱上架时，单击左键摆放 1 件，按住左键会逐件连续摆放，松开立即停止。也可以释放鼠标后点击底部操作按钮；按钮不会隔空操作。浏览器不允许锁定鼠标时，可按住画面左键拖动视角。</p></details>
           <details class="s3-pause-section"><summary>画面与操作</summary><div class="s3-settings-grid">
             <label for="s3-sensitivity">鼠标灵敏度 <output id="s3-sensitivity-value">1.0</output></label><input id="s3-sensitivity" type="range" min="0.3" max="2" step="0.1" value="1">
             <label for="s3-quality">画质</label><select id="s3-quality"><option value="standard">标准 · 优先细节</option><option value="low">流畅 · 降低渲染负担</option></select>
@@ -600,7 +603,9 @@ export class App3D {
           <details class="s3-pause-section"><summary>存档与试玩管理</summary><p id="s3-pause-save" class="s3-muted"></p><div class="s3-management-buttons"><button id="s3-export" class="s3-secondary-button" type="button">下载存档备份</button><button id="s3-import" class="s3-secondary-button" type="button">导入存档备份</button><input id="s3-import-file" type="file" accept="application/json,.json" aria-label="选择本游戏导出的 3D JSON 存档" hidden><button id="s3-cancel-customer" class="s3-secondary-button" type="button">取消本单并归还商品</button><button id="s3-restart" class="s3-text-button" type="button">重新试玩</button></div><p class="s3-muted">导入文件只在本机校验，确认后才替换进度。取消订单只退回尚未付款的商品。</p></details>
           <section id="s3-restart-confirm" class="s3-confirm" aria-labelledby="s3-confirm-title" hidden><h3 id="s3-confirm-title">重新开始这轮试营业？</h3><p>当前 3D 进度会被新一轮替换，上一有效快照会保留为备份。建议先下载存档；旧版 2D 存档不受影响。</p><div><button id="s3-restart-confirm-button" class="s3-danger-button" type="button">确认重新试玩</button><button id="s3-restart-cancel" class="s3-secondary-button" type="button">保留当前进度</button></div></section>
           <section id="s3-import-confirm" class="s3-confirm" aria-labelledby="s3-import-title" hidden><h3 id="s3-import-title">确认导入这份存档？</h3><p id="s3-import-summary"></p><p>会替换当前 3D 进度，覆盖前保留当前有效快照。旧版 2D 存档不变；文件不会上传。</p><div><button id="s3-import-confirm-button" class="s3-primary-button" type="button">确认导入并替换进度</button><button id="s3-import-cancel" class="s3-secondary-button" type="button">保留当前进度</button></div></section>
+          </div>
         </dialog>
+        <aside id="s3-venue-info" class="s3-venue-info" role="status" hidden><h3 id="s3-venue-info-title"></h3><p id="s3-venue-info-body"></p><p>更多街区信息可在店内电脑查看。</p></aside>
 
         <dialog id="s3-neighbour-dialog" class="s3-neighbour-dialog" aria-labelledby="s3-neighbour-title" aria-describedby="s3-neighbour-context">
           <div class="s3-neighbour-heading">
@@ -671,21 +676,24 @@ export class App3D {
     click("s3-neighbour-give-one", () => this.supportStreetNeighbour(100));
     click("s3-neighbour-give-two", () => this.supportStreetNeighbour(200));
     click("s3-neighbour-no-donation", () => this.showStreetNeighbourScene("noDonation"));
-    click("s3-open-supply", () => this.openManagement("supply"));
-    click("s3-open-day", () => this.openManagement("day"));
-    click("s3-open-upgrade", () => this.openManagement("upgrade"));
-    click("s3-open-equipment", () => this.openManagement("equipment"));
-    click("s3-open-layout", () => this.openManagement("layout"));
-    click("s3-open-street", () => this.openManagement("street"));
+    click("s3-computer-supply", () => this.openManagement("supply"));
+    click("s3-computer-day", () => this.openManagement("day"));
+    click("s3-computer-upgrade", () => this.openManagement("upgrade"));
+    click("s3-computer-equipment", () => this.openManagement("equipment"));
+    click("s3-computer-layout", () => this.openManagement("layout"));
+    click("s3-computer-street", () => this.openManagement("street"));
     click("s3-layout-exit-keep", () => this.cancelLayoutExit(true));
     click("s3-layout-exit-discard", () => {
       const destination = this.pendingLayoutExit;
       this.layoutEditor.discard();
       this.cancelLayoutExit(false);
       if (destination === "resume") this.resume(false);
+      else if (destination === "desktop") this.returnToDesktop();
       else if (destination) this.showManagementSection(destination);
     });
-    for (const section of MANAGEMENT_SECTIONS) {
+    click("s3-computer-back", () => this.returnToDesktop());
+    click("s3-computer-open-shop", () => { if (this.computerSession && this.dispatch({ type: "OPEN_STORE" })) this.resume(false) });
+    for (const section of ["day", "cash", "upgrade", "development"] as const) {
       click(`s3-tab-${section}`, () => this.showManagementSection(section));
     }
     for (const venue of STREET_VENUES) {
@@ -748,7 +756,7 @@ export class App3D {
     click("s3-next-day", () => {
       if (this.dispatch({ type: "START_NEXT_DAY" })) {
         this.lastCustomerCue = "";
-        this.businessClock.reset();
+        this.resetClocks();
         this.showManagementSection("supply");
       }
     });
@@ -768,7 +776,7 @@ export class App3D {
     click("s3-restart-cancel", () => { this.el("s3-restart-confirm").hidden = true; this.el("s3-restart").focus() });
     click("s3-restart-confirm-button", () => this.restart());
     click("s3-dismiss-warning", () => { this.loadWarning = ""; this.settingsWarning = ""; this.renderSaveStatus() });
-    this.el<HTMLDialogElement>("s3-pause").addEventListener("cancel", (event) => { event.preventDefault(); this.resume(false) }, { signal });
+    this.el<HTMLDialogElement>("s3-pause").addEventListener("cancel", (event) => { event.preventDefault(); this.escapePause() }, { signal });
     this.el<HTMLDialogElement>("s3-neighbour-dialog").addEventListener("cancel", (event) => {
       event.preventDefault();
       this.closeStreetDialogue();
@@ -778,8 +786,9 @@ export class App3D {
     }
     window.addEventListener("keydown", (event) => this.onKeyDown(event), { capture: true, signal });
     window.addEventListener("blur", () => {
+      this.advanceDeliveryTime();
       this.advanceBusinessTime();
-      this.businessClock.reset();
+      this.resetClocks();
       this.audioForeground = false;
       this.syncShopAudio();
       this.stopSpeech();
@@ -791,7 +800,7 @@ export class App3D {
     document.addEventListener("visibilitychange", () => {
       this.syncShopAudio();
       if (document.hidden) {
-        this.businessClock.reset();
+        this.resetClocks();
         this.stopSpeech();
         if (this.mode === "cashier") this.cashRegister.close();
         if (this.mode === "street-dialogue") this.closeStreetDialogue(false);
@@ -805,11 +814,12 @@ export class App3D {
     window.addEventListener("pagehide", () => {
       this.shopAudio.setActive(false);
       this.savePoseAndPersist();
-      this.businessClock.reset();
+      this.resetClocks();
       this.stopSpeech();
       this.initGeneration += 1;
       this.dismissStreetDialogue();
       this.mode = "readonly";
+      this.computerSession = false;
       this.cashRegister.close();
       this.ready = false;
       this.world?.setActive(false);
@@ -842,28 +852,24 @@ export class App3D {
     this.shopAudio.unlock();
     this.syncShopAudio();
     this.world.requestPointerLock();
-    this.businessClock.resume(performance.now());
+    this.resumeClocks(performance.now());
     this.lastPoseSave = performance.now();
     this.capturePose();
     this.persist();
     if (!this.saveSession.canWrite) return;
     this.renderCaptureHint();
-    this.notify(this.loadedSession ? "欢迎回来，货物和资金已恢复。待收货订单请到门口签收；B 进货，M 查看商业街。" : "按 B 从 30 种商品中选择数量，确认总价后下单。到门口货车旁按 E 签收，再把想卖的商品上架。");
+    this.notify(this.loadedSession ? "欢迎回来。到店内电脑按 E 管理，营业期间也能随时补货；货车停稳后到门口签收。" : "先走近店内电脑，看向屏幕按 E 打开。选择商品下单，等货车停稳后签收，再把商品上架迎客。");
     this.syncCustomerCue();
   }
 
   private interact(): void {
     if (this.mode !== "playing") return;
-    if (interactionInReach(this.target) && this.target.kind === "open-sign" && (this.state.day.phase === "settled" || canSettleDay(this.state))) {
-      this.openManagement("day"); return;
-    }
     // Delivery clearance depends on the live pose, not the periodic save snapshot.
     if (interactionInReach(this.target) && this.target.kind === "delivery") this.capturePose();
     const decision = commandForInteraction(this.state, this.target);
-    if (decision.management) {
-      if (decision.venueId) this.selectedVenue = decision.venueId;
-      this.openManagement(decision.management);
-    } else if (decision.streetNeighbourId) this.openStreetDialogue(decision.streetNeighbourId);
+    if (decision.computer) this.openComputer();
+    else if (decision.venueId) this.showVenueInfo(decision.venueId);
+    else if (decision.streetNeighbourId) this.openStreetDialogue(decision.streetNeighbourId);
     else if (decision.cashRegister) this.openCashRegister();
     else if (decision.command) this.dispatch(decision.command);
     else if (decision.message) this.notify(decision.message);
@@ -898,7 +904,7 @@ export class App3D {
     this.stopSpeech();
     this.streetNeighbourId = neighbourId;
     this.mode = "street-dialogue";
-    this.businessClock.reset();
+    this.resetClocks();
     this.world?.setActive(false);
     this.releasePointer();
     this.renderCaptureHint();
@@ -1001,7 +1007,7 @@ export class App3D {
     try { this.saveSession?.assertCurrent() }
     catch (error) { this.enterReadOnly(error instanceof Error ? error.message : "存档写入权限不可用。"); return }
     if (this.disposed || !this.saveSession?.canWrite) return;
-    this.businessClock.resume(performance.now());
+    this.resumeClocks(performance.now());
     this.world?.setActive(true);
     this.shopAudio.unlock();
     this.syncShopAudio();
@@ -1034,7 +1040,7 @@ export class App3D {
     this.savePoseAndPersist();
     if (this.mode !== "playing" || !this.saveSession?.canWrite) return;
     this.mode = "inspecting";
-    this.businessClock.reset();
+    this.resetClocks();
     this.stopSpeech();
     this.syncShopAudio();
     this.inspecting = productId;
@@ -1064,7 +1070,7 @@ export class App3D {
     this.el("s3-inspection").hidden = true;
     this.el("s3-hud").hidden = false;
     this.mode = "playing";
-    this.businessClock.resume(performance.now());
+    this.resumeClocks(performance.now());
     this.world?.setActive(true);
     this.shopAudio.unlock();
     this.syncShopAudio();
@@ -1079,7 +1085,9 @@ export class App3D {
     this.savePoseAndPersist();
     if (!this.saveSession?.canWrite) return;
     this.mode = "paused";
-    this.businessClock.reset();
+    this.computerSession = false;
+    this.computerDesktop = true;
+    this.resetClocks();
     this.syncShopAudio();
     this.world?.setActive(false);
     this.releasePointer();
@@ -1091,15 +1099,56 @@ export class App3D {
     if (!dialog.open) dialog.showModal();
   }
 
-  private openManagement(section: ManagementSection): void {
-    if (this.mode !== "playing" && this.mode !== "paused") return;
+  /** Only a real in-reach computer interaction establishes management access. */
+  private openComputer(): void {
+    if (this.mode !== "playing" || !interactionInReach(this.target) || this.target.kind !== "computer") return;
     this.pause();
-    if (this.mode !== "paused") return;
+    if (!this.el<HTMLDialogElement>("s3-pause").open || !this.saveSession?.canWrite) return;
+    this.computerSession = true;
+    this.computerDesktop = true;
     this.purchaseOrderId = crypto.randomUUID();
+    this.renderManagement();
+    this.el("s3-computer-supply").focus();
+  }
+
+  private openManagement(section: ManagementSection): void {
+    if (!this.computerSession || this.mode !== "paused") return;
     this.showManagementSection(section);
   }
 
+  private returnToDesktop(): void {
+    if (!this.computerSession || this.mode !== "paused") return;
+    if (this.layoutEditor.hasUnsavedChanges()) { this.requestLayoutExit("desktop"); return }
+    this.cancelLayoutExit(false);
+    this.closeConfirmation = false;
+    this.developmentPanel.cancelConfirmation();
+    this.equipmentStore.cancelConfirmation();
+    this.cashManagement.cancelConfirmation();
+    this.computerDesktop = true;
+    this.renderManagement();
+    this.el("s3-computer-supply").focus();
+  }
+
+  private escapePause(): void {
+    if (this.pendingLayoutExit) { this.cancelLayoutExit(true); return }
+    if (this.closeConfirmation) { this.cancelCloseConfirmation(); return }
+    if (this.cashManagement.cancelConfirmation(true)) return;
+    if (!this.el("s3-extension-confirm").hidden) { this.developmentPanel.cancelConfirmation(); return }
+    if (this.computerSession && !this.computerDesktop) this.returnToDesktop();
+    else this.resume(false);
+  }
+
+  private showVenueInfo(venueId: StreetVenueId): void {
+    const venue = STREET_VENUES.find((entry) => entry.id === venueId)!;
+    const progress = getVenueProgress(this.state, venueId);
+    this.text("s3-venue-info-title", `${venue.nameZh} · ${progress.statusText}`);
+    this.text("s3-venue-info-body", progress.requirements.map((requirement) => `${requirement.label} ${requirement.current}/${requirement.target}`).join(" · "));
+    this.el("s3-venue-info").hidden = false;
+    this.venueInfoUntil = performance.now() + 12_000;
+  }
+
   private showManagementSection(section: ManagementSection): void {
+    if (!this.computerSession || this.mode !== "paused") return;
     if (section !== this.managementSection && this.layoutEditor.hasUnsavedChanges()) {
       this.requestLayoutExit(section);
       return;
@@ -1109,15 +1158,16 @@ export class App3D {
     this.equipmentStore.cancelConfirmation();
     this.cashManagement.cancelConfirmation();
     this.managementSection = section;
+    this.computerDesktop = false;
     this.closeConfirmation = false;
     for (const candidate of MANAGEMENT_SECTIONS) {
       this.el(`s3-panel-${candidate}`).hidden = candidate !== section;
-      this.el(`s3-tab-${candidate}`).setAttribute("aria-pressed", String(candidate === section));
+      this.root.querySelector(`#s3-tab-${candidate}`)?.setAttribute("aria-pressed", String(candidate === section));
     }
     this.renderManagement();
   }
 
-  private requestLayoutExit(destination: ManagementSection | "resume"): void {
+  private requestLayoutExit(destination: ManagementSection | "desktop" | "resume"): void {
     this.pendingLayoutExit = destination;
     this.el("s3-layout-exit-confirm").hidden = false;
     this.el("s3-layout-exit-keep").focus();
@@ -1136,7 +1186,7 @@ export class App3D {
   }
 
   private purchaseStock(): void {
-    if (this.mode !== "paused" || this.purchaseBusy) return;
+    if (!this.computerSession || this.mode !== "paused" || this.purchaseBusy) return;
     const selection = parsePurchaseQuantities(this.purchaseQuantities);
     if (selection.error) { this.notify(selection.error); return }
     const offer = getPurchaseOffer(this.state, selection.lines);
@@ -1153,7 +1203,7 @@ export class App3D {
     this.renderManagement();
     if (bought) {
       this.resume(false);
-      this.notify(`下单成功：${offer.lines.length} 种商品，共 ${offer.unitCount} 件，已扣 ${money(offer.costPence)}。走到门口货车旁按 E 签收，再抱箱上架；签收不再扣款。`);
+      this.notify(`下单成功：${offer.lines.length} 种商品，共 ${offer.unitCount} 件，已扣 ${money(offer.costPence)}。货车将按单送来，停稳后到门口按 E 签收；签收不再扣款。`);
     }
   }
 
@@ -1185,8 +1235,10 @@ export class App3D {
     try { this.saveSession?.assertCurrent() }
     catch (error) { this.enterReadOnly(error instanceof Error ? error.message : "存档写入权限不可用。"); return }
     this.el<HTMLDialogElement>("s3-pause").close();
+    this.computerSession = false;
+    this.computerDesktop = true;
     this.mode = "playing";
-    this.businessClock.resume(performance.now());
+    this.resumeClocks(performance.now());
     this.world?.setActive(true);
     this.shopAudio.unlock();
     this.syncShopAudio();
@@ -1206,7 +1258,11 @@ export class App3D {
       event.preventDefault(); event.stopImmediatePropagation(); this.closeInspection(); return;
     }
     if (this.mode === "paused" && event.code === "Escape") {
-      event.preventDefault(); event.stopImmediatePropagation(); this.resume(false); return;
+      event.preventDefault(); event.stopImmediatePropagation(); this.escapePause(); return;
+    }
+    if (this.mode === "paused" && this.computerSession && !isComputerTextEntry(event.target) && !isComputerTextEntry(document.activeElement)) {
+      const shortcut = computerShortcut(event.code);
+      if (shortcut) { event.preventDefault(); event.stopImmediatePropagation(); this.openManagement(shortcut); return }
     }
     if (this.mode === "playing") {
       if (event.code === "Escape") {
@@ -1217,9 +1273,9 @@ export class App3D {
         this.world?.setCursorFree(this.pointerMode === "locked");
         return;
       }
-      if (event.code === "KeyB" || event.code === "KeyU" || event.code === "KeyM" || event.code === "KeyP") {
+      if (computerShortcut(event.code)) {
         event.preventDefault(); event.stopImmediatePropagation();
-        this.openManagement(event.code === "KeyB" ? "supply" : event.code === "KeyU" ? "upgrade" : event.code === "KeyP" ? "layout" : "street");
+        this.notify("走近店内电脑，看向屏幕按 E，再选择桌面应用。");
         return;
       }
       if (event.code === "KeyR") {
@@ -1235,9 +1291,12 @@ export class App3D {
   }
 
   private dispatch(command: SimCommand, showMessage = true): boolean {
+    const computerCommands: readonly SimCommand["type"][] = ["PURCHASE_STOCK", "BUY_UPGRADE", "CLOSE_STORE", "SETTLE_DAY", "START_NEXT_DAY", "APPLY_SHOP_LAYOUT", "BUY_SPACE_EXPANSION", "BUY_EQUIPMENT", "CONFIGURE_CASH_FLOAT", "REFUND_TRANSACTION", "RECORD_CASH_COUNT"];
+    if (computerCommands.includes(command.type) && (!this.computerSession || this.mode !== "paused")) return false;
     if (!this.saveSession?.canWrite) { this.enterReadOnly("此页面只读，不能修改小店进度。"); return false }
     try {
       this.saveSession.assertCurrent();
+      this.advanceDeliveryTime();
       this.advanceBusinessTime();
       if (!this.saveSession.canWrite) return false;
       this.capturePose();
@@ -1253,8 +1312,8 @@ export class App3D {
       if (result.changed && requiresDurableCommit && !this.persist(result.state)) return false;
       this.state = result.state;
       if (result.changed) {
-        if (command.type === "OPEN_STORE") this.businessClock.resume(performance.now());
-        if (command.type === "CLOSE_STORE" || command.type === "START_NEXT_DAY") this.businessClock.reset();
+        if (command.type === "OPEN_STORE") this.resumeClocks(performance.now());
+        if (command.type === "CLOSE_STORE" || command.type === "START_NEXT_DAY") this.resetClocks();
         if (!requiresDurableCommit) this.persist();
         if (!this.saveSession.canWrite) return false;
         this.world?.setState(this.state);
@@ -1266,7 +1325,7 @@ export class App3D {
       if (result.changed && ((command.type === "PAY" && command.success) || command.type === "CONFIRM_CASH")) {
         const summary = getDaySummary(this.state);
         const payment = this.state.transactions.find((transaction) => transaction.customerNumber === this.state.customer.number);
-        this.notify(`${command.type === "CONFIRM_CASH" ? "现金" : "刷卡"}收款成功 +${money(payment?.amountPence ?? 0)} · 今日 ${summary.paidCustomers} 单。${!this.state.upgraded && this.state.cashPence >= UPGRADE_COST_PENCE ? "按 U 可查看 £8 扩容；注意留足下次进货资金。" : `当前资金 ${money(this.state.cashPence)}。`}`);
+        this.notify(`${command.type === "CONFIRM_CASH" ? "现金" : "刷卡"}收款成功 +${money(payment?.amountPence ?? 0)} · 今日 ${summary.paidCustomers} 单。${!this.state.upgraded && this.state.cashPence >= UPGRADE_COST_PENCE ? "到电脑可查看 £8 扩容，也可用回款继续补货。" : `当前资金 ${money(this.state.cashPence)}。`}`);
       }
       return result.changed;
     } catch (error) {
@@ -1297,6 +1356,7 @@ export class App3D {
 
   private savePoseAndPersist(): void {
     if (!this.ready || this.disposed || !this.saveSession?.canWrite) return;
+    this.advanceDeliveryTime();
     this.advanceBusinessTime();
     this.capturePose();
     this.persist();
@@ -1319,6 +1379,73 @@ export class App3D {
     return saved;
   }
 
+  private resetClocks(): void {
+    this.businessClock.reset();
+    this.deliveryClock.reset();
+  }
+
+  private resumeClocks(now: number): void {
+    this.businessClock.resume(now);
+    this.deliveryClock.resume(now);
+  }
+
+  /** Delivery keeps moving during preparation, closing and cash checkout, but shares real pause boundaries. */
+  private advanceDeliveryTime(now = performance.now()): void {
+    const elapsedMs = this.deliveryClock.sample(now, isDeliveryTimeRunning({
+      phase: this.state.day.phase, mode: this.mode, writable: !!this.saveSession?.canWrite,
+      foreground: this.audioForeground, hidden: document.hidden, learningPlayback: this.learningPlayback,
+    }));
+    if (elapsedMs <= 0) return;
+    const before = this.state.delivery;
+    if (before.phase === "idle" || before.phase === "ready") return;
+    const result = reduceSim(this.state, {
+      type: "ADVANCE_DELIVERY_TIME", elapsedMs, blocked: this.world?.isDeliveryBlocked(elapsedMs) ?? false,
+    });
+    if (!result.changed) return;
+    this.state = result.state;
+    const after = this.state.delivery;
+    this.world?.setDeliveryState(this.state);
+    if (before.phase !== after.phase || before.orderId !== after.orderId || before.blocked !== after.blocked) {
+      this.persist();
+      if (!this.saveSession?.canWrite) return;
+      if (after.phase === "ready") this.notify(`货车已停稳，本单 ${getDeliverySummary(this.state).readyUnits} 件商品待签收。请空手到货车旁按 E。`);
+      else if (after.blocked && !before.blocked) this.notify("货车正在让行，请离开车道，配送将继续。");
+      this.renderObjective();
+      this.renderTarget();
+    }
+    this.renderDelivery();
+  }
+
+  private deliveryMessage(): string {
+    const delivery = getDeliverySummary(this.state);
+    const queued = delivery.queuedOrders ? ` · 后方 ${delivery.queuedOrders} 单排队` : "";
+    if (delivery.blocked) return `货车让行中 · 请离开车道${queued}`;
+    if (delivery.phase === "ready") return `本单 ${delivery.readyUnits} 件已到门口 · 空手按 E 签收${queued}`;
+    if (delivery.phase === "preparing" || delivery.phase === "arriving") return `${delivery.phase === "preparing" ? "本单备货中" : "货车驶入中"} · 约 ${Math.ceil(delivery.remainingMs / 1000)} 秒后停稳${queued}`;
+    if (delivery.phase === "departing") return `本单已签收 · 货车驶离中${delivery.pendingOrders ? ` · 后方 ${delivery.pendingOrders} 单排队` : ""}`;
+    return "暂无配送订单 · 准备期和营业中可随时在电脑进货";
+  }
+
+  private renderDelivery(): void {
+    const summary = getDeliverySummary(this.state);
+    const message = this.deliveryMessage();
+    this.el("s3-delivery-hud").hidden = summary.phase === "idle";
+    this.text("s3-delivery-hud", message);
+    this.text("s3-computer-delivery", message);
+    this.text("s3-delivery-summary", `${message}。${this.computerSession ? "退出电脑后配送继续；" : ""}共 ${summary.pendingOrders} 单、${summary.pendingUnits} 件待收货。`);
+  }
+
+  /** The ledger is only rebuilt when its visible computer app has different order content. */
+  private renderPurchaseOrders(): void {
+    if (!this.computerSession || this.computerDesktop || this.managementSection !== "supply" || this.mode !== "paused") return;
+    const rows = computerPurchaseOrders(this.state);
+    this.text("s3-purchase-orders-summary", `订单与配送进度 · ${rows.filter((order) => order.awaitingReceipt).length} 单待收货 / 显示 ${rows.length} 单`);
+    const markup = computerPurchaseOrdersMarkup(rows);
+    if (markup === this.purchaseOrdersMarkup) return;
+    this.purchaseOrdersMarkup = markup;
+    this.el("s3-purchase-orders-content").innerHTML = markup;
+  }
+
   /** Only time is updated on routine frames; full world/ledger work stays at save and action boundaries. */
   private advanceBusinessTime(now = performance.now()): void {
     const elapsedMs = this.businessClock.sample(now, isBusinessTimeRunning({
@@ -1329,7 +1456,7 @@ export class App3D {
       const oldPhase = this.state.day.phase;
       this.state = reduceSim(this.state, { type: "ADVANCE_BUSINESS_TIME", elapsedMs }).state;
       if (oldPhase !== this.state.day.phase) {
-        this.businessClock.reset();
+        this.resetClocks();
         this.persist();
         if (!this.saveSession?.canWrite) return;
         this.world?.setState(this.state);
@@ -1348,12 +1475,13 @@ export class App3D {
 
   private onFrame(fps: number, pose: PlayerPose): void {
     const now = performance.now();
+    this.advanceDeliveryTime(now);
     this.advanceBusinessTime(now);
+    if (this.venueInfoUntil && now >= this.venueInfoUntil) { this.el("s3-venue-info").hidden = true; this.venueInfoUntil = 0 }
     const active = this.mode === "playing" && !this.learningPlayback && this.audioForeground && !document.hidden && !!this.saveSession?.canWrite;
     if (active && canSettleDay(this.state) && this.dayReadyNotified !== this.state.day.number) {
       this.dayReadyNotified = this.state.day.number;
-      this.openManagement("day");
-      this.notify("收尾已完成。看看今天的账目，再点击日结；收入不会重复计入。");
+      this.notify("收尾已完成。到店内电脑查看账目并完成日结；收入不会重复计入。");
     } else if (active && this.state.day.phase === "open" && this.state.customer.phase === "complete"
       && this.state.day.nextCustomerAtMs !== null && this.state.day.elapsedOpenMs >= this.state.day.nextCustomerAtMs
       && canStartCustomer(this.state)) {
@@ -1388,7 +1516,7 @@ export class App3D {
     this.text("s3-clock-note", note);
     this.el("s3-business-clock").classList.toggle("s3-closing-soon", clock.closingSoon || day.phase === "closing");
     this.el("s3-business-clock").classList.toggle("s3-clock-paused", paused);
-    this.text("s3-day-clock", legacy ? "旧版三单营业日 · 未记录营业时间" : `${clock.timeLabel} · ${stateLabel}。${day.phase === "preparing" ? "准备不限时，开门从09:00开始。" : day.phase === "closing" ? `${day.closeReason === "time" ? "已到19:00" : "已提前打烊"}，完成店内订单和签收后日结。` : day.phase === "settled" ? "今天的营业已经结束。" : "19:00停止接客，管理与学习时暂停。"}`);
+    this.text("s3-day-clock", legacy ? "旧版三单营业日 · 未记录营业时间" : `${clock.timeLabel} · ${stateLabel}。${day.phase === "preparing" ? "准备不限时，开门从09:00开始。" : day.phase === "closing" ? `${day.closeReason === "time" ? "已到19:00" : "已提前打烊"}，完成店内订单和签收后日结。` : day.phase === "settled" ? "今天的营业已经结束。" : "12 分钟有效营业，19:00 停止接客；电脑与学习时暂停。"}`);
     this.text("s3-cash-business-clock", `${clock.timeLabel} · ${stateLabel}${day.phase === "closing" ? " · 已停止接新客，本单可以继续完成" : paused ? " · 重听或离开页面时暂停" : " · 正常找零期间营业钟继续"}`);
   }
 
@@ -1408,8 +1536,8 @@ export class App3D {
     this.el<HTMLButtonElement>("s3-takeover").disabled = !this.ready;
     this.el("s3-export-readonly").hidden = !this.writerWarning;
     this.text("s3-start-note", this.loadedSession
-      ? `已恢复${this.state.openingKind === "legacy-s0" ? "旧试玩" : "本机"}进度：第 ${this.state.day.number} 天，${money(this.state.cashPence)} 资金。${delivery.pendingOrders ? `还有 ${delivery.pendingUnits} 件待到门口签收。` : "货物、收款记录和扩容保持不变。"}不另加本金。按 M 可查看商业街条件。`
-      : "按 B 打开进货清单，自己选择商品与数量，再确认总价下单。至少上架一种商品即可迎客；按 M 查看商业街的成长目标。");
+      ? `已恢复${this.state.openingKind === "legacy-s0" ? "旧试玩" : "本机"}进度：第 ${this.state.day.number} 天，${money(this.state.cashPence)} 资金。${delivery.pendingOrders ? `还有 ${delivery.pendingUnits} 件待到门口签收。` : "货物、收款记录和扩容保持不变。"}不另加本金。走近店内电脑按 E，可查看进货与商业街应用。`
+      : "先走近店内电脑按 E，选择商品和数量下单。送达后签收上架，再到营业牌或电脑开门；营业中可继续补货。");
     this.text("s3-start-capital", money(this.state.cashPence));
     this.text("s3-start-capital-label", this.loadedSession ? "已保存资金 · 原进度保留" : "首日本金 · 进货会扣钱");
     this.renderObjective();
@@ -1421,8 +1549,7 @@ export class App3D {
     const shelvedUnits = this.state.items.filter((item) => item.location.kind === "shelf").length;
     this.text("s3-shelf-stock", `货架 ${stockedProducts.length} 种 · ${shelvedUnits} 件`);
     this.text("s3-crate-stock", `箱内 ${this.state.items.filter((item) => item.location.kind === "crate").length} 件`);
-    this.el("s3-delivery-hud").hidden = delivery.pendingOrders === 0;
-    this.text("s3-delivery-hud", delivery.pendingOrders ? `${delivery.pendingUnits} 件待签收 · 门口货车旁按 E` : "");
+    this.renderDelivery();
     this.renderReceipt();
     this.renderTarget();
     this.cashRegister.render();
@@ -1444,19 +1571,34 @@ export class App3D {
   }
 
   private renderManagement(): void {
-    const writable = !!this.saveSession?.canWrite;
+    const writable = !!this.saveSession?.canWrite && this.computerSession;
     const day = getDaySummary(this.state);
     const paymentMethods = getPaymentMethodSummary(this.state);
     const delivery = getDeliverySummary(this.state);
-    this.el("s3-pause").classList.toggle("s3-pause-street", this.managementSection === "street");
-    this.el("s3-pause").classList.toggle("s3-pause-supply", this.managementSection === "supply");
-    this.el("s3-pause").classList.toggle("s3-pause-development", this.managementSection === "development");
-    this.el("s3-pause").classList.toggle("s3-pause-equipment", this.managementSection === "equipment");
-    this.el("s3-pause").classList.toggle("s3-pause-layout", this.managementSection === "layout");
-    this.el("s3-pause").classList.toggle("s3-pause-cash", this.managementSection === "cash");
-    for (const candidate of MANAGEMENT_SECTIONS) {
-      this.el(`s3-panel-${candidate}`).hidden = candidate !== this.managementSection;
+    const inApp = this.computerSession && !this.computerDesktop;
+    this.el("s3-pause").classList.toggle("s3-computer", this.computerSession);
+    for (const section of ["street", "supply", "development", "equipment", "layout", "cash"]) {
+      this.el("s3-pause").classList.toggle(`s3-pause-${section}`, inApp && this.managementSection === section);
     }
+    this.text("s3-pause-title", this.computerSession ? "小店电脑" : "小店暂停");
+    this.text("s3-resume", this.computerSession ? "退出电脑" : "返回小店");
+    this.el("s3-computer-back").hidden = !inApp;
+    this.el("s3-computer-status").hidden = !this.computerSession;
+    this.el("s3-computer-delivery").hidden = !this.computerSession;
+    this.el("s3-pause-description").hidden = this.computerSession;
+    this.el("s3-computer-desktop").hidden = !this.computerSession || !this.computerDesktop;
+    this.el("s3-computer-apps").hidden = !inApp;
+    this.el("s3-pause-options").hidden = this.computerSession;
+    this.el("s3-computer-day-subnav").hidden = !inApp || !["day", "cash"].includes(this.managementSection);
+    this.el("s3-computer-upgrade-subnav").hidden = !inApp || !["upgrade", "development"].includes(this.managementSection);
+    this.text("s3-computer-day-status", `第 ${day.dayNumber} 天 · ${getBusinessClock(this.state.day).timeLabel} · ${this.state.day.phase === "preparing" ? "准备中" : this.state.day.phase === "open" ? "营业中" : this.state.day.phase === "closing" ? "收尾中" : "已日结"}`);
+    this.text("s3-computer-cash", `小店资金 ${money(this.state.cashPence)}`);
+    for (const candidate of MANAGEMENT_SECTIONS) {
+      this.el(`s3-panel-${candidate}`).hidden = !inApp || candidate !== this.managementSection;
+      this.root.querySelector(`#s3-tab-${candidate}`)?.setAttribute("aria-pressed", String(candidate === this.managementSection));
+    }
+    this.renderDelivery();
+    this.renderPurchaseOrders();
     this.renderSupply();
     this.text("s3-day-title", `第 ${day.dayNumber} 天${this.state.day.phase === "settled" ? " · 日结完成" : " · 营业账本"}`);
     this.text("s3-day-progress", `已收款 ${day.paidCustomers} 单 · 开始时资金 ${money(day.openingCashPence)}`);
@@ -1482,8 +1624,10 @@ export class App3D {
     const closing = this.state.day.phase === "closing";
     this.text("s3-day-to-cash", this.state.day.phase === "preparing" ? "配置开店备用金" : closing ? "打烊钱箱盘点" : settled ? "查看现金与盘点记录" : "退款 / 现金管理");
     const canSettle = canSettleDay(this.state);
-    this.text("s3-day-reason", settled ? "今天的账已记好。下一天会保留资金、库存与扩容，不补发本金。零单日可以结束，但不计入有效经营日成就。" : delivery.pendingUnits > 0 ? `还有 ${delivery.pendingUnits} 件已付款商品待签收。请返回门口货车旁签收；打烊后仍可签收，完成收尾后才能日结。` : canSettle ? `收尾已完成，今天共收款 ${day.paidCustomers} 单。可以日结了，资金不会重复入账。` : closing ? this.state.customer.phase === "leaving" ? "最后一位顾客正在离店。请返回小店让顾客走完，再完成日结。" : "已停止接新客。请返回小店完成当前订单，或在存档与试玩管理中安全取消，再日结。" : this.state.day.phase === "preparing" ? "按 B 自选商品并签收，上架后到营业牌开门。准备时间不限；今天不营业也可以确认结束准备。" : "19:00 停止接客，营业期间没有三单上限。可以继续补货经营，也可以确认提前打烊。打开管理面板时营业钟暂停。");
+    this.text("s3-day-reason", settled ? "今天的账已记好。下一天会保留资金、库存与扩容，不补发本金。零单日可以结束，但不计入有效经营日成就。" : delivery.pendingUnits > 0 ? `还有 ${delivery.pendingUnits} 件已付款商品待签收。请返回门口货车旁签收；打烊后仍可签收，完成收尾后才能日结。` : closing && delivery.phase === "departing" ? "最后一单已签收，货车驶离后可日结。退出电脑让配送继续。" : canSettle ? `收尾已完成，今天共收款 ${day.paidCustomers} 单。可以日结了，资金不会重复入账。` : closing ? this.state.customer.phase === "leaving" ? "最后一位顾客正在离店。请返回小店让顾客走完，再完成日结。" : "已停止接新客。请返回小店完成当前订单，或在存档与试玩管理中安全取消，再日结。" : this.state.day.phase === "preparing" ? "在电脑进货应用自选商品，等车送达签收并上架，再点击开门营业或使用营业牌。准备时间不限。" : "19:00 停止接客，营业期间没有三单上限。可以继续补货经营，也可以确认提前打烊。打开管理面板时营业钟暂停。");
     if (closing || settled) this.closeConfirmation = false;
+    this.el("s3-computer-open-shop").hidden = this.state.day.phase !== "preparing";
+    this.el<HTMLButtonElement>("s3-computer-open-shop").disabled = !writable || !canStartCustomer(this.state);
     this.el("s3-close-shop").hidden = closing || settled;
     this.el<HTMLButtonElement>("s3-close-shop").disabled = !writable;
     this.text("s3-close-shop", this.state.day.phase === "preparing" ? "今天不营业，结束准备" : "提前打烊");
@@ -1503,9 +1647,9 @@ export class App3D {
     this.el("s3-capacity-next").hidden = this.state.upgraded;
     this.el("s3-capacity-comparison").classList.toggle("s3-capacity-complete", this.state.upgraded);
     this.text("s3-upgrade-status", this.state.upgraded ? "各商品陈列区的新层位已经启用，不会再次扣钱。去店里看看，也可以继续备货。" : availableUpgrade ? `资金足够。购买后剩 ${money(this.state.cashPence - UPGRADE_COST_PENCE)}；请为自选商品进货留一些资金。不需要答题解锁。` : `当前 ${money(this.state.cashPence)}，还差 ${money(UPGRADE_COST_PENCE - this.state.cashPence)}。只检查资金，不要求英语等级。`);
-    this.el("s3-open-upgrade").classList.toggle("s3-upgrade-ready", availableUpgrade);
-    this.el("s3-open-upgrade").setAttribute("aria-label", this.state.upgraded ? "货架已扩容，查看详情 U" : availableUpgrade ? "资金足够，查看扩容 U" : "查看扩容条件 U");
-    this.el("s3-open-day").classList.toggle("s3-upgrade-ready", canSettle);
+    this.el("s3-computer-upgrade").classList.toggle("s3-upgrade-ready", availableUpgrade);
+    this.el("s3-computer-upgrade").setAttribute("aria-label", this.state.upgraded ? "货架已扩容，查看详情 U" : availableUpgrade ? "资金足够，查看扩容 U" : "查看扩容条件 U");
+    this.el("s3-computer-day").classList.toggle("s3-upgrade-ready", canSettle);
     this.renderStreet();
     this.developmentPanel.render(this.state, writable && this.mode === "paused");
     this.cashManagement.render(this.state, writable && this.mode === "paused");
@@ -1527,12 +1671,11 @@ export class App3D {
 
   private renderSupply(): void {
     const writable = !!this.saveSession?.canWrite;
-    const editable = writable && this.mode === "paused" && !this.purchaseBusy;
+    const editable = writable && this.computerSession && this.mode === "paused" && !this.purchaseBusy;
     const selection = parsePurchaseQuantities(this.purchaseQuantities);
     const invalidIds = new Set(selection.invalidProductIds);
     const selectedIds = new Set(selection.lines.map((line) => line.productId));
     const offer = getPurchaseOffer(this.state, selection.lines);
-    const delivery = getDeliverySummary(this.state);
     const needle = this.purchaseSearch.trim().toLocaleLowerCase();
     let visibleCount = 0;
     for (const productId of PRODUCT_IDS) {
@@ -1577,10 +1720,7 @@ export class App3D {
     this.el<HTMLButtonElement>("s3-purchase").disabled = !editable || !!selection.error || !offer.allowed;
     this.text("s3-purchase", this.purchaseBusy ? "正在下单…" : selection.error ? "请先修正商品数量" : selection.lines.length ? `确认下单 · ${money(offer.costPence)}` : "先选择商品与数量");
     this.el<HTMLButtonElement>("s3-clear-cart").disabled = !editable || (!selection.lines.length && !selection.invalidProductIds.length);
-    this.text("s3-delivery-summary", delivery.pendingOrders
-      ? `${delivery.pendingOrders} 笔已付款订单 · ${delivery.pendingUnits} 件待签收。${delivery.canReceive ? "返回场景，空手走到门口货车旁按 E 卸货。" : delivery.reason ?? "返回场景后到门口签收。"}`
-      : delivery.receivedToday ? `今日已签收 ${delivery.receivedToday} 笔订单。需要补货时可再次自选商品下单，继续到车旁签收。`
-        : `第 ${this.state.day.number} 天配送已就绪。选择数量前不会产生订单，浏览与筛选都不扣款。`);
+    this.renderDelivery();
   }
 
   private renderStreet(): void {
@@ -1622,7 +1762,7 @@ export class App3D {
     const recycling = inReach && target.kind === "recycling" ? getRecyclingOffer(this.state) : null;
     this.text("s3-target-action", recycling
       ? recycling.allowed ? `回收空箱${recycling.rewardPence ? ` +${money(recycling.rewardPence)}` : " · 不重复奖励"}` : recycling.reason ?? "抱起空箱后回收"
-      : delivery ? delivery.pendingOrders ? `签收 ${delivery.pendingUnits} 件送货` : "查看今日进货单" : inReach ? target.action : "走近物品后互动");
+      : delivery ? delivery.canReceive ? `签收本单 ${delivery.readyUnits} 件` : delivery.pendingOrders ? delivery.reason ?? "等货车停稳后签收" : "暂无订单 · 到电脑进货" : inReach ? target.action : "走近物品后互动");
     this.el<HTMLButtonElement>("s3-interact").disabled = !inReach;
     this.el<HTMLButtonElement>("s3-open-cash").disabled = !this.canOpenCashRegister();
     this.el<HTMLButtonElement>("s3-inspect-button").disabled = this.inspectableProduct() === null;
@@ -1719,18 +1859,20 @@ export class App3D {
     const playing = this.mode === "playing";
     this.el("s3-capture").hidden = !playing || this.pointerMode === "locked" || this.dragLookFallback;
     this.el("s3-drag-hint").hidden = !playing;
-    this.text("s3-drag-hint", this.pointerMode === "locked" ? "Tab 释放鼠标 · Shift 按住加速 · R 重听 · B 进货 · M 商业街" : "鼠标可点击 · 按住画面拖动观察 · Shift 按住加速 · M 商业街");
+    this.text("s3-drag-hint", this.pointerMode === "locked" ? "Tab 释放鼠标 · Shift 按住加速 · R 重听 · 走近电脑 E 管理" : "鼠标可点击 · 按住画面拖动观察 · Shift 按住加速 · 电脑 E 管理");
     this.renderBusinessClock();
   }
 
   private enterReadOnly(message: string): void {
     this.saveSession?.release();
-    this.businessClock.reset();
+    this.resetClocks();
     this.shopAudio.setActive(false);
     this.stopSpeech();
     this.writerWarning = message;
     this.lastSaveText = "只读 · 本页已停止写入";
     this.mode = "readonly";
+    this.computerSession = false;
+    this.computerDesktop = true;
     this.dismissStreetDialogue();
     this.cashRegister.close();
     this.world?.setActive(false);
@@ -1881,10 +2023,10 @@ export class App3D {
 
   private setLearningPlayback(active: boolean): void {
     if (active === this.learningPlayback) return;
-    if (active) this.advanceBusinessTime();
+    if (active) { this.advanceDeliveryTime(); this.advanceBusinessTime() }
     this.learningPlayback = active;
-    if (active) this.businessClock.reset();
-    else this.businessClock.resume(performance.now());
+    if (active) this.resetClocks();
+    else this.resumeClocks(performance.now());
     if (this.mode === "playing" && !this.disposed) {
       this.world?.setActive(!active && !!this.saveSession?.canWrite && this.audioForeground && !document.hidden);
     }
@@ -2123,7 +2265,7 @@ export class App3D {
     this.receiptCustomer = 0;
     this.lastCustomerCue = "";
     this.dayReadyNotified = 0;
-    this.businessClock.reset();
+    this.resetClocks();
     this.closingWarningDay = 0;
     this.closeConfirmation = false;
     this.lastSaveText = "导入存档已安全保存";
@@ -2158,7 +2300,7 @@ export class App3D {
     this.receiptCustomer = 0;
     this.lastCustomerCue = "";
     this.dayReadyNotified = 0;
-    this.businessClock.reset();
+    this.resetClocks();
     this.closingWarningDay = 0;
     this.closeConfirmation = false;
     this.saveError = "";

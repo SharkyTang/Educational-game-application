@@ -1,3 +1,5 @@
+import { migrateDeliveryState } from "../../src/sim3d/delivery";
+import { receiveAllDeliveries } from "../helpers/sim3dDelivery";
 import { createDefaultCashDrawer } from "../../src/sim3d/cashDrawer";
 import { describe, expect, it } from "vitest";
 import { asV13CashSnapshot } from "../helpers/sim3dLegacyCash";
@@ -33,7 +35,7 @@ function act(state: SimState, command: SimCommand): SimState {
 
 function receivedStock(): SimState {
   const purchased = act(createFirstDayState(), { type: "PURCHASE_STOCK", orderId: "paid-opening", pairs: 3 });
-  return act(purchased, { type: "RECEIVE_DELIVERY" });
+  return receiveAllDeliveries(purchased);
 }
 
 function heldEmptyCrate(): SimState {
@@ -129,7 +131,7 @@ describe("read-only v6 migration into the recycling ledger", () => {
     expect(loaded.source).toBe("v6");
     expect(loaded.warning).toContain("不会额外发钱");
     expect(loaded.state).toEqual({
-      ...old, schemaVersion: 14, renovation: createFirstDayState().renovation, payment: null, recyclingRecords: [], streetSupportRecords: [],
+      ...old, schemaVersion: 15, delivery: migrateDeliveryState(old.purchases), renovation: createFirstDayState().renovation, payment: null, recyclingRecords: [], streetSupportRecords: [],
       cashReservePence: 0, cashJournal: [],
       cashDrawer: createDefaultCashDrawer(), cashDrawerOpening: createDefaultCashDrawer(), cashDrawerTransactionStart: 0,
       customer: { ...old.customer, contentVersion: 1 },
@@ -148,11 +150,11 @@ describe("read-only v6 migration into the recycling ledger", () => {
     for (const [key, value] of originals) expect(storage.getItem(key)).toBe(value);
     expect(storage.getItem(SIM_BACKUP_KEY)).toBeNull();
     expect(loadSimState(storage)).toEqual({ state: loaded.state, source: "primary" });
-    expect(reduceSim(loaded.state, { type: "RECEIVE_DELIVERY" }).state).toBe(loaded.state);
-    const received = act(act(loaded.state, { type: "RECYCLE_CRATE" }), { type: "RECEIVE_DELIVERY" });
+    expect(reduceSim(loaded.state, { type: "RECEIVE_DELIVERY", orderId: loaded.state.delivery.orderId ?? "already-received" }).state).toBe(loaded.state);
+    const received = receiveAllDeliveries(act(loaded.state, { type: "RECYCLE_CRATE" }));
     expect(received.items).toHaveLength(old.items.length);
     expect(received.cashPence).toBe(old.cashPence + RECYCLING_REWARD_PENCE);
-    expect(reduceSim(received, { type: "RECEIVE_DELIVERY" }).state).toBe(received);
+    expect(reduceSim(received, { type: "RECEIVE_DELIVERY", orderId: received.delivery.orderId ?? "already-received" }).state).toBe(received);
   });
 
   it("retains settled sales and closing cash, then audits closing-time recycling without repeating settlement", () => {

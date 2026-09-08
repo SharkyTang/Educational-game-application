@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { Vector3, type Engine, type Scene, type TransformNode, type UniversalCamera } from "@babylonjs/core";
 import {
-  CUSTOMER_EXIT_STOP_SECONDS, CUSTOMER_STOP_SECONDS, CUSTOMER_WALK_SPEED,
+  CUSTOMER_EXIT_STOP_SECONDS, CUSTOMER_STOP_SECONDS, CUSTOMER_WALK_SPEED, CUSTOMER_STREET_WALK_SPEED,
 } from "../../src/sim3d/customerSelection";
 import { createFirstDayState, type CrateId, type CustomerPhase, type PlayerPose, type Position, type ProductId, type SimState } from "../../src/sim3d/domain";
 import type { ProductDisplay } from "../../src/sim3d/productLayout";
@@ -101,14 +101,14 @@ function advanceCustomer(world: MotionRuntime, seconds: number): void {
 afterEach(() => { vi.restoreAllMocks() });
 
 describe("real ShopWorld customer movement", () => {
-  it("travels 1.41 metres in one second, including a normalised diagonal route", () => {
+  it("travels 1.7 metres in one second, including a normalised diagonal route", () => {
     const { world, animate, onArrive } = createMotionWorld();
     world.route = [{ x: 8, z: 6 }];
     advanceCustomer(world, 1);
-    expect(CUSTOMER_WALK_SPEED).toBeCloseTo(1.41, 8);
-    expect(world.customer.position.x).toBeCloseTo(1.41 * .8, 8);
-    expect(world.customer.position.z).toBeCloseTo(1.41 * .6, 8);
-    expect(Math.hypot(world.customer.position.x, world.customer.position.z)).toBeCloseTo(1.41, 8);
+    expect(CUSTOMER_WALK_SPEED).toBeCloseTo(1.7, 8);
+    expect(world.customer.position.x).toBeCloseTo(1.7 * .8, 8);
+    expect(world.customer.position.z).toBeCloseTo(1.7 * .6, 8);
+    expect(Math.hypot(world.customer.position.x, world.customer.position.z)).toBeCloseTo(1.7, 8);
     expect(world.customer.position.y).toBe(0);
     expect(animate).toHaveBeenLastCalledWith(true);
     expect(onArrive).not.toHaveBeenCalled();
@@ -119,7 +119,7 @@ describe("real ShopWorld customer movement", () => {
       const { world, frame, renderScene } = createMotionWorld();
       for (let index = 0; index < fps; index += 1) frame(1000 / fps);
       expect(renderScene).toHaveBeenCalledTimes(fps);
-      expect(world.customer.position.x).toBeCloseTo(1.41, 8);
+      expect(world.customer.position.x).toBeCloseTo(1.7, 8);
       expect(world.customer.position.z).toBe(0);
       return world.customer.position.x;
     });
@@ -196,9 +196,9 @@ describe("real ShopWorld customer movement", () => {
 
 describe("customer phase stops and single arrival notifications", () => {
   it.each([
-    { phase: "to-milk", seconds: .35 },
-    { phase: "to-bread", seconds: .35 },
-    { phase: "to-checkout", seconds: .35 },
+    { phase: "to-milk", seconds: .2 },
+    { phase: "to-bread", seconds: .2 },
+    { phase: "to-checkout", seconds: .2 },
     { phase: "leaving", seconds: .1 },
   ] as const)("waits $seconds seconds at the end of $phase and notifies only once", ({ phase, seconds }) => {
     const { world, onArrive, animate } = createMotionWorld(phase);
@@ -256,7 +256,7 @@ describe("customer phase stops and single arrival notifications", () => {
 });
 
 describe("real render-loop elapsed-time accounting", () => {
-  it("gives NPCs and the player 100 ms at 10 fps in substeps, while the truck keeps its 50 ms cap", () => {
+  it("gives NPCs and the player 100 ms at 10 fps in substeps, while deliveries are advanced by their independent clock", () => {
     const { world, frame, movePlayer, updateTruck } = createMotionWorld();
     const updateCustomer = vi.spyOn(world, "updateCustomer");
     frame(100);
@@ -264,7 +264,7 @@ describe("real render-loop elapsed-time accounting", () => {
     expect(updateCustomer.mock.calls.map(([dt]) => dt)).toEqual([.05, .05]);
     expect(world.customer.position.x).toBeCloseTo(CUSTOMER_WALK_SPEED * .1, 8);
     expect(movePlayer.mock.calls.map(([dt]) => dt)).toEqual([.05, .05]);
-    expect(updateTruck).toHaveBeenCalledExactlyOnceWith(.05);
+    expect(updateTruck).not.toHaveBeenCalled();
   });
 
   it("caps a multi-second frame at 250 ms for NPCs and the player, never passing more than 50 ms to one movement step", () => {
@@ -277,7 +277,7 @@ describe("real render-loop elapsed-time accounting", () => {
     expect(steps.reduce((sum, dt) => sum + dt, 0)).toBeCloseTo(.25, 10);
     expect(world.customer.position.x).toBeCloseTo(CUSTOMER_WALK_SPEED * .25, 8);
     expect(movePlayer.mock.calls.map(([dt]) => dt)).toEqual([.05, .05, .05, .05, .05]);
-    expect(updateTruck).toHaveBeenCalledExactlyOnceWith(.05);
+    expect(updateTruck).not.toHaveBeenCalled();
   });
 
   it("accumulates elapsed frame time for the 100 ms onFrame cadence, not an individual physics substep", () => {
@@ -317,5 +317,22 @@ describe("real render-loop elapsed-time accounting", () => {
     expect(updateTruck).not.toHaveBeenCalled();
     expect(renderScene).not.toHaveBeenCalled();
     expect(onFrame).not.toHaveBeenCalled();
+  });
+});
+
+
+describe("street and indoor pace", () => {
+  it("walks briskly on the pavement and returns to the indoor pace without changing player speed", () => {
+    const { world } = createMotionWorld();
+    world.customer.position.set(-15, 0, -6.1);
+    world.camera.position.set(0, 1.65, -10);
+    world.route = [{ x: 15, z: -6.1 }];
+    advanceCustomer(world, 1);
+    expect(world.customer.position.x).toBeCloseTo(-15 + CUSTOMER_STREET_WALK_SPEED, 6);
+    expect(CUSTOMER_STREET_WALK_SPEED).toBe(2.2);
+    world.customer.position.set(0, 0, 0);
+    world.route = [{ x: 10, z: 0 }];
+    advanceCustomer(world, 1);
+    expect(world.customer.position.x).toBeCloseTo(1.7, 6);
   });
 });

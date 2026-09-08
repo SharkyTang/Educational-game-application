@@ -1,3 +1,4 @@
+import { receiveAllDeliveries } from "../helpers/sim3dDelivery";
 import { describe, expect, it } from "vitest";
 import {
   createFirstDayState, reduceSim, validateSimState, validateV13SimState,
@@ -33,7 +34,7 @@ function pendingCash(): SimState {
   let state = step(createFirstDayState(), { type: "PURCHASE_STOCK", orderId: "cash-v3-migration", lines: [
     { productId: "water", quantity: 2 },
   ] });
-  state = step(state, { type: "RECEIVE_DELIVERY" });
+  state = receiveAllDeliveries(state);
   state = step(state, { type: "PICK_CRATE", crateId: "water-crate" });
   for (let slot = 0; slot < 2; slot++) state = step(state, { type: "STOCK", productId: "water", slot });
   state = step(state, { type: "DROP_HELD", position: state.crates.find((crate) => crate.id === "water-crate")!.position });
@@ -60,7 +61,7 @@ function settledCash(): SimState {
 
 describe("cash management v14 persistence and read-only v13 migration", () => {
   it("uses a new namespace and keeps the cross-version writer lock", () => {
-    expect(SIM_STORAGE_KEY).toBe("english-high-street:sim3d:v14");
+    expect(SIM_STORAGE_KEY).toBe("english-high-street:sim3d:v15");
     expect(SIM_BACKUP_KEY).toBe(`${SIM_STORAGE_KEY}:backup`);
     expect(SIM_V13_STORAGE_KEY).toBe("english-high-street:sim3d:v13");
     expect(SIM_V13_BACKUP_KEY).toBe(`${SIM_V13_STORAGE_KEY}:backup`);

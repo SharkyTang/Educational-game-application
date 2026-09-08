@@ -1,3 +1,4 @@
+import { receiveAllDeliveries } from "../helpers/sim3dDelivery";
 import { describe, expect, it } from "vitest";
 import { createFirstDayState, reduceSim, validateSimState, type SimCommand, type SimState } from "../../src/sim3d/domain";
 import { getStreetProgress, getVenueProgress } from "../../src/sim3d/progression";
@@ -23,7 +24,7 @@ function serve(state: SimState): SimState {
 describe("refund-aware business progress", () => {
   it("removes refunded orders from experience and achievements and awards a resale only once", () => {
     let state = step(createFirstDayState(), { type: "PURCHASE_STOCK", orderId: "refund-progress", lines: [{ productId: "water", quantity: 1 }] });
-    state = step(state, { type: "RECEIVE_DELIVERY" });
+    state = receiveAllDeliveries(state);
     state = step(state, { type: "PICK_CRATE", crateId: "water-crate" });
     state = step(state, { type: "STOCK", productId: "water", slot: 0 });
     state = step(state, { type: "DROP_HELD", position: state.crates.find((crate) => crate.id === "water-crate")!.position });

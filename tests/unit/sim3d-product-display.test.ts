@@ -1,3 +1,4 @@
+import { receiveAllDeliveries } from "../helpers/sim3dDelivery";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { Mesh, NullEngine, Ray, Scene, TransformNode, UniversalCamera, Vector3 } from "@babylonjs/core";
 import { createCrate, createShop, setShelfCapacity } from "../../src/sim3d/assets";
@@ -210,7 +211,7 @@ describe("all-product game presentation", () => {
     }
     // Exercise the world placement too; lifting a box must keep its established hand pose.
     let state = command(createFirstDayState(), { type: "PURCHASE_STOCK", orderId: "supported-soap", lines: [{ productId: "soap", quantity: 1 }] });
-    state = command(state, { type: "RECEIVE_DELIVERY" });
+    state = receiveAllDeliveries(state);
     const view = harness(state, [...shop.colliders, ...street.colliders], supports);
     const soapCrate = view.crates.get("soap-crate")!;
     const soap = [...view.products.values()][0]!;
@@ -225,7 +226,7 @@ describe("all-product game presentation", () => {
     const initial = harness(createFirstDayState());
     expect(initial.crates.size).toBe(0);
     let state = command(createFirstDayState(), { type: "PURCHASE_STOCK", orderId: "empty-box-visual", lines: [{ productId: "soap", quantity: 1 }] });
-    state = command(state, { type: "RECEIVE_DELIVERY" });
+    state = receiveAllDeliveries(state);
     const point = state.crates.find((entry) => entry.id === "soap-crate")!.position;
     const view = harness(state);
     expect(view.isFree(point.x, point.z)).toBe(false);
@@ -266,7 +267,7 @@ describe("all-product game presentation", () => {
     state = command(state, { type: "PURCHASE_STOCK", orderId: "soap-visual", lines: [{ productId: "soap", quantity: 1 }] });
     view.state = state; view.syncInventory();
     expect(view.products.size).toBe(0); expect(view.productVisuals.loadedProductCount).toBe(0);
-    state = command(state, { type: "RECEIVE_DELIVERY" }); view.state = state; view.syncInventory();
+    state = receiveAllDeliveries(state); view.state = state; view.syncInventory();
     const item = state.items.find((entry) => entry.productId === "soap")!;
     const visual = view.products.get(item.id)!;
     expect(visual.metadata.productId).toBe("soap"); expect(visual.parent).toBe(view.crates.get("soap-crate"));

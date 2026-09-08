@@ -1,3 +1,5 @@
+import { openSettings, openComputer } from "./helpers/sim3d-computer";
+import { receiveFixtureDeliveries } from "./helpers/sim3d-delivery";
 import { expect, test, type Page } from "@playwright/test";
 import { BUSINESS_DURATION_MS } from "../../src/sim3d/businessTime";
 import {
@@ -28,7 +30,7 @@ function stockedFixture(quantity = 4): SimState {
     type: "PURCHASE_STOCK", orderId: "business-time-delivery",
     lines: [{ productId: "milk", quantity }, { productId: "bread", quantity }],
   });
-  state = step(state, { type: "RECEIVE_DELIVERY" });
+  state = receiveFixtureDeliveries(state);
   for (const productId of ["milk", "bread"] as const) {
     const crate = state.crates.find((entry) => entry.productId === productId)!;
     state = step(state, { type: "PICK_CRATE", crateId: crate.id });
@@ -84,7 +86,7 @@ async function launchFixture(page: Page, fixture: SimState): Promise<void> {
   expect(validateSimState(fixture)).toBe(true);
   await page.goto("/");
   await start(page);
-  await page.keyboard.press("b");
+  await openSettings(page);
   await expect(page.locator("#s3-pause")).toBeVisible();
   await page.getByText("存档与试玩管理", { exact: true }).click();
   const chooser = page.waitForEvent("filechooser");
@@ -99,8 +101,7 @@ async function launchFixture(page: Page, fixture: SimState): Promise<void> {
 }
 
 async function openDay(page: Page): Promise<void> {
-  if (!(await page.locator("#s3-pause").isVisible())) await page.locator("#s3-open-day").click();
-  await page.locator("#s3-tab-day").click();
+  await openComputer(page, "day");
   await expect(page.locator("#s3-panel-day")).toBeVisible();
 }
 
@@ -119,8 +120,8 @@ test("business time: the saved appointment brings a fourth real customer after t
   expect(fixture.transactions).toHaveLength(3);
   expect(fixture.day.phase).toBe("open");
   expect(fixture.day.targetCustomers).toBeNull();
-  expect(fixture.day.nextCustomerAtMs! - fixture.day.elapsedOpenMs).toBeGreaterThanOrEqual(8_000);
-  expect(fixture.day.nextCustomerAtMs! - fixture.day.elapsedOpenMs).toBeLessThanOrEqual(12_000);
+  expect(fixture.day.nextCustomerAtMs! - fixture.day.elapsedOpenMs).toBeGreaterThanOrEqual(2_000);
+  expect(fixture.day.nextCustomerAtMs! - fixture.day.elapsedOpenMs).toBeLessThanOrEqual(4_000);
   await launchFixture(page, fixture);
   await expect(page.locator("#s3-sold")).toHaveText("今日 3 单 · 库存 2 件");
   await expect(page.locator("#s3-pause")).toBeHidden();
@@ -178,7 +179,9 @@ test("business time: 19:00 stops new arrivals without interrupting a received ca
 
   const paid = await payScannedCheckout(page);
   expect(paid.cashPence).toBe(fixture.cashPence + getCheckoutTotal(fixture));
-  await expect(page.locator("#s3-panel-day")).toBeVisible({ timeout: 20_000 });
+  await expect.poll(async () => (await readBrowserSnapshot(page)).customer.phase, { timeout: 20_000 }).toBe("complete");
+  await expect(page.locator("#s3-pause")).toBeHidden();
+  await openComputer(page, "day");
   await expect(page.locator("#s3-settle-day")).toBeEnabled();
   await expect(page.locator("#s3-day-progress")).toContainText("已收款 2 单");
   const finished = await readBrowserSnapshot(page);
@@ -262,10 +265,10 @@ test("business time: preparation is untimed and cancelling or confirming an earl
   expect(settled.settlements).toHaveLength(1);
   expect(settled.settlements[0]!.paidCustomers).toBe(0);
   expect(settled.cashPence).toBe(1200);
-  await page.locator("#s3-tab-street").click();
+  await openComputer(page, "street");
   await expect(page.locator("#s3-street-level")).toHaveText("Lv. 1");
   await expect(page.locator("#s3-venue-status-cafe")).toHaveText("暂未开放");
-  await page.locator("#s3-tab-day").click();
+  await openComputer(page, "day");
   await page.locator("#s3-next-day").click();
   await expect(page.locator("#s3-panel-supply")).toBeVisible();
   await expect(page.locator("#s3-business-time")).toHaveText("08:30");

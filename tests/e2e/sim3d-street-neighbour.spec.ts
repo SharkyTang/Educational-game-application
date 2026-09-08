@@ -1,3 +1,4 @@
+import { openSettings, openComputer } from "./helpers/sim3d-computer";
 import { expect, test, type Page } from "@playwright/test";
 import { createFirstDayState, getDaySummary, reduceSim, validateSimState, type SimState } from "../../src/sim3d/domain";
 import { streetNeighbourForDay } from "../../src/sim3d/streetNeighbourContent";
@@ -45,7 +46,7 @@ async function launchFixture(page: Page, fixture: SimState): Promise<void> {
   expect(validateSimState(fixture)).toBe(true);
   await page.goto("/");
   await start(page);
-  await page.keyboard.press("KeyB");
+  await openSettings(page);
   await expect(page.locator("#s3-pause")).toBeVisible();
   await page.getByText("存档与试玩管理", { exact: true }).click();
   const chooser = page.waitForEvent("filechooser");
@@ -105,7 +106,7 @@ test("street neighbour: walk into range, chat and give £1 once through the real
 
   await page.locator("#s3-neighbour-close").click();
   await expect(page.locator("#s3-neighbour-dialog")).toBeHidden();
-  await page.locator("#s3-open-day").click();
+  await openComputer(page, "day");
   await expect(page.locator("#s3-panel-day")).toBeVisible();
   await expect(page.locator("#s3-day-community")).toHaveText("£1.00");
   await expect(page.locator("#s3-day-cash")).toHaveText("£11.00");

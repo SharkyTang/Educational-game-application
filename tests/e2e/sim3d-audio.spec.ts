@@ -1,3 +1,5 @@
+import { openSettings } from "./helpers/sim3d-computer";
+import { receiveFixtureDeliveries } from "./helpers/sim3d-delivery";
 import { expect, test, type Page } from "@playwright/test";
 import { createFirstDayState, reduceSim, validateSimState, type SimCommand, type SimState } from "../../src/sim3d/domain";
 
@@ -84,7 +86,7 @@ async function start(page: Page): Promise<void> {
 }
 
 async function soundSettings(page: Page): Promise<void> {
-  await page.keyboard.press("b");
+  await openSettings(page);
   await expect(page.locator("#s3-pause")).toBeVisible();
   if (!(await page.locator("#s3-music-volume").isVisible())) await page.getByText("声音与音乐", { exact: true }).click();
 }
@@ -97,7 +99,7 @@ function step(state: SimState, command: SimCommand): SimState {
 
 function approachingCheckout(): SimState {
   let state = step(createFirstDayState(), { type: "PURCHASE_STOCK", orderId: "audio-one-sale", lines: [{ productId: "milk", quantity: 1 }, { productId: "bread", quantity: 1 }] });
-  state = step(state, { type: "RECEIVE_DELIVERY" });
+  state = receiveFixtureDeliveries(state);
   for (const productId of ["milk", "bread"] as const) {
     const item = state.items.find((entry) => entry.productId === productId)!;
     state = step(state, { type: "TAKE_ITEM", itemId: item.id });
@@ -111,7 +113,7 @@ function approachingCheckout(): SimState {
 
 async function importSnapshot(page: Page, state: SimState): Promise<void> {
   expect(validateSimState(state)).toBe(true);
-  await page.keyboard.press("b");
+  await openSettings(page);
   await expect(page.locator("#s3-pause")).toBeVisible();
   await page.getByText("存档与试玩管理", { exact: true }).click();
   const chooser = page.waitForEvent("filechooser");

@@ -1,3 +1,4 @@
+import { receiveAllDeliveries } from "../helpers/sim3dDelivery";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   createFirstDayState, getDaySummary, reduceSim, validateSimState,
@@ -65,7 +66,7 @@ function act(state: SimState, command: SimCommand): SimState {
 /** Buy and sell real stock, complete card/cash payments, then close the timed day. */
 function earned(): SimState {
   let state = act(createFirstDayState(), { type: "PURCHASE_STOCK", orderId: "renovation-commit-stock", pairs: 3 });
-  state = act(state, { type: "RECEIVE_DELIVERY" });
+  state = receiveAllDeliveries(state);
   for (const productId of ["milk", "bread"] as const) {
     const crateId = state.crates.find((crate) => crate.productId === productId)!.id;
     state = act(state, { type: "PICK_CRATE", crateId });
@@ -104,9 +105,9 @@ async function harness(): Promise<{ app: AppHarness; storage: MemoryStorage }> {
   const state = saveSession.load().state;
   const app = Object.create(App3D.prototype) as AppHarness;
   Object.assign(app, {
-    state, saveSession, mode: "paused", ready: true, saveError: "", lastSaveText: "", writerWarning: "",
+    state, saveSession, mode: "paused", computerSession: true, ready: true, saveError: "", lastSaveText: "", writerWarning: "",
     world: { setState: vi.fn(), getPose: () => ({ ...state.playerPose }) },
-    advanceBusinessTime: vi.fn(), renderState: vi.fn(), renderSaveStatus: vi.fn(),
+    advanceBusinessTime: vi.fn(), advanceDeliveryTime: vi.fn(), renderState: vi.fn(), renderSaveStatus: vi.fn(),
     syncCustomerCue: vi.fn(), playInteractionSound: vi.fn(), notify: vi.fn(),
     // Only read-only presentation is omitted; session conflict detection/release is real.
     enterReadOnly: vi.fn((message: string) => {

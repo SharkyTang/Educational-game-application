@@ -1,3 +1,4 @@
+import { receiveAllDeliveries } from "../helpers/sim3dDelivery";
 import { describe, expect, it } from "vitest";
 import { payScannedCheckout } from "../helpers/sim3dPayment";
 import {
@@ -15,7 +16,7 @@ function act(state: SimState, command: SimCommand): SimState {
 
 function serveDay(state: SimState): SimState {
   state = act(state, { type: "PURCHASE_STOCK", orderId: `street-day-${state.day.number}`, pairs: 3 });
-  state = act(state, { type: "RECEIVE_DELIVERY" });
+  state = receiveAllDeliveries(state);
   for (const productId of ["milk", "bread"] as const) {
     const goods = state.items.filter((item) => item.productId === productId && item.location.kind === "crate");
     for (let slot = 0; slot < 3; slot += 1) {
@@ -52,7 +53,7 @@ describe("business milestones for future high street venues", () => {
   it("does not turn purchasing, delivery, inspection or a failed payment into business or English mastery", () => {
     let state = act(createFirstDayState(), { type: "PURCHASE_STOCK", orderId: "no-experience-for-orders", pairs: 1 });
     expect(getStreetProgress(state).experience).toBe(0);
-    state = act(state, { type: "RECEIVE_DELIVERY" });
+    state = receiveAllDeliveries(state);
     state = act(state, { type: "INSPECT", productId: "milk" });
     expect(getStreetProgress(state).experience).toBe(0);
     for (const productId of ["milk", "bread"] as const) {

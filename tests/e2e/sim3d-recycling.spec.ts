@@ -1,3 +1,5 @@
+import { openSettings, openComputer } from "./helpers/sim3d-computer";
+import { receiveFixtureDeliveries } from "./helpers/sim3d-delivery";
 import { expect, test, type Page } from "@playwright/test";
 import { asV13CashSnapshot } from "../helpers/sim3dLegacyCash";
 import { readFile, writeFile } from "node:fs/promises";
@@ -18,7 +20,7 @@ function step(state: SimState, command: SimCommand): SimState {
 }
 
 async function openManagement(page: Page): Promise<void> {
-  if (!(await page.locator("#s3-pause").isVisible())) await page.keyboard.press("b");
+  await openSettings(page);
   await expect(page.locator("#s3-pause")).toBeVisible();
 }
 
@@ -55,7 +57,7 @@ test("empty boxes: real recycling target, one reward, reload, separate ledger an
     if (response.url().includes("/assets/sim3d/") && response.status() >= 400) errors.push(`${response.status()} ${response.url()}`);
   });
   let full = step(createFirstDayState(), { type: "PURCHASE_STOCK", orderId: "recycling-browser", lines: [{ productId: "milk", quantity: 1 }] });
-  full = step(full, { type: "RECEIVE_DELIVERY" });
+  full = receiveFixtureDeliveries(full);
   const originalPosition = { ...full.crates.find((crate) => crate.id === "milk-crate")!.position };
   full = step(full, { type: "PICK_CRATE", crateId: "milk-crate" });
   full = step(full, { type: "SAVE_POSE", pose: stationPose });
@@ -112,7 +114,7 @@ test("empty boxes: real recycling target, one reward, reload, separate ledger an
   expect(recycled.recyclingRecords).toHaveLength(1);
   expect(recycled.items).toEqual(empty.items);
   expect(getDaySummary(recycled)).toMatchObject({ recycledCrates: 1, recyclingIncomePence: 5, revenuePence: 0, grossProfitPence: 0 });
-  await page.locator("#s3-tab-day").click();
+  await openComputer(page, "day");
   await expect(page.locator("#s3-day-recycling")).toHaveText("£0.05");
   await expect(page.locator("#s3-day-recycling-count")).toContainText("今日回收 1 箱");
   await expect(page.locator("#s3-day-revenue")).toHaveText("£0.00");
@@ -128,15 +130,16 @@ test("empty boxes: real recycling target, one reward, reload, separate ledger an
 
   // A real newly placed order can use the original box's now-free unloading position.
   await openManagement(page);
-  await page.locator("#s3-tab-supply").click();
+  await openComputer(page, "supply");
   await page.locator("#s3-quantity-soap").fill("1");
   await page.locator("#s3-purchase").click();
   await expect(page.locator("#s3-pause")).toBeHidden();
   const pending = await exportSnapshot(page);
   await importSnapshot(page, step(pending, { type: "SAVE_POSE", pose: { x: 3, z: -6.9, yaw: Math.PI, pitch: .06 } }));
-  await expect(page.locator("#s3-target-action")).toContainText("签收 1 件", { timeout: 15_000 });
+  await expect(page.locator("#s3-target-action")).toContainText("签收本单 1 件", { timeout: 15_000 });
   await page.keyboard.press("e");
-  await expect(page.locator("#s3-target-action")).toContainText("查看今日进货单");
+  await expect(page.locator("#s3-delivery-hud")).toContainText("已签收");
+  await expect(page.locator("#s3-pause")).toBeHidden();
   const delivered = await exportSnapshot(page);
   expect(delivered.crates.find((crate) => crate.id === "soap-crate")?.position).toEqual(originalPosition);
   expect(delivered.recyclingRecords).toEqual(recycled.recyclingRecords);

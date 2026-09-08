@@ -1,3 +1,4 @@
+import { receiveAllDeliveries } from "../helpers/sim3dDelivery";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { payScannedCheckout } from "../helpers/sim3dPayment";
 import { DynamicTexture, NullEngine, PBRMaterial, Scene, TransformNode, UniversalCamera, Vector3 } from "@babylonjs/core";
@@ -38,7 +39,7 @@ describe("cardboard recycling in the physical shop", () => {
   }
   function soapDelivery(quantity = 1): SimState {
     const ordered = act(createFirstDayState(), { type: "PURCHASE_STOCK", orderId: "recycling-presentation", lines: [{ productId: "soap", quantity }] });
-    return act(act(ordered, { type: "RECEIVE_DELIVERY" }), { type: "PICK_CRATE", crateId: "soap-crate" });
+    return act(receiveAllDeliveries(ordered), { type: "PICK_CRATE", crateId: "soap-crate" });
   }
   function harness(state: SimState): WorldHarness {
     const camera = new UniversalCamera("recycling-test-camera", new Vector3(3.5, 1.65, -6.7), scene);
@@ -130,6 +131,6 @@ describe("cardboard recycling in the physical shop", () => {
     expectRecyclingGuide();
     world.state = act(state, { type: "RECYCLE_CRATE" });
     world.updateGuide();
-    expect(world.callbacks.onGuide).toHaveBeenLastCalledWith(expect.stringContaining("今日已日结"));
+    expect(world.callbacks.onGuide).toHaveBeenLastCalledWith(expect.stringContaining("开始下一天"));
   });
 });

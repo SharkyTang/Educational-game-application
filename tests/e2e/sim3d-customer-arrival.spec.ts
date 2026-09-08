@@ -1,3 +1,5 @@
+import { openSettings } from "./helpers/sim3d-computer";
+import { receiveFixtureDeliveries } from "./helpers/sim3d-delivery";
 import { expect, test, type Page } from "@playwright/test";
 import { readFile } from "node:fs/promises";
 import { PRODUCTS, createFirstDayState, reduceSim, validateSimState, type SimCommand, type SimState } from "../../src/sim3d/domain";
@@ -21,7 +23,7 @@ function beforeOpeningFixture(seed: number): SimState {
     type: "PURCHASE_STOCK", orderId: `arrival-stock-${seed}`,
     lines: [{ productId: "milk", quantity: 2 }, { productId: "bread", quantity: 2 }],
   });
-  state = command(state, { type: "RECEIVE_DELIVERY" });
+  state = receiveFixtureDeliveries(state);
   for (const productId of ["milk", "bread"] as const) {
     const crate = state.crates.find((entry) => entry.productId === productId)!;
     state = command(state, { type: "PICK_CRATE", crateId: crate.id });
@@ -49,7 +51,7 @@ async function start(page: Page): Promise<void> {
 }
 
 async function pause(page: Page): Promise<void> {
-  if (!(await page.locator("#s3-pause").isVisible())) await page.keyboard.press("KeyB");
+  await openSettings(page);
   await expect(page.locator("#s3-pause")).toBeVisible();
 }
 

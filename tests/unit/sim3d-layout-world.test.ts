@@ -4,6 +4,8 @@ import { createShop, type ShopEnvironment } from "../../src/sim3d/assets";
 import { createCatalogFixtures, type CatalogFixtures } from "../../src/sim3d/productFixtures";
 import { createStreet } from "../../src/sim3d/street";
 import { createRecyclingStation } from "../../src/sim3d/recyclingStation";
+import { createWorkstation, type WorkstationAsset } from "../../src/sim3d/workstationAsset";
+import { workstationServicePoint } from "../../src/sim3d/workstation";
 import { createFirstDayState, PRODUCT_IDS, PRODUCTS, type CustomerPhase, type ProductId, type SimState } from "../../src/sim3d/domain";
 import { segmentClear, type FloorPoint, type LayoutCollider, type ProductDisplay } from "../../src/sim3d/productLayout";
 import { ProductVisuals } from "../../src/sim3d/productPresentation";
@@ -17,6 +19,7 @@ interface WorldHarness {
   scene: Scene;
   shop: ShopEnvironment;
   catalogFixtures: CatalogFixtures;
+  workstation: WorkstationAsset;
   camera: UniversalCamera;
   customer: TransformNode;
   customerPhase: CustomerPhase;
@@ -60,14 +63,15 @@ describe("renovation applied to real world interactions, stock and movement", ()
     const catalogFixtures = createCatalogFixtures(scene, PRODUCTS, state.renovation.layout);
     const street = createStreet(scene);
     const recycling = createRecyclingStation(scene);
+    const workstation = createWorkstation(scene, state.renovation.layout.workstation);
     const customer = new TransformNode("layout-test-customer", scene);
     const basket = new TransformNode("layout-test-basket", scene); basket.parent = customer;
     const view = Object.create(ShopWorld.prototype) as WorldHarness;
     Object.assign(view, {
-      state, scene, shop, catalogFixtures, street, camera: new UniversalCamera("layout-test-eyes", new Vector3(0, 1.65, -3.5), scene),
+      state, scene, shop, catalogFixtures, street, workstation, camera: new UniversalCamera("layout-test-eyes", new Vector3(0, 1.65, -3.5), scene),
       expansionLight: new PointLight("layout-test-expanded-light", new Vector3(0, 2.68, 5.5), scene),
       secondExpansionLight: new PointLight("layout-test-second-expanded-light", new Vector3(0, 2.68, 8.5), scene),
-      colliders: [...shop.colliders, ...catalogFixtures.colliders, ...street.colliders, recycling.collider],
+      colliders: [...shop.colliders, ...catalogFixtures.colliders, ...street.colliders, recycling.collider, workstation.collider],
       fixedColliders: [...street.colliders, recycling.collider], productVisuals: new ProductVisuals(scene),
       crateSupports: [], occupiedCrates: new Set(), products: new Map(), crates: new Map(),
       hands: new TransformNode("layout-test-hands", scene), basket, customer, customerActors: { play: vi.fn(), select: vi.fn() },
@@ -92,12 +96,31 @@ describe("renovation applied to real world interactions, stock and movement", ()
   function apply(view: WorldHarness, layout: ShopLayout): void {
     const next = structuredClone(view.state);
     next.revision += 1;
-    next.renovation = { ...next.renovation, layout: { ...layout, equipment: next.renovation.layout.equipment },
+    next.renovation = { ...next.renovation, layout: { ...layout, equipment: next.renovation.layout.equipment,
+      workstation: { ...(layout.workstation ?? next.renovation.layout.workstation) } },
       expansionDay: layout.expansion ? 1 : null, secondExpansionDay: layout.expansion >= 2 ? 1 : null };
     view.setState(next);
     // The real render loop refreshes descendant matrices before the next visible frame/pick.
     scene.render();
   }
+
+  it("synchronizes a computer-only move with physical picking, collision and the saved interaction destination", () => {
+    const view = harness();
+    const layout = structuredClone(view.state.renovation.layout);
+    layout.expansion = 1;
+    layout.workstation = { x: -1.8, z: 5.6, rotation: 1 };
+    expect(validateShopLayout(layout).valid).toBe(true);
+    apply(view, layout);
+    expect(view.workstation.root.position.x).toBe(-1.8);
+    expect(view.workstation.root.position.z).toBe(5.6);
+    expect(view.colliders).toContain(view.workstation.collider);
+    expect(view.isFree(-1.8, 5.6)).toBe(false);
+    const service = workstationServicePoint(layout.workstation);
+    const origin = new Vector3(service.x, 1.65, service.z);
+    const ray = new Ray(origin, view.workstation.interactionPoint.subtract(origin).normalize(), 2.6);
+    expect(scene.pickWithRay(ray, (mesh) => mesh.isDescendantOf(view.workstation.root))?.pickedMesh).toBe(view.workstation.interactionMesh);
+    expect(view.state.renovation.layout.workstation).toEqual(layout.workstation);
+  });
 
   it("keeps actual stocked models on their physical shelf surfaces and retags moved interaction positions", () => {
     const state = createFirstDayState();

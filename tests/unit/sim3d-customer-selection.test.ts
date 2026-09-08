@@ -1,3 +1,4 @@
+import { asV14BusinessSnapshot } from "../helpers/sim3dDelivery";
 import { describe, expect, it, vi } from "vitest";
 import {
   CUSTOMER_CONTENT_VERSION, CUSTOMER_CORPUS, CUSTOMER_PROFILES, CUSTOMER_STOP_SECONDS, CUSTOMER_WALK_SPEED,
@@ -185,7 +186,7 @@ describe("saved customer variety and scene-specific shuffle bags", () => {
   it.each([4, 5])("accepts original v%i saves without inventing cash, stock, or a new random choice on load", (schemaVersion) => {
     const current = createFirstDayState();
     const { payment: _payment, recyclingBatches: _batches, recyclingRecords: _records,
-      cashJournal: _cashJournal, cashReservePence: _cashReservePence, day, ...previous } = structuredClone(current);
+      cashJournal: _cashJournal, cashReservePence: _cashReservePence, day, ...previous } = asV14BusinessSnapshot(current);
     const old = {
       ...previous, schemaVersion,
       customer: { phase: current.customer.phase, number: current.customer.number },
@@ -239,7 +240,7 @@ describe("saved customer variety and scene-specific shuffle bags", () => {
   });
 
   it("retains faster walking and short route stops independently of business-day arrival intervals", () => {
-    expect(CUSTOMER_WALK_SPEED).toBeCloseTo(.94 * 1.5);
+    expect(CUSTOMER_WALK_SPEED).toBeCloseTo(1.7);
     expect(CUSTOMER_STOP_SECONDS).toBeLessThan(.5);
   });
 });

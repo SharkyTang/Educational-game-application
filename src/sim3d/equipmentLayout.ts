@@ -21,9 +21,12 @@ import {
   shopBounds,
   shopWallColliders,
   validateShopLayoutReachability,
+  validateShopLayout,
   validateShopLayoutStructure,
   type ShopLayout,
 } from "./shopLayout";
+import { DEFAULT_WORKSTATION_PLACEMENT, FALLBACK_WORKSTATION_PLACEMENT,
+  workstationBounds, type WorkstationPlacement } from "./workstation";
 
 const EPSILON = 1e-8;
 const MAX_EQUIPMENT = 40;
@@ -136,6 +139,12 @@ export function validateEquipmentLayout(
       || !finite(box.minZ) || !finite(box.maxZ) || box.minX >= box.maxX || box.minZ >= box.maxZ)) {
     return { valid: false, reason: "货箱占位数据无效，暂时不能应用设备布局。" };
   }
+  // Computer geometry is checked here too because domain commands may validate
+  // the composite equipment layout without going through the editor first.
+  if (layout.workstation) {
+    const baseValidation = validateShopLayout(layout, extraObstacles);
+    if (!baseValidation.valid) return baseValidation;
+  }
   const byId = new Map(state.instances.map((instance) => [instance.id, instance]));
   if (layout.equipment.some((placement) => !byId.has(placement.instanceId))) {
     return { valid: false, reason: "布局中含有未购买的设备。" };
@@ -193,4 +202,30 @@ export function suggestEquipmentPlacement(layout: EquipmentShopLayout, state: Eq
     if (validateEquipmentLayout(candidate, state, extraObstacles).valid) return placement;
   }
   return null;
+}
+
+/** Adds one free desk without rearranging any old furniture, stock, ownership or cash. */
+export function suggestWorkstationPlacement(layout: EquipmentShopLayout, state: EquipmentAssetState, extraObstacles: readonly LayoutCollider[] = []): WorkstationPlacement {
+  const base: EquipmentShopLayout = { ...layout };
+  delete base.workstation;
+  const valid = (workstation: WorkstationPlacement): boolean => validateEquipmentLayout({ ...base, workstation }, state, extraObstacles).valid;
+  if (valid(DEFAULT_WORKSTATION_PLACEMENT)) return { ...DEFAULT_WORKSTATION_PLACEMENT };
+  const room = shopBounds(layout.expansion);
+  const occupied = [...layoutColliders(base), ...equipmentLayoutColliders(base, state), ...RESERVED_LAYOUT_AREAS, ...extraObstacles];
+  const candidates: WorkstationPlacement[] = [];
+  for (let ix = Math.ceil(room.minX * 10); ix <= Math.floor(room.maxX * 10); ix += 1) {
+    for (let iz = Math.ceil(room.minZ * 10); iz <= Math.floor(room.maxZ * 10); iz += 1) {
+      for (const rotation of [0, 1, 2, 3] as const) {
+        const candidate = { x: ix / 10, z: iz / 10, rotation };
+        const bounds = workstationBounds(candidate);
+        if (insideBounds(bounds, room) && !overlaps(bounds, SHOP_ENTRANCE) && !occupied.some((obstacle) => overlaps(bounds, obstacle))) candidates.push(candidate);
+      }
+    }
+  }
+  const distance = (candidate: WorkstationPlacement): number => (candidate.x - DEFAULT_WORKSTATION_PLACEMENT.x) ** 2 + (candidate.z - DEFAULT_WORKSTATION_PLACEMENT.z) ** 2;
+  candidates.sort((a, b) => distance(a) - distance(b) || a.x - b.x || a.z - b.z || a.rotation - b.rotation);
+  for (const candidate of candidates) if (valid(candidate)) return candidate;
+  // Authored left-doorway space has no legal carton slots or player furniture.
+  // It remains a real computer interaction; no remote management bypass is added.
+  return { ...FALLBACK_WORKSTATION_PLACEMENT };
 }

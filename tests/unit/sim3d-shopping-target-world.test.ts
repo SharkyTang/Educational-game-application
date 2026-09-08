@@ -1,3 +1,4 @@
+import { receiveAllDeliveries } from "../helpers/sim3dDelivery";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { NullEngine, Scene, TransformNode } from "@babylonjs/core";
 import {
@@ -33,7 +34,7 @@ function shoppingState(): SimState {
   state = act(state, {
     type: "PURCHASE_STOCK", orderId: "route-cereal", lines: [{ productId: "cereal", quantity: 2 }],
   });
-  state = act(state, { type: "RECEIVE_DELIVERY" });
+  state = receiveAllDeliveries(state);
   const [baseItem, equipmentItem] = state.items.filter((item) => item.productId === "cereal");
   state = act(state, { type: "TAKE_ITEM", itemId: baseItem!.id });
   state = act(state, { type: "STOCK", productId: "cereal", slot: 0 });

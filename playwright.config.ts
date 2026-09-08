@@ -7,7 +7,9 @@ export default defineConfig({
   reporter: "list",
   use: {
     baseURL: "http://127.0.0.1:4201",
-    trace: "retain-on-failure",
+    // Per-action canvas screencasts can delay keyup long enough to overshoot
+    // real 3D walking targets. Keep the action trace and failure screenshot.
+    trace: { mode: "retain-on-failure", screenshots: false, snapshots: false },
     screenshot: "only-on-failure",
   },
   webServer: {

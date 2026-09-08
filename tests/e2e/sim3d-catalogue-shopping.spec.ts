@@ -1,3 +1,5 @@
+import { openSettings, openComputer } from "./helpers/sim3d-computer";
+import { receiveFixtureDeliveries } from "./helpers/sim3d-delivery";
 import { expect, test, type Page } from "@playwright/test";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import {
@@ -35,14 +37,13 @@ async function startFresh(page: Page): Promise<void> {
 }
 
 async function openSupply(page: Page): Promise<void> {
-  if (!(await page.locator("#s3-pause").isVisible())) await page.keyboard.press("b");
-  await page.locator("#s3-tab-supply").click();
+  await openComputer(page, "supply");
   await expect(page.locator("#s3-panel-supply")).toBeVisible();
 }
 
 async function importSnapshot(page: Page, state: SimState): Promise<void> {
   expect(validateSimState(state)).toBe(true);
-  await openSupply(page);
+  await openSettings(page);
   if (!(await page.locator("#s3-import").isVisible())) await page.getByText("存档与试玩管理", { exact: true }).click();
   const chooser = page.waitForEvent("filechooser");
   await page.locator("#s3-import").click();
@@ -55,7 +56,7 @@ async function importSnapshot(page: Page, state: SimState): Promise<void> {
 }
 
 async function exportSnapshot(page: Page): Promise<SimState> {
-  await openSupply(page);
+  await openSettings(page);
   if (!(await page.locator("#s3-export").isVisible())) await page.getByText("存档与试玩管理", { exact: true }).click();
   const download = page.waitForEvent("download");
   await page.locator("#s3-export").click();
@@ -66,7 +67,7 @@ async function exportSnapshot(page: Page): Promise<SimState> {
 
 function stockLines(state: SimState, lines: readonly PurchaseLine[], orderId: string): SimState {
   state = step(state, { type: "PURCHASE_STOCK", orderId, lines });
-  state = step(state, { type: "RECEIVE_DELIVERY" });
+  state = receiveFixtureDeliveries(state);
   for (const line of lines) {
     const crate = state.crates.find((entry) => entry.productId === line.productId)!;
     state = step(state, { type: "PICK_CRATE", crateId: crate.id });
@@ -152,9 +153,10 @@ test("custom procurement: the empty cart, category/search and quantities purchas
   // to position the player; the real van and E handler perform the receipt.
   const atVan = step(saved, { type: "SAVE_POSE", pose: { x: 3, z: -6.9, yaw: Math.PI, pitch: .06 } });
   await importSnapshot(page, atVan);
-  await expect(page.locator("#s3-target-action")).toContainText("签收 5 件", { timeout: 15_000 });
+  await expect(page.locator("#s3-target-action")).toContainText("签收本单 5 件", { timeout: 15_000 });
   await page.keyboard.press("e");
-  await expect(page.locator("#s3-target-action")).toContainText("查看今日进货单");
+  await expect(page.locator("#s3-delivery-hud")).toContainText("已签收");
+  await expect(page.locator("#s3-pause")).toBeHidden();
   await expect(page.locator("#s3-cash")).toHaveText(money(1200 - spend));
   const received = await exportSnapshot(page);
   expect(received.items).toHaveLength(5);

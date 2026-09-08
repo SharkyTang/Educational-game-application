@@ -92,11 +92,6 @@
 .s3-customer-order { margin-top: 7px !important; color: #657157; font-size: 10px; line-height: 1.6; }
 .s3-customer-actions .s3-secondary-button { min-height: 36px; padding: 6px 10px; font-size: 11px !important; gap: 5px; }
 #s3-customer-audio-status { margin-bottom: 10px; }
-.s3-business-nav { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 5px; margin-top: 8px; }
-.s3-business-nav button { flex: 1; display: inline-flex; justify-content: center; align-items: center; gap: 5px; min-height: 37px; padding: 6px 7px; border: 1px solid #d6dac7; border-radius: 5px; background: #fff9edef; color: #31503f; font-size: 11px; white-space: nowrap; }
-.s3-business-nav kbd { padding: 0 3px; font-size: 9px; }
-.s3-business-nav button:hover { background: #e4ecd6; }
-.s3-business-nav .s3-upgrade-ready { border-color: #aa8033; background: #f9e7b8; color: #674719; }
 .s3-delivery-hud { margin-top: 8px !important; padding: 8px 12px; border: 1px solid #d4b67d; border-radius: 6px; color: #614624; background: #fbecd0f2; font-size: 11px; line-height: 1.7; }
 
 .s3-start { position: absolute; inset: 0; display: flex; align-items: center; padding: 36px clamp(24px, 5vw, 90px); background: #1c34261a; }
@@ -150,9 +145,6 @@
 .s3-pause-heading .s3-primary-button { flex-shrink: 0; }
 .s3-pause-alert { margin-top: 12px !important; padding: 10px 12px; border: 1px solid #cf987f; border-radius: 5px; color: #793e2d; background: #f8e4d5; font-size: 11px; line-height: 1.7; }
 .s3-pause-notice { margin-top: 12px !important; padding: 10px 12px; border: 1px solid #c1cfac; border-radius: 5px; color: #395c3e; background: #e7eddb; font-size: 11px; line-height: 1.7; }
-.s3-management-tabs { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 6px; margin: 18px 0 15px; padding: 5px; border: 1px solid #d2d8c2; border-radius: 8px; background: #eaf0df; }
-.s3-management-tabs button { min-height: 38px; padding: 6px 8px; border: 1px solid transparent; border-radius: 5px; color: #5a6c55; background: transparent; font-size: 12px; }
-.s3-management-tabs button[aria-pressed="true"] { border-color: #d0d7bf; color: #2f503b; background: #fffdf2; box-shadow: 0 2px 5px #2941310d; font-weight: 650; }
 .s3-management-panel { padding: 17px 19px 18px; border: 1px solid #d9ddc9; border-radius: 8px; background: #fffdf5; }
 .s3-management-panel h3 { margin: 4px 0 11px; font-size: 20px; font-weight: 600; letter-spacing: -0.02em; }
 .s3-delivery-steps { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 7px; margin: 16px 0 10px; padding: 0; list-style: none; }
@@ -303,8 +295,6 @@
   .s3-receipt-row { gap: 4px; }
   .s3-receipt-row strong { font-size: 11px; }
   .s3-customer-line { font-size: 15px; }
-  .s3-business-nav { flex-wrap: wrap; gap: 4px; }
-  .s3-business-nav button { min-height: 32px; padding: 5px 7px; font-size: 10px; }
   .s3-customer-actions { gap: 5px; }
   .s3-customer-actions .s3-secondary-button { min-height: 34px; padding: 5px 8px; font-size: 10px !important; }
   .s3-management-panel { padding: 15px; }
@@ -350,8 +340,6 @@
   .s3-pause-heading h2 { font-size: 20px; }
   .s3-pause-heading .s3-primary-button { min-height: 38px; padding: 8px 12px; font-size: 11px !important; }
   .s3-settings-grid { grid-template-columns: 1fr 128px; }
-  .s3-management-tabs button { padding: 6px 4px; font-size: 11px; }
-  .s3-management-tabs { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .s3-venue-cards { grid-template-columns: 1fr; }
   .s3-venue-card { display: grid; grid-template-columns: 1fr auto; gap: 2px 12px; min-height: 0; }
   .s3-venue-card > strong { grid-column: 1; grid-row: 2; margin: 0; }

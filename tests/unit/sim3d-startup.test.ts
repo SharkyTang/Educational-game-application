@@ -1,3 +1,4 @@
+import { waitForDelivery, receiveAllDeliveries } from "../helpers/sim3dDelivery";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { capacityFor, countAt, createFirstDayState, createInitialSimState, DELIVERY_DROP_POINTS, getCheckoutTotal, getCustomerOrder, getDeliverySummary, PRODUCTS, PRODUCT_IDS, reduceSim, validateSimState, type PlayerPose, type ProductId, type PurchaseLine, type SimCommand, type SimState } from "../../src/sim3d/domain";
 import { SIM_BACKUP_KEY, SIM_STORAGE_KEY, type SimLockManager, type StorageLike } from "../../src/sim3d/persistence";
@@ -25,6 +26,8 @@ const doubles = vi.hoisted(() => {
     readonly inspect = vi.fn();
     readonly requestPointerLock = vi.fn();
     readonly setCursorFree = vi.fn();
+    readonly setDeliveryState = vi.fn();
+    readonly isDeliveryBlocked = vi.fn(() => false);
     readonly setState = vi.fn((state: SimState) => {
       if (state.customer.phase !== "to-milk") this.approaching = false;
       else if (this.customer.phase !== "to-milk" || this.customer.number !== state.customer.number) this.approaching = true;
@@ -55,7 +58,7 @@ const doubles = vi.hoisted(() => {
     readonly dispose = vi.fn();
     constructor(readonly options: { onStatus?: (status: string) => void } = {}) { ShopAudio.instances.push(this) }
   }
-  return { World, ShopAudio };
+  return { World, ShopAudio, layoutEditors: [] as { hasUnsavedChanges: ReturnType<typeof vi.fn>; discard: ReturnType<typeof vi.fn> }[] };
 });
 
 vi.mock("../../src/sim3d/world", () => ({ ShopWorld: doubles.World }));
@@ -64,6 +67,10 @@ vi.mock("../../src/sim3d/shopAudio", () => ({ ShopAudio: doubles.ShopAudio }));
 // startup tests keep their existing minimal DOM and isolate widget rendering.
 vi.mock("../../src/sim3d/layoutEditor", () => ({
   LayoutEditor: class {
+    constructor(host: HTMLElement) {
+      host.innerHTML = '<select id="s3-layout-select"></select>';
+      doubles.layoutEditors.push(this);
+    }
     readonly setState = vi.fn();
     readonly hasUnsavedChanges = vi.fn(() => false);
     readonly discard = vi.fn();
@@ -177,6 +184,19 @@ function mount(root = new ElementDouble()) {
   return { app, root, shopAudio: doubles.ShopAudio.instances.at(-1)!, element: (id: string) => root.elements.get(id)! };
 }
 
+function enterComputer(view: ReturnType<typeof mount>): void {
+  if (view.element("s3-pause").open && !view.element("s3-pause-options").hidden) view.element("s3-resume").click();
+  if (view.element("s3-pause").open) return;
+  const world = (view as ReturnType<typeof mount> & { world?: InstanceType<typeof doubles.World> }).world ?? doubles.World.instances.at(-1)!;
+  world.callbacks.onTarget({ id: "shop-computer", kind: "computer", label: "店内电脑", action: "打开电脑", inspectable: false, distance: 1.2 });
+  world.callbacks.onInteract();
+}
+
+function openComputerApp(view: ReturnType<typeof mount>, section: string): void {
+  enterComputer(view);
+  view.element(`s3-computer-${section}`).click();
+}
+
 beforeEach(() => {
   storage = new MemoryStorage();
   locks = new ExclusiveLocks();
@@ -188,6 +208,7 @@ beforeEach(() => {
   vi.stubGlobal("navigator", { locks });
   doubles.World.instances = [];
   doubles.ShopAudio.instances = [];
+  doubles.layoutEditors.length = 0;
   apps = [];
 });
 
@@ -219,7 +240,7 @@ function act(state: SimState, command: SimCommand): SimState {
 function stockedFirstDay(pairs: 3 | 4 = 3): SimState {
   let state = act(createFirstDayState(), { type: "PURCHASE_STOCK", pairs: 3, orderId: "first-day-three" });
   if (pairs === 4) state = act(state, { type: "PURCHASE_STOCK", pairs: 1, orderId: "one-extra-pair" });
-  state = act(state, { type: "RECEIVE_DELIVERY" });
+  state = receiveAllDeliveries(state);
   for (const productId of ["milk", "bread"] as const) {
     for (let slot = 0; slot < pairs; slot += 1) {
       const item = state.items.find((entry) => entry.productId === productId && entry.location.kind === "crate")!;
@@ -326,7 +347,7 @@ function setQuantity(view: { element: (id: string) => ElementDouble }, productId
 
 function stockedSelection(lines: PurchaseLine[]): SimState {
   let state = act(createFirstDayState(), { type: "PURCHASE_STOCK", orderId: "self-selected-stock", lines });
-  state = act(state, { type: "RECEIVE_DELIVERY" });
+  state = receiveAllDeliveries(state);
   for (const line of lines) {
     for (let slot = 0; slot < line.quantity; slot += 1) {
       const item = state.items.find((entry) => entry.productId === line.productId && entry.location.kind === "crate")!;
@@ -634,7 +655,108 @@ describe("built-in British word recordings", () => {
   });
 });
 
-describe("cursor access and directly reachable business panels", () => {
+describe("cursor access and nearby computer business panels", () => {
+  it("requires the nearby computer and keeps ordinary pause menus free of business applications", async () => {
+    const view = await readyGame();
+    expect(view.root.innerHTML).not.toContain('class="s3-business-nav"');
+    expect(view.root.innerHTML.match(/class="s3-desktop-icon"/g)).toHaveLength(6);
+    const ids = [...view.root.innerHTML.matchAll(/\bid="([^"]+)"/g)].map((match) => match[1]);
+    expect(new Set(ids).size).toBe(ids.length);
+    for (const distance of [3, Infinity, -1]) {
+      view.world.callbacks.onTarget({ id: "computer", kind: "computer", label: "电脑", action: "打开", inspectable: false, distance });
+      view.world.callbacks.onInteract();
+      expect(view.element("s3-pause").open).toBe(false);
+    }
+    view.element("s3-pause-button").click();
+    expect(view.element("s3-pause-options").hidden).toBe(false);
+    expect(view.element("s3-computer-desktop").hidden).toBe(true);
+    expect(view.element("s3-computer-apps").hidden).toBe(true);
+    const before = savedState();
+    view.element("s3-computer-upgrade").dispatchEvent(new Event("click"));
+    view.element("s3-upgrade").dispatchEvent(new Event("click"));
+    key("KeyB");
+    expect(view.element("s3-panel-supply").hidden).toBe(true);
+    expect(savedState()).toEqual(before);
+  });
+
+  it("keeps held merchandise and returns from an app to the desktop before exiting the computer", async () => {
+    const state = act(createInitialSimState(), { type: "PICK_CRATE", crateId: "milk-crate" });
+    const view = await readyGame(state);
+    enterComputer(view);
+    expect(view.element("s3-computer-desktop").hidden).toBe(false);
+    expect(view.element("s3-pause-options").hidden).toBe(true);
+    expect(view.element("s3-resume").textContent).toBe("退出电脑");
+    view.element("s3-computer-supply").click();
+    expect(view.element("s3-computer-back").hidden).toBe(false);
+    key("Escape");
+    expect(view.element("s3-pause").open).toBe(true);
+    expect(view.element("s3-computer-desktop").hidden).toBe(false);
+    expect(view.element("s3-panel-supply").hidden).toBe(true);
+    key("Escape");
+    expect(view.element("s3-pause").open).toBe(false);
+    expect(view.world.setActive).toHaveBeenLastCalledWith(true);
+    expect(savedState().held).toEqual(state.held);
+    expect(savedState().items).toEqual(state.items);
+    key("KeyB");
+    expect(view.element("s3-pause").open).toBe(false);
+  });
+
+  it.each(["INPUT", "TEXTAREA", "SELECT", "contenteditable"])("does not switch computer apps while editing %s", async (tagName) => {
+    const view = await readyGame();
+    openComputerApp(view, "supply");
+    Object.assign(documentDouble, { activeElement: { tagName, isContentEditable: tagName === "contenteditable" } });
+    key("KeyU");
+    expect(view.element("s3-panel-supply").hidden).toBe(false);
+    expect(view.element("s3-panel-upgrade").hidden).toBe(true);
+    Object.assign(documentDouble, { activeElement: null });
+    key("KeyU");
+    expect(view.element("s3-panel-upgrade").hidden).toBe(false);
+  });
+
+  it("opens and starts a stocked shop from the business application and exits so time can advance", async () => {
+    const view = await readyGame(stockedFirstDay());
+    openComputerApp(view, "day");
+    expect(view.element("s3-computer-open-shop").disabled).toBe(false);
+    view.element("s3-computer-open-shop").click();
+    expect(savedState().day.phase).toBe("open");
+    expect(view.element("s3-pause").open).toBe(false);
+    expect(view.world.setActive).toHaveBeenLastCalledWith(true);
+  });
+
+  it.each(["supply", "day", "upgrade", "equipment", "layout", "street"])("opens the %s desktop icon as one application window", async (section) => {
+    const view = await readyGame();
+    openComputerApp(view, section);
+    expect(view.element(`s3-panel-${section}`).hidden).toBe(false);
+    for (const other of ["supply", "day", "cash", "upgrade", "development", "equipment", "layout", "street"]) {
+      if (other !== section) expect(view.element(`s3-panel-${other}`).hidden).toBe(true);
+    }
+    expect(view.element("s3-computer-back").hidden).toBe(false);
+    view.element("s3-computer-back").click();
+    expect(view.element("s3-computer-desktop").hidden).toBe(false);
+    expect(view.element(`s3-panel-${section}`).hidden).toBe(true);
+  });
+
+  it("protects an unsaved layout when returning to the desktop, switching applications, or exiting", async () => {
+    const view = await readyGame();
+    openComputerApp(view, "layout");
+    const editor = doubles.layoutEditors.at(-1)!;
+    editor.hasUnsavedChanges.mockReturnValue(true);
+    editor.discard.mockImplementation(() => editor.hasUnsavedChanges.mockReturnValue(false));
+    for (const action of [() => view.element("s3-computer-back").click(), () => key("KeyB"), () => view.element("s3-resume").click()]) {
+      action();
+      expect(view.element("s3-layout-exit-confirm").hidden).toBe(false);
+      expect(view.element("s3-panel-layout").hidden).toBe(false);
+      expect(view.element("s3-pause").open).toBe(true);
+      view.element("s3-layout-exit-keep").click();
+      expect(editor.discard).not.toHaveBeenCalled();
+    }
+    view.element("s3-computer-back").click();
+    view.element("s3-layout-exit-discard").click();
+    expect(editor.discard).toHaveBeenCalledOnce();
+    expect(view.element("s3-computer-desktop").hidden).toBe(false);
+    expect(view.element("s3-pause").open).toBe(true);
+  });
+
   it("uses Tab to free the pointer without pausing, and a second intentional Tab requests look control", async () => {
     const view = await readyGame();
     view.world.callbacks.onPointerMode?.("locked");
@@ -651,13 +773,16 @@ describe("cursor access and directly reachable business panels", () => {
     expect(view.world.requestPointerLock).toHaveBeenCalledOnce();
   });
 
-  it.each([["KeyB", "supply"], ["KeyU", "upgrade"], ["KeyM", "street"], ["KeyP", "layout"]] as const)("opens %s directly and returns with clickable pointer", async (code, section) => {
+  it.each([["KeyB", "supply"], ["KeyU", "upgrade"], ["KeyM", "street"], ["KeyP", "layout"]] as const)("opens %s only within a computer session and returns with clickable pointer", async (code, section) => {
     const view = await readyGame();
     view.world.callbacks.onPointerMode?.("locked");
     expect(key(code).defaultPrevented).toBe(true);
+    expect(view.element("s3-pause").open).toBe(false);
+    enterComputer(view);
+    expect(key(code).defaultPrevented).toBe(true);
     expect(view.element("s3-pause").open).toBe(true);
     expect(view.element(`s3-panel-${section}`).hidden).toBe(false);
-    expect(view.element(`s3-tab-${section}`).getAttribute("aria-pressed")).toBe("true");
+    expect(view.element("s3-computer-desktop").hidden).toBe(true);
     expect(view.world.setCursorFree).toHaveBeenLastCalledWith(true);
     expect(view.world.setActive).toHaveBeenLastCalledWith(false);
     view.world.callbacks.onPointerMode?.("free");
@@ -677,7 +802,7 @@ describe("cursor access and directly reachable business panels", () => {
     expect(view.element("s3-drag-hint").hidden).toBe(false);
     expect(view.element("s3-drag-hint").textContent).toContain("拖动观察");
     expect(view.world.requestPointerLock).not.toHaveBeenCalled();
-    view.element("s3-open-supply").click();
+    openComputerApp(view, "supply");
     expect(view.element("s3-pause").open).toBe(true);
   });
 });
@@ -1086,7 +1211,7 @@ describe("customer identity, dialogue continuity and saved seeds", () => {
     expect(savedState().customer).toEqual({ number: 3, phase: "complete", shoppingList: ["milk", "bread"], contentVersion: 2 });
     expect(view.element("s3-pause").open).toBe(false);
     expect(savedState().day.phase).toBe("open");
-    view.element("s3-open-day").click();
+    openComputerApp(view, "day");
     expect(view.element("s3-settle-day").hidden).toBe(true);
     expect(view.audio.play).not.toHaveBeenCalled();
   });
@@ -1298,7 +1423,7 @@ describe("customer identity, dialogue continuity and saved seeds", () => {
 describe("first-day management event wiring and persistence", () => {
   it("starts with an empty cart, buys only manually selected quantities and ignores duplicate clicks after return", async () => {
     const view = await readyGame();
-    view.element("s3-open-supply").click();
+    openComputerApp(view, "supply");
     expect(view.element("s3-panel-supply").hidden).toBe(false);
     expect(view.element("s3-supply-total").textContent).toBe("−£0.00");
     expect(view.element("s3-purchase").disabled).toBe(true);
@@ -1319,13 +1444,13 @@ describe("first-day management event wiring and persistence", () => {
     expect(countAt(state, "bread", "crate")).toBe(0);
     expect(getDeliverySummary(state)).toMatchObject({ pendingOrders: 1, pendingUnits: 6, receivedToday: 0 });
     expect(view.element("s3-delivery-hud").hidden).toBe(false);
-    expect(view.element("s3-delivery-hud").textContent).toContain("6 件待签收");
+    expect(view.element("s3-delivery-hud").textContent).toContain("本单备货中");
     expect(view.world.setState).toHaveBeenLastCalledWith(state);
     expect(view.element("s3-pause").open).toBe(false);
     expect(view.world.requestPointerLock).not.toHaveBeenCalled();
     expect(view.element("s3-toast").textContent).toContain("下单成功");
-    expect(view.element("s3-toast").textContent).toContain("门口货车旁按 E 签收");
-    view.element("s3-open-supply").click();
+    expect(view.element("s3-toast").textContent).toContain("门口按 E 签收");
+    openComputerApp(view, "supply");
     expect(view.element("s3-quantity-milk").value).toBe("0");
     expect(view.element("s3-quantity-bread").value).toBe("0");
     expect(view.element("s3-purchase").disabled).toBe(true);
@@ -1333,7 +1458,7 @@ describe("first-day management event wiring and persistence", () => {
 
   it("disables unaffordable purchases with an explicit reason, and a smaller selection restores availability", async () => {
     const view = await readyGame();
-    key("KeyB");
+    openComputerApp(view, "supply");
     setQuantity(view, "milk", 6);
     setQuantity(view, "bread", 6);
     expect(view.element("s3-purchase").disabled).toBe(true);
@@ -1350,7 +1475,8 @@ describe("first-day management event wiring and persistence", () => {
 
   it("makes a funded £8 upgrade directly reachable, charges exactly once and creates no merchandise", async () => {
     const view = await readyGame();
-    expect(view.element("s3-open-upgrade").getAttribute("aria-label")).toContain("资金足够");
+    expect(view.element("s3-computer-upgrade").getAttribute("aria-label")).toContain("资金足够");
+    enterComputer(view);
     key("KeyU");
     expect(view.element("s3-panel-upgrade").hidden).toBe(false);
     expect(view.element("s3-upgrade").disabled).toBe(false);
@@ -1372,7 +1498,7 @@ describe("first-day management event wiring and persistence", () => {
   it("explains an insufficient upgrade balance instead of hiding the entry", async () => {
     const state = act(createFirstDayState(), { type: "PURCHASE_STOCK", orderId: "starter", pairs: 3 });
     const view = await readyGame(state);
-    view.element("s3-open-upgrade").click();
+    openComputerApp(view, "upgrade");
     expect(view.element("s3-panel-upgrade").hidden).toBe(false);
     expect(view.element("s3-upgrade").disabled).toBe(true);
     expect(view.element("s3-upgrade-status").textContent).toContain("还差 £2.90");
@@ -1386,7 +1512,7 @@ describe("first-day management event wiring and persistence", () => {
     state = completeOrder(completeOrder(state));
     state = completeOrder(state, false);
     const view = await readyGame(state);
-    view.element("s3-open-day").click();
+    openComputerApp(view, "day");
     expect(view.element("s3-settle-day").hidden).toBe(true);
     view.element("s3-close-shop").click();
     view.element("s3-close-confirm-button").click();
@@ -1401,7 +1527,7 @@ describe("first-day management event wiring and persistence", () => {
     expect(savedState().settlements).toEqual([]);
     view.element("s3-resume").click();
     view.world.callbacks.onCustomerArrive();
-    view.element("s3-open-day").click();
+    openComputerApp(view, "day");
     expect(view.element("s3-settle-day").disabled).toBe(false);
     view.element("s3-settle-day").click();
     view.element("s3-settle-day").click();
@@ -1436,8 +1562,8 @@ describe("first-day management event wiring and persistence", () => {
     for (let count = 0; count < paidCustomers; count += 1) state = completeOrder(state);
     const view = await readyGame(state);
     const delay = state.day.nextCustomerAtMs! - state.day.elapsedOpenMs;
-    expect(delay).toBeGreaterThanOrEqual(8000);
-    expect(delay).toBeLessThanOrEqual(12000);
+    expect(delay).toBeGreaterThanOrEqual(2000);
+    expect(delay).toBeLessThanOrEqual(4000);
     clock.advance(view, delay - 1);
     expect(savedState().customer.phase).toBe("complete");
     expect(view.element("s3-pause").open).toBe(false);
@@ -1457,8 +1583,106 @@ describe("first-day management event wiring and persistence", () => {
 });
 
 describe("doorstep delivery and high street management", () => {
+  it("renders the collapsible per-order ledger only in the supply app and preserves the remaining queue after receipt", async () => {
+    const clock = frameTime();
+    let pending = act(createFirstDayState(), { type: "PURCHASE_STOCK", orderId: "list-apple", lines: [{ productId: "apple", quantity: 2 }] });
+    pending = waitForDelivery(act(pending, { type: "PURCHASE_STOCK", orderId: "list-soap", lines: [{ productId: "soap", quantity: 1 }] }));
+    const view = await readyGame(pending);
+    const content = view.element("s3-purchase-orders-content");
+    expect(content.innerHTML).toBe("");
+    const writes = vi.spyOn(content, "innerHTML", "set");
+    enterComputer(view);
+    expect(writes).not.toHaveBeenCalled();
+    openComputerApp(view, "supply");
+    expect(view.element("s3-purchase-orders-summary").textContent).toContain("2 单待收货 / 显示 2 单");
+    expect(content.innerHTML).toContain("苹果 × 2");
+    expect(content.innerHTML).toContain("待签收");
+    expect(content.innerHTML).toContain("前方 1 单");
+    expect(writes).toHaveBeenCalledTimes(1);
+    view.element("s3-purchase-orders").open = true;
+    clock.advance(view, 1000);
+    view.element("s3-computer-back").click();
+    view.element("s3-computer-supply").click();
+    expect(writes).toHaveBeenCalledTimes(1);
+    expect(view.element("s3-purchase-orders").open).toBe(true);
+    view.element("s3-resume").click();
+    view.world.callbacks.onTarget(deliveryTarget());
+    view.world.callbacks.onInteract();
+    expect(writes).toHaveBeenCalledTimes(1);
+    openComputerApp(view, "supply");
+    expect(writes).toHaveBeenCalledTimes(2);
+    expect(view.element("s3-purchase-orders-summary").textContent).toContain("1 单待收货 / 显示 2 单");
+    expect(content.innerHTML).toContain("已签收 · 货车驶离中");
+    expect(content.innerHTML).toContain("前方 1 单");
+    expect(savedState().purchases.map((order) => order.receivedDay)).toEqual([1, null]);
+    view.element("s3-resume").click();
+    clock.advance(view, 4000);
+    expect(writes).toHaveBeenCalledTimes(2);
+    openComputerApp(view, "supply");
+    expect(content.innerHTML).toContain("备货中 · 约 12 秒后停稳");
+    expect(content.innerHTML).not.toContain("前方 1 单");
+  });
+
+  it("advances one saved delivery independently during preparation and freezes it throughout a computer session", async () => {
+    const clock = frameTime();
+    const pending = act(createFirstDayState(), { type: "PURCHASE_STOCK", orderId: "delivery-clock", lines: [{ productId: "apple", quantity: 1 }] });
+    const view = await readyGame(pending);
+    view.world.setState.mockClear();
+    clock.advance(view, 6000);
+    expect(savedState().delivery).toMatchObject({ phase: "arriving", elapsedMs: 0 });
+    expect(savedState().day.elapsedOpenMs).toBe(0);
+    expect(view.world.setState).not.toHaveBeenCalled();
+    expect(view.world.setDeliveryState).toHaveBeenCalled();
+    enterComputer(view);
+    const paused = savedState();
+    clock.advance(view, 9000);
+    expect(savedState()).toEqual(paused);
+    expect(view.element("s3-computer-delivery").textContent).toContain("约 6 秒");
+    key("Escape");
+    clock.advance(view, 6000);
+    expect(savedState().delivery.phase).toBe("ready");
+    expect(view.element("s3-delivery-hud").textContent).toContain("本单 1 件已到门口");
+    expect(savedState().day.elapsedOpenMs).toBe(0);
+  });
+
+  it("waits for a blocked vehicle and resumes the same phase after the road is clear", async () => {
+    const clock = frameTime();
+    const pending = act(createFirstDayState(), { type: "PURCHASE_STOCK", orderId: "traffic-delivery", lines: [{ productId: "apple", quantity: 1 }] });
+    const view = await readyGame(pending);
+    clock.advance(view, 6000);
+    view.world.isDeliveryBlocked.mockReturnValue(true);
+    clock.advance(view, 2500);
+    expect(savedState().delivery).toMatchObject({ phase: "arriving", blocked: true, elapsedMs: 0 });
+    expect(view.element("s3-delivery-hud").textContent).toContain("让行中");
+    view.world.isDeliveryBlocked.mockReturnValue(false);
+    clock.advance(view, 6000);
+    expect(savedState().delivery).toMatchObject({ phase: "ready", blocked: false });
+  });
+
+  it("continues delivery during cash checkout, pauses for deliberate learning, and never gives queued goods early", async () => {
+    const clock = frameTime();
+    let state = act(cashCheckoutState(), { type: "PURCHASE_STOCK", orderId: "cash-checkout-delivery", lines: [{ productId: "apple", quantity: 1 }] });
+    state = act(state, { type: "PURCHASE_STOCK", orderId: "cash-checkout-delivery-2", lines: [{ productId: "soap", quantity: 1 }] });
+    const view = await readyGame(state);
+    view.world.callbacks.onTarget(counterTarget());
+    view.element("s3-open-cash").click();
+    clock.advance(view, 6000);
+    expect(savedState().delivery.phase).toBe("arriving");
+    key("KeyR");
+    view.audio.onplaying?.();
+    const paused = savedState().delivery;
+    clock.advance(view, 4000);
+    expect(savedState().delivery).toEqual(paused);
+    view.audio.onended?.();
+    clock.advance(view, 6000);
+    expect(savedState().delivery.phase).toBe("ready");
+    expect(view.element("s3-delivery-hud").textContent).toContain("后方 1 单排队");
+    expect(getDeliverySummary(savedState()).pendingUnits).toBe(2);
+    expect(savedState().items.filter((item) => item.productId === "soap").every((item) => item.location.kind === "delivery")).toBe(true);
+  });
+
   it("keeps paid deliveries pending until a nearby physical interaction, then preserves payment exactly once", async () => {
-    const pending = act(createFirstDayState(), { type: "PURCHASE_STOCK", orderId: "doorstep-order", pairs: 3 });
+    const pending = waitForDelivery(act(createFirstDayState(), { type: "PURCHASE_STOCK", orderId: "doorstep-order", pairs: 3 }));
     const view = await readyGame(pending);
     view.world.callbacks.onTarget(deliveryTarget(5));
     expect(view.element("s3-interact").disabled).toBe(true);
@@ -1466,44 +1690,45 @@ describe("doorstep delivery and high street management", () => {
     expect(getDeliverySummary(savedState()).pendingUnits).toBe(6);
     view.world.callbacks.onTarget(deliveryTarget());
     expect(view.element("s3-interact").disabled).toBe(false);
-    expect(view.element("s3-target-action").textContent).toContain("签收 6 件");
+    expect(view.element("s3-target-action").textContent).toContain("签收本单 6 件");
     view.element("s3-interact").click();
     expect(savedState().cashPence).toBe(510);
     expect(getDeliverySummary(savedState())).toMatchObject({ pendingUnits: 0, receivedToday: 1 });
     expect(savedState().crates.map((crate) => crate.position)).toEqual(DELIVERY_DROP_POINTS.slice(0, 2));
-    expect(view.element("s3-delivery-hud").hidden).toBe(true);
+    expect(view.element("s3-delivery-hud").textContent).toContain("货车驶离中");
     view.world.callbacks.onInteract();
-    expect(view.element("s3-panel-supply").hidden).toBe(false);
-    expect(view.element("s3-pause").open).toBe(true);
+    expect(view.element("s3-panel-supply").hidden).toBe(true);
+    expect(view.element("s3-pause").open).toBe(false);
     expect(savedState().cashPence).toBe(510);
     expect(savedState().purchases).toHaveLength(1);
   });
 
   it("checks unloading space against the latest world pose before rejecting delivery", async () => {
     let pending = act(createFirstDayState(), { type: "PURCHASE_STOCK", orderId: "blocked-drop", pairs: 1 });
-    pending = act(pending, { type: "SAVE_POSE", pose: { ...pending.playerPose, ...DELIVERY_DROP_POINTS[0]! } });
+    pending = waitForDelivery(act(pending, { type: "SAVE_POSE", pose: { ...pending.playerPose, ...DELIVERY_DROP_POINTS[0]! } }));
     const view = await readyGame(pending);
     view.world.callbacks.onTarget(deliveryTarget());
     view.world.callbacks.onInteract();
     expect(getDeliverySummary(savedState()).pendingUnits).toBe(2);
-    expect(view.element("s3-toast").textContent).toContain("离开门外的卸货点");
+    expect(view.element("s3-toast").textContent).toContain("请先离开货箱位置");
     Object.assign(view.world.getPose(), { x: 0, z: -7.5 });
     view.world.callbacks.onInteract();
     expect(getDeliverySummary(savedState()).pendingUnits).toBe(0);
     expect(savedState().cashPence).toBe(970);
   });
 
-  it("does not unload or open another management panel from a paused world interaction", async () => {
+  it("ignores paused world interactions while allowing computer application shortcuts", async () => {
     const state = act(createFirstDayState(), { type: "PURCHASE_STOCK", orderId: "paused-delivery", pairs: 1 });
     const view = await readyGame(state);
-    view.element("s3-open-street").click();
+    openComputerApp(view, "street");
     const snapshot = storage.getItem(SIM_STORAGE_KEY);
     view.world.callbacks.onTarget(deliveryTarget());
     view.world.callbacks.onInteract();
+    expect(view.element("s3-panel-street").hidden).toBe(false);
     key("KeyB");
     expect(storage.getItem(SIM_STORAGE_KEY)).toBe(snapshot);
-    expect(view.element("s3-panel-street").hidden).toBe(false);
-    expect(view.element("s3-panel-supply").hidden).toBe(true);
+    expect(view.element("s3-panel-street").hidden).toBe(true);
+    expect(view.element("s3-panel-supply").hidden).toBe(false);
     expect(getDeliverySummary(savedState()).pendingUnits).toBe(2);
   });
 
@@ -1513,34 +1738,41 @@ describe("doorstep delivery and high street management", () => {
     await first.app.dispose();
     const restored = await readyGame(savedState());
     expect(restored.element("s3-delivery-hud").hidden).toBe(false);
-    expect(restored.element("s3-delivery-hud").textContent).toContain("6 件待签收");
-    key("KeyB");
-    expect(restored.element("s3-delivery-summary").textContent).toContain("1 笔已付款订单");
+    expect(restored.element("s3-delivery-hud").textContent).toContain("本单备货中");
+    openComputerApp(restored, "supply");
+    expect(restored.element("s3-delivery-summary").textContent).toContain("1 单、6 件待收货");
     expect(savedState().cashPence).toBe(510);
     expect(countAt(savedState(), "milk", "crate")).toBe(0);
   });
 
   it("shows delivery as the reason day settlement is blocked after all customers have left", async () => {
+    const clock = frameTime();
     let state = stockedFirstDay();
     for (let count = 0; count < 3; count += 1) state = completeOrder(state);
     state = act(state, { type: "PURCHASE_STOCK", orderId: "tomorrow-order", pairs: 1 });
     state = act(state, { type: "CLOSE_STORE" });
     const view = await readyGame(state);
-    view.element("s3-open-day").click();
+    openComputerApp(view, "day");
     expect(view.element("s3-settle-day").disabled).toBe(true);
     expect(view.element("s3-day-reason").textContent).toContain("2 件已付款商品待签收");
     expect(view.element("s3-day-reason").textContent).not.toContain("正在离店");
     view.element("s3-resume").click();
+    clock.advance(view, 12_000);
     view.world.callbacks.onTarget(deliveryTarget());
     view.world.callbacks.onInteract();
-    view.element("s3-open-day").click();
+    openComputerApp(view, "day");
+    expect(view.element("s3-settle-day").disabled).toBe(true);
+    expect(view.element("s3-day-reason").textContent).toContain("货车驶离后可日结");
+    view.element("s3-resume").click();
+    clock.advance(view, 4000);
+    openComputerApp(view, "day");
     expect(view.element("s3-settle-day").disabled).toBe(false);
   });
 
-  it("uses the public street button and shop signs to select concrete goals while pausing the world", async () => {
+  it("opens full street information on the computer and read-only signs in the world", async () => {
     const view = await readyGame();
     const funds = savedState().cashPence;
-    view.element("s3-open-street").click();
+    openComputerApp(view, "street");
     expect(view.element("s3-pause").open).toBe(true);
     expect(view.element("s3-panel-street").hidden).toBe(false);
     expect(view.element("s3-street-level").textContent).toBe("Lv. 1");
@@ -1560,11 +1792,11 @@ describe("doorstep delivery and high street management", () => {
     expect(view.element("s3-pause").open).toBe(false);
     view.world.callbacks.onTarget(venueTarget("restaurant"));
     view.world.callbacks.onInteract();
-    expect(view.element("s3-pause").open).toBe(true);
-    expect(view.element("s3-venue-restaurant").getAttribute("aria-pressed")).toBe("true");
-    expect(view.element("s3-venue-detail-restaurant").hidden).toBe(false);
-    expect(view.element("s3-venue-detail-supermarket").hidden).toBe(true);
-    expect(view.world.setActive).toHaveBeenLastCalledWith(false);
+    expect(view.element("s3-pause").open).toBe(false);
+    expect(view.element("s3-venue-info").hidden).toBe(false);
+    expect(view.element("s3-venue-info-title").textContent).toContain("邻里餐厅");
+    expect(view.element("s3-venue-info-body").textContent).toContain("累计完成 12 单");
+    expect(view.world.setActive).toHaveBeenLastCalledWith(true);
     expect(savedState().cashPence).toBe(funds);
     expect(savedState().inspectedProducts).toEqual([]);
   });
@@ -1575,7 +1807,7 @@ describe("doorstep delivery and high street management", () => {
     state = act(state, { type: "CLOSE_STORE" });
     state = act(state, { type: "SETTLE_DAY" });
     const view = await readyGame(state);
-    key("KeyM");
+    openComputerApp(view, "street");
     expect(view.element("s3-street-level").textContent).toBe("Lv. 2");
     expect(view.element("s3-street-progress").getAttribute("aria-valuenow")).toBe("0");
     expect(view.element("s3-venue-status-cafe").textContent).toBe("条件已达成·筹备中");
@@ -1589,7 +1821,7 @@ describe("doorstep delivery and high street management", () => {
 describe("self-selected catalogue procurement", () => {
   it("offers all 30 pictured products without default quantities and buys only the chosen new SKUs", async () => {
     const view = await readyGame();
-    key("KeyB");
+    openComputerApp(view, "supply");
     expect(view.element("s3-supply-visible").textContent).toContain("30 / 30");
     for (const productId of PRODUCT_IDS) {
       expect(view.element(`s3-supply-product-${productId}`).hidden).toBe(false);
@@ -1614,7 +1846,7 @@ describe("self-selected catalogue procurement", () => {
     expect(bought.items.every((item) => item.location.kind === "delivery")).toBe(true);
     expect(view.element("s3-pause").open).toBe(false);
     expect(view.world.requestPointerLock).not.toHaveBeenCalled();
-    key("KeyB");
+    openComputerApp(view, "supply");
     expect(view.element("s3-quantity-apple").value).toBe("0");
     expect(view.element("s3-quantity-soap").value).toBe("0");
     expect(view.element("s3-supply-pending-apple").textContent).toBe("待收 2");
@@ -1623,7 +1855,7 @@ describe("self-selected catalogue procurement", () => {
 
   it("retains selections through category, search, selected-only and pause-panel changes", async () => {
     const view = await readyGame();
-    key("KeyB");
+    openComputerApp(view, "supply");
     setQuantity(view, "apple", 1);
     setQuantity(view, "soap", 2);
     view.element("s3-supply-category").value = "drinks";
@@ -1645,10 +1877,10 @@ describe("self-selected catalogue procurement", () => {
     expect(view.element("s3-supply-visible").textContent).toContain("2 / 30");
     expect(view.element("s3-quantity-apple").value).toBe("1");
     expect(view.element("s3-quantity-soap").value).toBe("2");
-    view.element("s3-tab-street").click();
-    view.element("s3-tab-supply").click();
+    openComputerApp(view, "street");
+    openComputerApp(view, "supply");
     view.element("s3-resume").click();
-    key("KeyB");
+    openComputerApp(view, "supply");
     expect(view.element("s3-quantity-soap").value).toBe("2");
     expect(view.element("s3-purchase").disabled).toBe(false);
     view.element("s3-clear-cart").click();
@@ -1660,7 +1892,7 @@ describe("self-selected catalogue procurement", () => {
 
   it.each(["", "1.5", "9"])("blocks a whole order for hidden invalid quantity %s instead of silently buying the valid lines", async (quantity) => {
     const view = await readyGame();
-    key("KeyB");
+    openComputerApp(view, "supply");
     setQuantity(view, "milk", 1);
     setQuantity(view, "apple", quantity);
     view.element("s3-supply-category").value = "drinks";
@@ -1683,7 +1915,7 @@ describe("self-selected catalogue procurement", () => {
   it("shows pending stock capacity and allows choosing another product after removing a blocked line", async () => {
     const pending = act(createFirstDayState(), { type: "PURCHASE_STOCK", orderId: "eight-milk", lines: [{ productId: "milk", quantity: 8 }] });
     const view = await readyGame(pending);
-    key("KeyB");
+    openComputerApp(view, "supply");
     expect(view.element("s3-supply-pending-milk").textContent).toBe("待收 8");
     setQuantity(view, "milk", 1);
     expect(view.element("s3-purchase").disabled).toBe(true);
@@ -1703,7 +1935,7 @@ describe("self-selected catalogue procurement", () => {
     await loading;
     const before = storage.getItem(SIM_STORAGE_KEY);
     expect(preview.element("s3-quantity-apple").disabled).toBe(true);
-    preview.element("s3-open-supply").click();
+    openComputerApp(preview, "supply");
     setQuantity(preview, "apple", 3);
     preview.element("s3-purchase").dispatchEvent(new Event("click"));
     expect(preview.element("s3-pause").open).toBe(false);
@@ -1792,7 +2024,7 @@ function counterTarget(distance = 1): InteractionTarget {
 describe("durable cash management app wiring", () => {
   it("retains the float draft and world until a failed save can be retried successfully", async () => {
     const view = await readyGame();
-    view.element("s3-open-day").click();
+    openComputerApp(view, "day");
     view.element("s3-tab-cash").click();
     const control = (suffix: string) => view.root.querySelector(`#s3-cash-management-${suffix}`)!;
     const before = savedState();
@@ -1816,7 +2048,7 @@ describe("durable cash management app wiring", () => {
   it("refunds only after durable save and updates the retained receipt without replaying payment audio", async () => {
     const state = act(paidSnapshot(), { type: "CUSTOMER_ADVANCE" });
     const view = await readyGame(state);
-    view.element("s3-open-day").click();
+    openComputerApp(view, "day");
     view.element("s3-tab-cash").click();
     const control = (suffix: string) => view.root.querySelector(`#s3-cash-management-${suffix}`)!;
     const before = savedState();
@@ -2068,9 +2300,9 @@ describe("active-time business clock event wiring", () => {
     expect(view.element("s3-business-time").textContent).toBe("09:00");
     expect(view.element("s3-clock-state").textContent).toBe("营业中");
     clock.advance(view, 7000);
-    expect(view.element("s3-business-time").textContent).toBe("09:10");
+    expect(view.element("s3-business-time").textContent).toBe("09:05");
     expect(view.element("s3-sold").textContent).toBe("今日 0 单 · 库存 6 件");
-    view.element("s3-open-day").click();
+    openComputerApp(view, "day");
     expect(savedState().day.elapsedOpenMs).toBe(7000);
   });
 
@@ -2078,13 +2310,13 @@ describe("active-time business clock event wiring", () => {
     const clock = frameTime();
     const view = await readyGame(act(beforeCheckout(), { type: "CUSTOMER_ADVANCE" }));
     clock.advance(view, 1400);
-    view.element(`s3-open-${section}`).click();
+    openComputerApp(view, section);
     const paused = savedState();
     expect(paused.day.elapsedOpenMs).toBe(1400);
     expect(view.element("s3-clock-state").textContent).toBe("管理暂停");
     clock.advance(view, 9000);
     expect(savedState()).toEqual(paused);
-    expect(view.element("s3-business-time").textContent).toBe("09:02");
+    expect(view.element("s3-business-time").textContent).toBe("09:01");
     view.element("s3-resume").click();
     clock.advance(view, 700);
     view.element("s3-pause-button").click();
@@ -2098,7 +2330,7 @@ describe("active-time business clock event wiring", () => {
     const view = await readyGame(state);
     key("Tab");
     clock.advance(view, 700);
-    expect(view.element("s3-business-time").textContent).toBe("09:01");
+    expect(view.element("s3-business-time").textContent).toBe("09:00");
     const item = state.items.find((entry) => entry.location.kind === "shelf")!;
     view.world.callbacks.onTarget({ id: item.id, kind: "item", itemId: item.id, productId: item.productId, label: "商品", action: "近看", inspectable: true, distance: 1 });
     view.world.callbacks.onInspect();
@@ -2127,7 +2359,7 @@ describe("active-time business clock event wiring", () => {
     expect(view.element("s3-clock-state").textContent).toBe("学习暂停");
     view.audio.onplaying?.();
     clock.advance(view, 3000);
-    expect(view.element("s3-business-time").textContent).toBe("09:01");
+    expect(view.element("s3-business-time").textContent).toBe("09:00");
     view.audio.onended?.();
     expect(view.element("s3-clock-state").textContent).toBe("营业中");
     expect(view.world.setActive).toHaveBeenLastCalledWith(true);
@@ -2263,7 +2495,9 @@ describe("active-time business clock event wiring", () => {
     expect(view.element("s3-pause").open).toBe(false);
     view.world.callbacks.onCustomerArrive();
     clock.advance(view, 100);
-    expect(view.element("s3-pause").open).toBe(true);
+    expect(view.element("s3-pause").open).toBe(false);
+    expect(view.element("s3-toast").textContent).toContain("到店内电脑");
+    openComputerApp(view, "day");
     expect(view.element("s3-settle-day").disabled).toBe(false);
     expect(savedState().customer.number).toBe(2);
   });
@@ -2278,15 +2512,15 @@ describe("active-time business clock event wiring", () => {
     clock.advance(view, 700);
     expect(savedState().day.phase).toBe("closing");
     expect(savedState().customer.number).toBe(1);
-    expect(view.element("s3-panel-day").hidden).toBe(false);
-    expect(view.element("s3-pause").open).toBe(true);
+    expect(view.element("s3-panel-day").hidden).toBe(true);
+    expect(view.element("s3-pause").open).toBe(false);
     expect(view.shopAudio.playEffect).not.toHaveBeenCalled();
   });
 
   it("requires confirmation for an early zero-order close, settles once and resets the next preparation day", async () => {
     const clock = frameTime();
     const view = await readyGame();
-    view.element("s3-open-day").click();
+    openComputerApp(view, "day");
     view.element("s3-close-shop").click();
     expect(view.element("s3-close-confirm").hidden).toBe(false);
     key("Escape");
@@ -2314,7 +2548,7 @@ describe("active-time business clock event wiring", () => {
 
 async function inspectNewProduct(productId: ProductId = "apple") {
   let state = act(createFirstDayState(), { type: "PURCHASE_STOCK", orderId: "inspect-new-product", lines: [{ productId, quantity: 1 }] });
-  state = act(state, { type: "RECEIVE_DELIVERY" });
+  state = receiveAllDeliveries(state);
   const view = await readyGame(state);
   const crate = state.crates.find((entry) => entry.productId === productId)!;
   view.world.callbacks.onTarget({ id: crate.id, kind: "crate", crateId: crate.id, productId, label: PRODUCTS[productId].nameZh, action: "近看", inspectable: true, distance: 1 });
@@ -2595,7 +2829,7 @@ describe("accepted shop actions emit feedback once", () => {
     expect(view.shopAudio.playEffect).not.toHaveBeenCalled();
     view.world.enterShop();
     view.world.callbacks.onInteract();
-    expect(view.element("s3-pause").open).toBe(true); // The open sign now opens business management.
+    expect(view.element("s3-pause").open).toBe(false); // The sign only reports status; the computer owns management.
     view.element("s3-resume").click();
     view.element("s3-read-customer").click();
     view.audio.onplaying?.();

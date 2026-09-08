@@ -25,6 +25,7 @@ import {
   type EquipmentShopLayout,
 } from "./equipmentLayout";
 import "./layoutEditor.css";
+import { WORKSTATION_ID, FALLBACK_WORKSTATION_PLACEMENT, workstationBounds, type WorkstationPlacement } from "./workstation";
 
 export interface LayoutEditorCallbacks {
   /** Return false when saving fails; the editor keeps the complete draft. */
@@ -42,9 +43,10 @@ export interface LayoutEditorOptions {
 }
 
 interface Point { x: number; z: number }
+type EditorPlacement = FurniturePlacement | EquipmentFloorPlacement | (WorkstationPlacement & { id: typeof WORKSTATION_ID });
 interface DragState {
   pointerId: number;
-  placement: FurniturePlacement | EquipmentFloorPlacement;
+  placement: EditorPlacement;
   start: Point;
   clientX: number;
   clientY: number;
@@ -65,6 +67,7 @@ const cloneLayout = (layout: ShopLayout & { equipment?: readonly EquipmentFloorP
   expansion: layout.expansion,
   placements: layout.placements.map((placement) => ({ ...placement })),
   equipment: (layout.equipment ?? []).map((placement) => ({ ...placement })),
+  ...(layout.workstation ? { workstation: { ...layout.workstation } } : {}),
 });
 const baseLayoutEquals = (a: EquipmentShopLayout, b: EquipmentShopLayout): boolean => layoutEquals(a, b)
   && a.equipment.length === b.equipment.length && a.equipment.every((placement, index) => {
@@ -181,6 +184,7 @@ export class LayoutEditor {
     let changed = obstaclesChanged || equipmentChanged || options.editable !== this.options.editable || options.reason !== this.options.reason;
     const wasDirty = this.hasUnsavedChanges();
     const expansionChanged = this.draft.expansion !== layout.expansion;
+    const workstationChanged = !!this.draft.workstation !== !!layout.workstation;
     const nextLayout = cloneLayout(layout);
     if (options.resetDraft || (!baseLayoutEquals(nextLayout, this.baseline) && (!wasDirty || baseLayoutEquals(nextLayout, this.draft)))) {
       this.finishDrag();
@@ -201,9 +205,9 @@ export class LayoutEditor {
     this.options = { ...options, obstacles: options.obstacles?.map((obstacle) => ({ ...obstacle })),
       occupiedEquipmentIds: [...(options.occupiedEquipmentIds ?? [])] };
     this.obstacleSignature = signature;
-    if (equipmentChanged) this.syncEquipmentFixtures();
+    if (equipmentChanged || workstationChanged) this.syncEquipmentFixtures();
     if (!options.editable) this.finishDrag();
-    if (expansionChanged || options.resetDraft) this.drawRoom();
+    if (expansionChanged || workstationChanged || options.resetDraft) this.drawRoom();
     if (obstaclesChanged) this.drawObstacles();
     if (changed) this.render();
   }
@@ -246,7 +250,8 @@ export class LayoutEditor {
       if (!this.options.editable) return;
       this.finishDrag();
       this.draft = { ...createDefaultShopLayout(), expansion: this.baseline.expansion,
-        equipment: this.draft.equipment.map((placement) => ({ ...placement })) };
+        equipment: this.draft.equipment.map((placement) => ({ ...placement })),
+        ...(this.draft.workstation ? { workstation: { ...this.draft.workstation } } : {}) };
       this.conflict = false;
       this.applyError = "";
       this.render();
@@ -304,13 +309,16 @@ export class LayoutEditor {
     this.render();
   }
 
-  private selectedPlacement(): FurniturePlacement | EquipmentFloorPlacement | undefined {
+  private selectedPlacement(): EditorPlacement | undefined {
+    if (this.selected === WORKSTATION_ID) return this.draft.workstation ? { ...this.draft.workstation, id: WORKSTATION_ID } : undefined;
     return this.draft.placements.find((placement) => placement.id === this.selected)
       ?? this.draft.equipment.find((placement) => placement.instanceId === this.selected);
   }
 
-  private replacePlacement(placement: FurniturePlacement | EquipmentFloorPlacement): void {
-    if ("id" in placement) this.draft.placements = this.draft.placements.map((entry) => entry.id === placement.id ? { ...placement } : entry);
+  private replacePlacement(placement: EditorPlacement): void {
+    if ("id" in placement && placement.id === WORKSTATION_ID) {
+      this.draft.workstation = { x: placement.x, z: placement.z, rotation: placement.rotation };
+    } else if ("id" in placement) this.draft.placements = this.draft.placements.map((entry) => entry.id === placement.id ? { ...placement } : entry);
     else this.draft.equipment = this.draft.equipment.map((entry) => entry.instanceId === placement.instanceId ? { ...placement } : entry);
     this.applyError = "";
     this.render();
@@ -437,6 +445,10 @@ export class LayoutEditor {
       layer.append(nodes.group);
       this.fixtures.set(definition.id, nodes);
     });
+    const computer = this.createFixtureNodes(WORKSTATION_ID, "computer", "PC");
+    computer.group.setAttribute("hidden", "");
+    layer.append(computer.group);
+    this.fixtures.set(WORKSTATION_ID, computer);
   }
 
   private createFixtureNodes(id: string, kind: string, number: string): FixtureNodes {
@@ -455,7 +467,7 @@ export class LayoutEditor {
     const layer = this.el<SVGGElement>("s3-layout-fixtures");
     const owned = new Set(this.equipmentState.instances.map((instance) => instance.id));
     for (const [id, nodes] of this.fixtures) {
-      if (FURNITURE_DEFINITIONS.some((definition) => definition.id === id) || owned.has(id)) continue;
+      if (id === WORKSTATION_ID || FURNITURE_DEFINITIONS.some((definition) => definition.id === id) || owned.has(id)) continue;
       nodes.group.remove();
       this.fixtures.delete(id);
     }
@@ -478,6 +490,12 @@ export class LayoutEditor {
       option.textContent = `${String(index + 1).padStart(2, "0")} · ${definition.name}`;
       base.append(option);
     });
+    if (this.draft.workstation) {
+      const computerOption = document.createElement("option");
+      computerOption.value = WORKSTATION_ID;
+      computerOption.textContent = "PC · 经营电脑桌（免费）";
+      base.append(computerOption);
+    }
     const purchased = document.createElement("optgroup");
     purchased.label = `已购设备 · ${this.equipmentState.instances.length}`;
     this.equipmentState.instances.forEach((instance, index) => {
@@ -499,7 +517,7 @@ export class LayoutEditor {
     const initial = shopBounds(0);
     const nextStage = Math.min(2, this.draft.expansion + 1) as ShopLayout["expansion"];
     const future = shopBounds(nextStage);
-    assignAttributes(this.svg, { viewBox: `${future.minX - .7} ${-future.maxZ - .5} ${future.maxX - future.minX + 1.4} ${future.maxZ - future.minZ + 1.25}` });
+    assignAttributes(this.svg, { viewBox: `${future.minX - .7} ${-future.maxZ - .5} ${future.maxX - future.minX + 1.4} ${future.maxZ - future.minZ + (this.draft.workstation ? 2.5 : 1.25)}` });
     const children: SVGElement[] = [
       svgNode(document, "rect", { ...rectAttributes(future), rx: .06, class: "s3-layout-future-floor" }),
       svgNode(document, "rect", { ...rectAttributes(current), rx: .03, class: "s3-layout-current-floor" }),
@@ -529,6 +547,12 @@ export class LayoutEditor {
       svgNode(document, "text", { x: (SHOP_ENTRANCE.minX + SHOP_ENTRANCE.maxX) / 2, y: -(SHOP_ENTRANCE.minZ + SHOP_ENTRANCE.maxZ) / 2 + .08, "text-anchor": "middle", class: "s3-layout-entrance-label" }, "进出通道"),
       svgNode(document, "text", { x: 0, y: -current.minZ + .45, "text-anchor": "middle", class: "s3-layout-door-label" }, "↓ 店门 / 街道"),
     );
+    if (this.draft.workstation) {
+      children.push(
+        svgNode(document, "rect", { ...rectAttributes(workstationBounds(FALLBACK_WORKSTATION_PLACEMENT)), class: "s3-layout-computer-fallback", rx: .05 }),
+        svgNode(document, "text", { x: -1.8, y: 6.25, "text-anchor": "middle", class: "s3-layout-map-note" }, "电脑临时安置点"),
+      );
+    }
     room.replaceChildren(...children);
   }
 
@@ -587,6 +611,19 @@ export class LayoutEditor {
       this.renderFixtureFacing(nodes, placement, bounds);
       setText(nodes.title, `${definition.name} · ${this.facingLabel(placement)} · X ${placement.x.toFixed(3)} / Z ${placement.z.toFixed(3)}`);
     }
+    const computerNodes = this.fixtures.get(WORKSTATION_ID)!;
+    if (this.draft.workstation) {
+      const placement: EditorPlacement = { ...this.draft.workstation, id: WORKSTATION_ID };
+      const bounds = workstationBounds(placement);
+      const selected = this.selected === WORKSTATION_ID;
+      computerNodes.group.removeAttribute("hidden");
+      assignAttributes(computerNodes.group, { "aria-pressed": String(selected), "data-selected": String(selected),
+        "data-valid": String(validation.valid || !selected), "aria-label": `经营电脑桌，${this.facingLabel(placement)}，旋转 ${placement.rotation * 90} 度${selected ? "，已选中" : ""}` });
+      assignAttributes(computerNodes.body, rectAttributes(bounds));
+      assignAttributes(computerNodes.label, { x: placement.x, y: -placement.z });
+      this.renderFixtureFacing(computerNodes, placement, bounds);
+      setText(computerNodes.title, `经营电脑桌 · ${this.facingLabel(placement)} · X ${placement.x.toFixed(3)} / Z ${placement.z.toFixed(3)}`);
+    } else computerNodes.group.setAttribute("hidden", "");
     for (const instance of this.equipmentState.instances) {
       const nodes = this.fixtures.get(instance.id);
       if (!nodes) continue;
@@ -609,12 +646,14 @@ export class LayoutEditor {
     }
     const select = this.el<HTMLSelectElement>("s3-layout-select");
     if (select.value !== this.selected) select.value = this.selected;
-    setText(this.el("s3-layout-fixture-count"), `${FURNITURE_DEFINITIONS.length + this.equipmentState.instances.length} 件 · ${this.draft.equipment.length} 台已摆入`);
+    setText(this.el("s3-layout-fixture-count"), `${FURNITURE_DEFINITIONS.length + this.equipmentState.instances.length + Number(!!this.draft.workstation)} 件 · ${this.draft.equipment.length} 台已摆入`);
     setText(this.el("s3-layout-x"), selectedPlacement ? `${selectedPlacement.x.toFixed(3)} m` : "仓库");
     setText(this.el("s3-layout-z"), selectedPlacement ? `${selectedPlacement.z.toFixed(3)} m` : "待摆入");
     setText(this.el("s3-layout-rotation"), selectedPlacement ? `${selectedPlacement.rotation * 90}°` : "—");
     setText(this.el("s3-layout-facing"), selectedPlacement ? this.facingLabel(selectedPlacement) : "购买已保存；摆入并应用后才会增加货位。");
-    this.el("s3-layout-selection-help").textContent = selectedDefinition?.id === "checkout-counter"
+    this.el("s3-layout-selection-help").textContent = this.selected === WORKSTATION_ID
+      ? "电脑、桌子与键鼠整组移动。请保留屏幕前的操作位置；电脑免费保留，不能出售或收进仓库。"
+      : selectedDefinition?.id === "checkout-counter"
       ? "收银台、扫码器和刷卡器整组移动；请为顾客和店员两侧留出位置。"
       : selectedInstance ? `${EQUIPMENT_COMMERCE_CATALOG[selectedInstance.assetId].nameZh}固定陈列${selectedInstance.productId}；店内货物会随设备移动，收回仓库前必须清空。`
         : "商品会跟随货架一起移动；请在深色正面一侧保留取货通道。";
@@ -636,7 +675,8 @@ export class LayoutEditor {
     this.el<HTMLFieldSetElement>("s3-layout-movement").disabled = !this.options.editable || !selectedPlacement;
     this.el<HTMLButtonElement>("s3-layout-discard").disabled = !dirty && !this.conflict;
     const defaultBase: EquipmentShopLayout = { ...createDefaultShopLayout(), expansion: this.draft.expansion,
-      equipment: this.draft.equipment.map((placement) => ({ ...placement })) };
+      equipment: this.draft.equipment.map((placement) => ({ ...placement })),
+      ...(this.draft.workstation ? { workstation: { ...this.draft.workstation } } : {}) };
     this.el<HTMLButtonElement>("s3-layout-default").disabled = !this.options.editable || (!this.conflict && baseLayoutEquals(this.draft, defaultBase));
     this.el<HTMLButtonElement>("s3-layout-apply").disabled = !this.options.editable || !dirty || !validation.valid || this.conflict;
     if (dirty !== this.reportedDirty) {
@@ -645,7 +685,7 @@ export class LayoutEditor {
     }
   }
 
-  private renderFixtureFacing(nodes: FixtureNodes, placement: FurniturePlacement | EquipmentFloorPlacement, bounds: LayoutCollider): void {
+  private renderFixtureFacing(nodes: FixtureNodes, placement: EditorPlacement, bounds: LayoutCollider): void {
     const front = this.frontDirection(placement);
     const thickness = .09;
     const frontBounds: LayoutCollider = front.x !== 0
@@ -658,8 +698,8 @@ export class LayoutEditor {
     assignAttributes(nodes.arrow, { d: `M ${tip.x} ${-tip.z} L ${base.x - front.z * .12} ${-base.z - front.x * .12} L ${base.x + front.z * .12} ${-base.z + front.x * .12} Z` });
   }
 
-  private frontDirection(placement: FurniturePlacement | EquipmentFloorPlacement): Point {
-    const direction = "id" in placement
+  private frontDirection(placement: EditorPlacement): Point {
+    const direction = "id" in placement && placement.id === WORKSTATION_ID ? { x: 0, z: 1 } : "id" in placement
       ? FURNITURE_DEFINITIONS.find((entry) => entry.id === placement.id)!.front
       : { x: 0, z: -1 };
     const { x, z } = direction;
@@ -671,9 +711,10 @@ export class LayoutEditor {
     }
   }
 
-  private facingLabel(placement: FurniturePlacement | EquipmentFloorPlacement): string {
+  private facingLabel(placement: EditorPlacement): string {
     const direction = this.frontDirection(placement);
-    const side = "id" in placement && placement.id === "checkout-counter" ? "顾客侧" : "商品正面";
+    const side = "id" in placement && placement.id === WORKSTATION_ID ? "电脑屏幕"
+      : "id" in placement && placement.id === "checkout-counter" ? "顾客侧" : "商品正面";
     return `${side}${direction.x > 0 ? "朝右 →" : direction.x < 0 ? "朝左 ←" : direction.z > 0 ? "朝店铺后方 ↑" : "朝店门 ↓"}`;
   }
 }

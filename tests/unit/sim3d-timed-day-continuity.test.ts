@@ -106,8 +106,11 @@ class ContinuityRun {
   }
 
   receive(): void {
-    this.step({ type: "RECEIVE_DELIVERY" });
-    this.reject({ type: "RECEIVE_DELIVERY" });
+    this.step({ type: "ADVANCE_DELIVERY_TIME", elapsedMs: 12_000, blocked: false });
+    const orderId = this.state.delivery.orderId!;
+    this.step({ type: "RECEIVE_DELIVERY", orderId });
+    this.reject({ type: "RECEIVE_DELIVERY", orderId });
+    this.step({ type: "ADVANCE_DELIVERY_TIME", elapsedMs: 4_000, blocked: false });
   }
 
   readyShelves(): void {
@@ -286,5 +289,5 @@ describe("bounded multi-day timed-business continuity", () => {
     expect(run.state.settlements.reduce((total, day) => total + day.procurementPence, 0)).toBe(run.purchaseSpend);
     expect(run.checkpoints).toBeGreaterThan(200);
     expect(run.checkpoints).toBeLessThan(700);
-  });
+  }, 20_000);
 });

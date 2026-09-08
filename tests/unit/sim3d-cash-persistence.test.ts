@@ -1,3 +1,5 @@
+import { migrateDeliveryState } from "../../src/sim3d/delivery";
+import { receiveAllDeliveries } from "../helpers/sim3dDelivery";
 import { describe, expect, it } from "vitest";
 import {
   createFirstDayState, getCheckoutTotal, getDaySummary, reduceSim, validateSimState, validateV7SimState, validateV8SimState,
@@ -44,7 +46,7 @@ function pendingCash(): SimState {
   let state = createFirstDayState();
   state.customerSeed = 239;
   state = act(state, { type: "PURCHASE_STOCK", orderId: "cash-save-fixture", pairs: 3 });
-  state = act(state, { type: "RECEIVE_DELIVERY" });
+  state = receiveAllDeliveries(state);
   for (const productId of ["milk", "bread"] as const) {
     state = act(state, { type: "PICK_CRATE", crateId: `${productId}-crate` });
     for (let slot = 0; slot < 3; slot += 1) state = act(state, { type: "STOCK", productId, slot });
@@ -102,8 +104,8 @@ function v7Snapshot(state: SimState = partialCash()): SimStateV7 {
 
 describe("v14 read-only migration of cash and pre-cash save sources", () => {
   it("uses the current v14 namespace, preserving the cross-version writer lock", () => {
-    expect(SIM_STORAGE_KEY).toBe("english-high-street:sim3d:v14");
-    expect(SIM_BACKUP_KEY).toBe("english-high-street:sim3d:v14:backup");
+    expect(SIM_STORAGE_KEY).toBe("english-high-street:sim3d:v15");
+    expect(SIM_BACKUP_KEY).toBe("english-high-street:sim3d:v15:backup");
     expect(SIM_WRITER_LOCK).toBe("english-high-street:sim3d:v4:writer");
   });
 
@@ -127,7 +129,7 @@ describe("v14 read-only migration of cash and pre-cash save sources", () => {
     const expectedPayment = old.payment?.method === "cash"
       ? { ...old.payment, tenderedCash: cashPiecesForAmount(old.payment.tenderedPence), tenderedCashRecorded: false } : old.payment;
     expect(loaded.state).toMatchObject({
-      schemaVersion: 14, customer: { ...current.customer, contentVersion: 1 }, payment: expectedPayment,
+      schemaVersion: 15, customer: { ...current.customer, contentVersion: 1 }, payment: expectedPayment,
       cashDrawer: createDefaultCashDrawer(), cashDrawerOpening: createDefaultCashDrawer(),
       cashDrawerTransactionStart: old.transactions.length,
     });
@@ -195,7 +197,7 @@ describe("v14 read-only migration of cash and pre-cash save sources", () => {
     const loaded = loadSimState(storage);
     expect(loaded.source).toBe("v7");
     expect(loaded.state).toEqual({
-      ...old, schemaVersion: 14, renovation: createFirstDayState().renovation, payment: { method: "card" }, streetSupportRecords: [],
+      ...old, schemaVersion: 15, delivery: migrateDeliveryState(old.purchases), renovation: createFirstDayState().renovation, payment: { method: "card" }, streetSupportRecords: [],
       cashReservePence: 0, cashJournal: [],
       cashDrawer: createDefaultCashDrawer(), cashDrawerOpening: createDefaultCashDrawer(), cashDrawerTransactionStart: old.transactions.length,
       customer: { ...old.customer, contentVersion: 1 },

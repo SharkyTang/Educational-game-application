@@ -1,3 +1,5 @@
+import { openSettings, openComputer, resumeScene, walkTo } from "./helpers/sim3d-computer";
+import { receiveFixtureDeliveries } from "./helpers/sim3d-delivery";
 import { expect, test, type Page } from "@playwright/test";
 import { readFile } from "node:fs/promises";
 import {
@@ -6,6 +8,7 @@ import {
 } from "../../src/sim3d/domain";
 import { cashTenderSpeechFor } from "../../src/sim3d/customerSelection";
 import { cashDrawerValuePence } from "../../src/sim3d/cashDrawer";
+import { transformLayoutPoint } from "../../src/sim3d/shopLayout";
 import { readBrowserSnapshot as savedSnapshot } from "./helpers/sim3d-payment";
 import { beginNextFixtureCustomer } from "./helpers/sim3d-business-time";
 
@@ -36,7 +39,7 @@ function checkoutFixture(visitor: 1 | 2 = 2, products: readonly ProductId[] = ["
     type: "PURCHASE_STOCK", orderId: "cash-browser-delivery",
     lines: products.map((productId) => ({ productId, quantity: 3 })),
   });
-  state = step(state, { type: "RECEIVE_DELIVERY" });
+  state = receiveFixtureDeliveries(state);
   for (const productId of products) {
     const crate = state.crates.find((entry) => entry.productId === productId)!;
     state = step(state, { type: "PICK_CRATE", crateId: crate.id });
@@ -60,7 +63,7 @@ function checkoutFixture(visitor: 1 | 2 = 2, products: readonly ProductId[] = ["
 function stockFixtureOrder(state: SimState, orderId: string, products: readonly ProductId[], quantity = 1): SimState {
   state = step(state, { type: "PURCHASE_STOCK", orderId,
     lines: products.map((productId) => ({ productId, quantity })) });
-  state = step(state, { type: "RECEIVE_DELIVERY" });
+  state = receiveFixtureDeliveries(state);
   for (const productId of products) {
     const crate = state.crates.find((entry) => entry.productId === productId)!;
     state = step(state, { type: "PICK_CRATE", crateId: crate.id });
@@ -137,7 +140,7 @@ async function start(page: Page): Promise<void> {
 }
 
 async function openManagement(page: Page): Promise<void> {
-  if (!(await page.locator("#s3-pause").isVisible())) await page.keyboard.press("b");
+  await openSettings(page);
   await expect(page.locator("#s3-pause")).toBeVisible();
   if (!(await page.locator("#s3-export").isVisible())) await page.getByText("存档与试玩管理", { exact: true }).click();
 }
@@ -289,7 +292,7 @@ test("cash checkout: close, Escape and reload retain received cash and selected 
   expect(closed.cashPence).toBe(fixture.cashPence);
   expect(closed.transactions).toEqual(fixture.transactions);
   for (const axis of ["x", "z", "yaw", "pitch"] as const) expect(closed.playerPose[axis]).toBeCloseTo(partial.playerPose[axis], 6);
-  await page.locator("#s3-resume").click();
+  await resumeScene(page);
   await openCash(page);
   await page.reload();
   await start(page);
@@ -410,9 +413,13 @@ test("cash checkout v2: a legitimately depleted till requests exact cash, preser
     tenderedCashRecorded: true, changeCashRecorded: true, cashDrawerTracked: true,
   });
   expect(cashDrawerValuePence(paid.cashDrawer)).toBe(drawerBefore + amount);
-  await page.keyboard.press("b");
-  await expect(page.locator("#s3-pause")).toBeVisible();
-  await page.locator("#s3-tab-day").click();
+  // Walk around the counter with room for the player's body. Routing directly
+  // from the imported scan camera to the PC can graze a corner within less than
+  // one mouse pixel and repeatedly press W into the same collision boundary.
+  for (const point of [{ x: -.8, z: -1 }, { x: -.8, z: -3.65 }]) {
+    await walkTo(page, transformLayoutPoint(paid.renovation.layout, "checkout-counter", point));
+  }
+  await openComputer(page, "day");
   await expect(page.locator("#s3-day-cash-sales")).toHaveText("4 单 / £7.20");
   await expect(page.locator("#s3-day-card-sales")).toHaveText("1 单 / £1.20");
   await expect(page.locator("#s3-day-drawer")).toContainText(money(drawerBefore + amount));

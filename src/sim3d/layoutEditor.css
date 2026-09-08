@@ -35,6 +35,9 @@
 .s3-layout-fixture[data-kind="fridge"] .s3-layout-fixture-body,
 .s3-layout-fixture[data-kind="chiller"] .s3-layout-fixture-body { fill: #d4e4dc; stroke: #87a99a; }
 .s3-layout-fixture[data-layout-fixture="checkout-counter"] .s3-layout-fixture-body { fill: #ddc49d; stroke: #a38a66; }
+.s3-layout-fixture[data-kind="computer"] .s3-layout-fixture-body { fill: #cdddda; stroke: #52776b; }
+.s3-layout-fixture[data-kind="computer"] .s3-layout-fixture-number { font-size: .24px; }
+.s3-layout-computer-fallback { fill: #e1e8dd; stroke: #8d9d82; stroke-width: .025; stroke-dasharray: .1 .06; }
 .s3-layout-owned-equipment .s3-layout-fixture-body { fill: #dce8d0; stroke: #587151; stroke-dasharray: .12 .06; }
 .s3-layout-owned-equipment .s3-layout-fixture-number { fill: #345238; font-size: .22px; }
 .s3-layout-fixture:hover .s3-layout-fixture-body { stroke-width: .055; }

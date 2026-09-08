@@ -1,3 +1,4 @@
+import { receiveAllDeliveries } from "../helpers/sim3dDelivery";
 import { describe, expect, it } from "vitest";
 import {
   countOnShelf,
@@ -68,7 +69,7 @@ describe("operational equipment in the conserved shop economy", () => {
     })).toContain("资金不足");
 
     const withStock = act(initial, { type: "PURCHASE_STOCK", orderId: "open-with-cereal", lines: [{ productId: "cereal", quantity: 1 }] });
-    const received = act(withStock, { type: "RECEIVE_DELIVERY" });
+    const received = receiveAllDeliveries(withStock);
     const held = act(received, { type: "PICK_CRATE", crateId: "cereal-crate" });
     const stocked = act(held, { type: "STOCK", productId: "cereal", slot: 0 });
     const dropped = act(stocked, { type: "DROP_HELD", position: stocked.crates.find((crate) => crate.productId === "cereal")!.position });
@@ -91,7 +92,7 @@ describe("operational equipment in the conserved shop economy", () => {
     expect(shelfCapacityAt(state, "tea", "shop-equipment-1")).toBe(0);
 
     state = act(state, { type: "PURCHASE_STOCK", orderId: "equipment-cereal", lines: [{ productId: "cereal", quantity: 1 }] });
-    state = act(state, { type: "RECEIVE_DELIVERY" });
+    state = receiveAllDeliveries(state);
     state = act(state, { type: "PICK_CRATE", crateId: "cereal-crate" });
     expect(rejected(state, { type: "STOCK", productId: "tea", slot: 0, equipmentId: "shop-equipment-1" })).toContain("位置不可用");
     state = act(state, { type: "STOCK", productId: "cereal", slot: 0, equipmentId: "shop-equipment-1" });

@@ -1,0 +1,47 @@
+.s3-pause.s3-computer { width: min(940px, calc(100vw - 32px)); border: 7px solid #a78561; border-radius: 15px; box-shadow: 0 0 0 2px #544c3e, 0 20px 80px #12251880; background: #f6f2e6; }
+.s3-computer .s3-pause-heading { padding-bottom: 12px; border-bottom: 1px solid #d4d9c7; }
+.s3-computer-heading-actions { display: flex; gap: 8px; flex-wrap: wrap; justify-content: end; }
+.s3-computer-status { display: flex; justify-content: space-between; flex-wrap: wrap; gap: 7px 16px; margin: 12px 0; color: #46614e; font-size: 12px; }
+.s3-computer-status strong { color: #254d38; }
+.s3-computer-delivery { margin: 0 0 15px; padding: 9px 12px; border: 1px solid #ccd7bc; border-radius: 5px; color: #43583c; background: #eaf0df; font-size: 12px; line-height: 1.6; }
+.s3-purchase-orders { margin: 12px 0 18px; padding: 12px 14px; border: 1px solid #d6dac6; border-radius: 7px; background: #fffdf5; }
+.s3-purchase-orders summary { cursor: pointer; color: #32503d; font-size: 13px; font-weight: 600; }
+.s3-purchase-orders summary:focus-visible { outline: 2px solid #789e76; outline-offset: 4px; }
+.s3-purchase-orders-list { display: grid; gap: 9px; max-height: 280px; margin: 12px 0 0; padding: 0; overflow-y: auto; list-style: none; }
+.s3-purchase-orders-list:focus-visible { outline: 2px solid #789e76; outline-offset: 3px; }
+.s3-purchase-orders-list li { padding: 11px 12px; border: 1px solid #e0e4d3; border-radius: 5px; background: #f6f7ee; overflow-wrap: anywhere; }
+.s3-purchase-order-heading { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 5px 15px; color: #36533e; font-size: 12px; }
+.s3-purchase-orders-list p { margin: 7px 0 0; color: #64715e; font-size: 12px; line-height: 1.6; }
+.s3-purchase-orders-list .s3-purchase-order-pending { color: #795c27; }
+.s3-desktop-welcome { display: flex; align-items: center; gap: 17px; padding: 23px 15px 30px; }
+.s3-desktop-mark { display: grid; place-items: center; width: 59px; height: 59px; flex-shrink: 0; border: 1px solid #8ba489; border-radius: 50%; color: #31553d; font-family: Georgia, serif; font-size: 24px; }
+.s3-desktop-welcome h3 { margin: 7px 0 9px; color: #2d4e3a; font-size: 23px; font-weight: 600; }
+.s3-desktop-welcome p:last-child { color: #728169; font-size: 12px; line-height: 1.7; }
+.s3-desktop-icons { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 13px; }
+.s3-desktop-icon { display: flex; flex-direction: column; align-items: center; gap: 10px; min-height: 171px; padding: 19px 12px; border: 1px solid #d6dac6; border-radius: 9px; color: #32503d; background: #fffdf5; transition: background 120ms, border-color 120ms; }
+.s3-desktop-icon:hover, .s3-desktop-icon:focus-visible { border-color: #789e76; background: #edf3e1; outline-offset: 3px; }
+.s3-desktop-icon-picture { display: grid; place-items: center; width: 65px; height: 65px; border: 1px solid #d2dac2; border-radius: 15px; background: #e6edd9; }
+.s3-desktop-icon-picture svg { width: 45px; height: 45px; }
+.s3-desktop-icon strong { font-size: 15px; font-weight: 600; }
+.s3-desktop-icon kbd { margin-left: 4px; font-size: 10px; }
+.s3-desktop-icon small { font-size: 11px; color: #79816d; }
+.s3-desktop-icon.s3-upgrade-ready .s3-desktop-icon-picture { background: #f0e4bd; border-color: #c2a259; color: #775b24; }
+.s3-desktop-note { margin-top: 25px; text-align: center; color: #7b836e; font-size: 11px; }
+.s3-computer-subnav { display: flex; flex-wrap: wrap; gap: 8px; margin: 0 0 14px; }
+.s3-computer-subnav button { padding: 8px 12px; border: 1px solid #c9d4bb; border-radius: 5px; color: #44603f; background: #ecf1e3; font-size: 12px; }
+.s3-computer-subnav button[aria-pressed="true"] { color: #faf9ed; border-color: #496443; background: #496443; }
+.s3-venue-info { position: absolute; z-index: 8; left: 50%; bottom: 150px; width: min(450px, calc(100vw - 28px)); transform: translateX(-50%); padding: 18px 21px; border: 1px solid #cbd5be; border-radius: 8px; background: #fffbedf5; color: #36503d; box-shadow: 0 8px 30px #12251840; pointer-events: none; }
+.s3-venue-info h3 { margin: 0 0 10px; font-size: 17px; }
+.s3-venue-info p { margin: 6px 0; font-size: 12px; line-height: 1.7; }
+@media (max-width: 600px) {
+  .s3-pause.s3-computer { width: calc(100vw - 14px); padding: 15px 12px; border-width: 5px; max-height: calc(100dvh - 14px); }
+  .s3-computer-heading-actions { gap: 6px; }
+  .s3-computer-heading-actions button { padding: 7px 10px; font-size: 11px; }
+  .s3-desktop-welcome { padding: 13px 3px 22px; gap: 11px; }
+  .s3-desktop-welcome h3 { font-size: 18px; }
+  .s3-desktop-mark { width: 43px; height: 43px; font-size: 20px; }
+  .s3-desktop-icons { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 9px; }
+  .s3-desktop-icon { min-height: 154px; padding: 16px 7px; }
+  .s3-desktop-icon strong { font-size: 14px; }
+  .s3-desktop-icon small { font-size: 10px; }
+}

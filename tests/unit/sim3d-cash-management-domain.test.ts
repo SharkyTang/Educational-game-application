@@ -1,3 +1,5 @@
+import { asV13CashSnapshot } from "../helpers/sim3dLegacyCash";
+import { receiveAllDeliveries } from "../helpers/sim3dDelivery";
 import { describe, expect, it } from "vitest";
 import {
   createFirstDayState, getCashCountStatus, getCashManagementSummary, getDaySummary, getPaymentMethodSummary,
@@ -37,7 +39,7 @@ function ready(quantity = 2, drawer?: CashDrawerState): SimState {
   let state = createFirstDayState();
   if (drawer) state = act(state, { type: "CONFIGURE_CASH_FLOAT", drawer });
   state = act(state, { type: "PURCHASE_STOCK", orderId: "cash-management-water", lines: [{ productId: "water", quantity }] });
-  state = act(state, { type: "RECEIVE_DELIVERY" });
+  state = receiveAllDeliveries(state);
   return stockWater(state, quantity);
 }
 function sale(state: SimState, leave = true): SimState {
@@ -163,7 +165,7 @@ describe("immutable whole-sale refunds and repeated physical inventory ownership
   it("rejects a return when all display, crate and pending-delivery capacity is occupied", () => {
     let state = sale(ready(4));
     state = act(state, { type: "PURCHASE_STOCK", orderId: "refill-display", lines: [{ productId: "water", quantity: 1 }] });
-    state = act(state, { type: "RECEIVE_DELIVERY" });
+    state = receiveAllDeliveries(state);
     state = stockWater(state, 1);
     state = act(state, { type: "PURCHASE_STOCK", orderId: "fill-reserved-box", lines: [{ productId: "water", quantity: 8 }] });
     expect(getRefundOffer(state, "sale-1").reason).toContain("空位");
@@ -173,7 +175,7 @@ describe("immutable whole-sale refunds and repeated physical inventory ownership
   it("rebuilds a safe return crate after recycling without creating another paid recycling reward", () => {
     let state = sale(ready(1));
     state = act(state, { type: "PURCHASE_STOCK", orderId: "shelves-before-return", lines: [{ productId: "water", quantity: 4 }] });
-    state = act(state, { type: "RECEIVE_DELIVERY" });
+    state = receiveAllDeliveries(state);
     state = stockWater(state, 4);
     state = act(state, { type: "PICK_CRATE", crateId: "water-crate" });
     state = act(state, { type: "RECYCLE_CRATE" });
@@ -233,8 +235,7 @@ describe("counted cash audit and freshness", () => {
 describe("v14 audit tamper rejection and exact legacy migration", () => {
   it("migrates v13 receipts, equipment and settled history with zero refund extension", () => {
     const current = act(act(sale(ready()), { type: "CLOSE_STORE" }), { type: "SETTLE_DAY" });
-    const { cashReservePence: _reserve, cashJournal: _journal, ...old } = current;
-    const previous = { ...old, schemaVersion: 13, settlements: old.settlements.map(({ refundCount: _count, refundPence: _amount, netRevenuePence: _net, ...summary }) => summary) };
+    const previous = asV13CashSnapshot(current);
     expect(validateV13SimState(previous)).toBe(true);
     const migrated = migrateV13SimState(previous);
     expect(migrated.transactions).toEqual(current.transactions);

@@ -1,3 +1,4 @@
+import { receiveAllDeliveries } from "../helpers/sim3dDelivery";
 import { describe, expect, it, vi } from "vitest";
 import {
   PRODUCTS, SAFE_DROP_POINTS, capacityFor, countAt, createFirstDayState, getCheckoutTotal, getDaySummary,
@@ -41,7 +42,7 @@ function stock(state: SimState, productId: ProductId, quantity: number): SimStat
 function stocked(products: ProductId[] = ["milk", "cheese"], quantity = 2): SimState {
   let state = createFirstDayState();
   state = act(state, { type: "PURCHASE_STOCK", orderId: "cash-fixture", lines: products.map((productId) => ({ productId, quantity })) });
-  state = act(state, { type: "RECEIVE_DELIVERY" });
+  state = receiveAllDeliveries(state);
   for (const product of products) state = stock(state, product, quantity);
   return state;
 }
@@ -113,7 +114,7 @@ function changeShortageCheckout(): SimState {
   state = act(state, { type: "PURCHASE_STOCK", orderId: "cash-shortage-target", lines: [
     { productId: "milk", quantity: 1 }, { productId: "cheese", quantity: 1 },
   ] });
-  state = act(state, { type: "RECEIVE_DELIVERY" });
+  state = receiveAllDeliveries(state);
   state = stock(state, "milk", 1);
   state = stock(state, "cheese", 1);
   state = forceFivePoundCash(arrive(state));
@@ -124,7 +125,7 @@ function changeShortageCheckout(): SimState {
 describe("cash payment domain lifecycle and atomic settlement", () => {
   it("freezes the method on entry while keeping the original shopping list, models and inventory choice independent", () => {
     let state = stocked();
-    expect(state.schemaVersion).toBe(14);
+    expect(state.schemaVersion).toBe(15);
     expect(state.payment).toBeNull();
     state = act(state, { type: "OPEN_STORE" });
     expect(state.payment).toEqual({ method: "card" });
@@ -348,7 +349,7 @@ describe("cash payment domain lifecycle and atomic settlement", () => {
     let state = act(scan(cashCheckout()), { type: "RECEIVE_CASH" });
     state = act(state, { type: "ADD_CHANGE", denominationPence: 50 });
     state = act(state, { type: "PURCHASE_STOCK", orderId: "refill-during-cash", lines: [{ productId: "milk", quantity: 4 }] });
-    state = act(state, { type: "RECEIVE_DELIVERY" });
+    state = receiveAllDeliveries(state);
     state = stock(state, "milk", 4);
     state = act(state, { type: "PICK_CRATE", crateId: "milk-crate" });
     state = act(state, { type: "RECYCLE_CRATE" });

@@ -1,3 +1,4 @@
+import { openSettings } from "./helpers/sim3d-computer";
 import { expect, test, type Page } from "@playwright/test";
 import { readFile } from "node:fs/promises";
 import { createFirstDayState, reduceSim, validateSimState, type PlayerPose, type SimState } from "../../src/sim3d/domain";
@@ -18,6 +19,10 @@ type Direction = "KeyW" | "KeyS";
 type SprintKey = "ShiftLeft" | "ShiftRight";
 interface MovementSample {
   seconds: number;
+  hostSeconds: number;
+  keyupResponseMs: number;
+  keydownProcessingDelayMs: number;
+  keyupProcessingDelayMs: number;
   distance: number;
   speed: number;
   before: PlayerPose;
@@ -32,7 +37,10 @@ function movementFixture(): SimState {
   if (!purchased.changed || !validateSimState(purchased.state)) throw new Error("Invalid player movement delivery fixture");
   // Face south along the empty doorway/street centreline. Moving out and back
   // keeps every measurement clear of the counter, crates, van and world edge.
-  const result = reduceSim(purchased.state, {
+  let delivered = purchased.state;
+  for (let second = 0; second < 12; second += 1) delivered = reduceSim(delivered, { type: "ADVANCE_DELIVERY_TIME", elapsedMs: 1000, blocked: false }).state;
+  if (delivered.delivery.phase !== "ready") throw new Error("The benchmark van must be parked");
+  const result = reduceSim(delivered, {
     type: "SAVE_POSE", pose: { x: 0, z: -3.5, yaw: Math.PI, pitch: 0 },
   });
   if (!result.changed || !validateSimState(result.state)) throw new Error("Invalid player movement fixture");
@@ -49,7 +57,7 @@ function monitorRuntime(page: Page): string[] {
 }
 
 async function pause(page: Page): Promise<void> {
-  if (!(await page.locator("#s3-pause").isVisible())) await page.keyboard.press("KeyB");
+  await openSettings(page);
   await expect(page.locator("#s3-pause")).toBeVisible();
 }
 
@@ -88,21 +96,68 @@ async function exportPose(page: Page, returnToGame = true): Promise<PlayerPose> 
 }
 
 async function move(page: Page, before: PlayerPose, direction: Direction, milliseconds: number, sprint?: SprintKey): Promise<MovementSample> {
-  if (sprint) await page.keyboard.down(sprint);
-  const started = performance.now();
+  // Use each real input event's creation timestamp: both listener processing
+  // and protocol responses can be delayed by rendering or a synchronous save.
+  // Keep those delays diagnostic; never change input or read game state here.
+  const inputTiming = await page.evaluateHandle((code) => {
+    let pressedAtMs: number | null = null;
+    let releasedAtMs: number | null = null;
+    let keydownProcessingDelayMs = 0;
+    let keyupProcessingDelayMs = 0;
+    const pressed = (event: KeyboardEvent): void => {
+      if (event.code === code && !event.repeat && pressedAtMs === null) {
+        pressedAtMs = event.timeStamp;
+        keydownProcessingDelayMs = performance.now() - event.timeStamp;
+      }
+    };
+    const released = (event: KeyboardEvent): void => {
+      if (event.code === code && pressedAtMs !== null && releasedAtMs === null) {
+        releasedAtMs = event.timeStamp;
+        keyupProcessingDelayMs = performance.now() - event.timeStamp;
+      }
+    };
+    window.addEventListener("keydown", pressed, true);
+    window.addEventListener("keyup", released, true);
+    return {
+      finish: () => {
+        window.removeEventListener("keydown", pressed, true);
+        window.removeEventListener("keyup", released, true);
+        return { pressedAtMs, releasedAtMs, keydownProcessingDelayMs, keyupProcessingDelayMs };
+      },
+    };
+  }, direction);
+  let observerStopped = false;
   try {
-    await page.keyboard.down(direction);
-    // This interval is the measured key hold, not a wait for page readiness.
-    await page.waitForTimeout(milliseconds);
+    if (sprint) await page.keyboard.down(sprint);
+    const started = performance.now();
+    let keyupResponseMs = 0;
+    try {
+      await page.keyboard.down(direction);
+      // This interval is the measured key hold, not a wait for page readiness.
+      await page.waitForTimeout(milliseconds);
+    } finally {
+      const releaseStarted = performance.now();
+      await page.keyboard.up(direction);
+      keyupResponseMs = performance.now() - releaseStarted;
+    }
+    const hostSeconds = (performance.now() - started) / 1000;
+    if (sprint) await page.keyboard.up(sprint);
+    const { pressedAtMs, releasedAtMs, keydownProcessingDelayMs, keyupProcessingDelayMs }
+      = await inputTiming.evaluate((observer) => observer.finish());
+    observerStopped = true;
+    if (pressedAtMs === null || releasedAtMs === null || releasedAtMs <= pressedAtMs) {
+      throw new Error(`Missing real ${direction} keydown/keyup timing sample`);
+    }
+    const seconds = (releasedAtMs - pressedAtMs) / 1000;
+    const after = await exportPose(page);
+    const distance = (after.z - before.z) * (direction === "KeyW" ? -1 : 1);
+    expect(after.x).toBeCloseTo(before.x, 2);
+    return { seconds, hostSeconds, keyupResponseMs, keydownProcessingDelayMs, keyupProcessingDelayMs,
+      distance, speed: distance / seconds, before, after };
   } finally {
-    await page.keyboard.up(direction);
+    if (!observerStopped) await inputTiming.evaluate((observer) => observer.finish()).catch(() => undefined);
+    await inputTiming.dispose();
   }
-  const seconds = (performance.now() - started) / 1000;
-  if (sprint) await page.keyboard.up(sprint);
-  const after = await exportPose(page);
-  const distance = (after.z - before.z) * (direction === "KeyW" ? -1 : 1);
-  expect(after.x).toBeCloseTo(before.x, 2);
-  return { seconds, distance, speed: distance / seconds, before, after };
 }
 
 function expectStationary(before: PlayerPose, after: PlayerPose): void {

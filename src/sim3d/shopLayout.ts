@@ -4,6 +4,8 @@ import {
   CATALOG_RACKS, PRODUCT_DISPLAYS, crateDimensions, rackCollider, segmentClear,
   type FloorPoint, type LayoutCollider,
 } from "./productLayout";
+import { isFallbackWorkstation, validateWorkstationPlacement, workstationBounds, workstationEquals,
+  workstationServicePoint, type WorkstationPlacement } from "./workstation";
 
 export const FURNITURE_IDS = [
   "pantry-grains", "pantry-drinks", "produce-fruit", "produce-vegetables",
@@ -14,7 +16,12 @@ export type FurnitureId = (typeof FURNITURE_IDS)[number];
 export type FurnitureRotation = 0 | 1 | 2 | 3;
 export interface FurniturePlacement extends FloorPoint { id: FurnitureId; rotation: FurnitureRotation }
 export type ShopExpansionStage = 0 | 1 | 2;
-export interface ShopLayout { expansion: ShopExpansionStage; placements: FurniturePlacement[] }
+export interface ShopLayout {
+  expansion: ShopExpansionStage;
+  placements: FurniturePlacement[];
+  /** Absent only in historical layouts; v15 domain states require the free computer. */
+  workstation?: WorkstationPlacement;
+}
 export interface FurnitureDefinition {
   readonly id: FurnitureId;
   readonly name: string;
@@ -130,11 +137,12 @@ export function transformLayoutPoint<T extends FloorPoint>(layout: ShopLayout, i
 
 /** Furniture and plants only; world wall colliders and occupied cartons are added by callers. */
 export function layoutColliders(layout: ShopLayout): LayoutCollider[] {
-  return [...layout.placements.map(furnitureBounds), ...FIXED_LAYOUT_OBSTACLES.map((bounds) => ({ ...bounds }))];
+  return [...layout.placements.map(furnitureBounds), ...FIXED_LAYOUT_OBSTACLES.map((bounds) => ({ ...bounds })),
+    ...(layout.workstation ? [workstationBounds(layout.workstation)] : [])];
 }
 
 export function layoutEquals(a: ShopLayout, b: ShopLayout): boolean {
-  if (a.expansion !== b.expansion || a.placements.length !== b.placements.length) return false;
+  if (a.expansion !== b.expansion || a.placements.length !== b.placements.length || !workstationEquals(a.workstation, b.workstation)) return false;
   return a.placements.every((placement) => b.placements.some((other) => other.id === placement.id
     && other.x === placement.x && other.z === placement.z && other.rotation === placement.rotation));
 }
@@ -173,6 +181,7 @@ function pointClear(point: FloorPoint, colliders: readonly LayoutCollider[], rad
 export function validateShopLayoutStructure(value: unknown): value is ShopLayout {
   if (!record(value) || (value.expansion !== 0 && value.expansion !== 1 && value.expansion !== 2)
     || !Array.isArray(value.placements) || value.placements.length !== FURNITURE_IDS.length) return false;
+  if (Object.hasOwn(value, "workstation") && !validateWorkstationPlacement(value.workstation)) return false;
   const seen = new Set<string>();
   for (const placement of value.placements as unknown[]) {
     if (!record(placement) || typeof placement.id !== "string" || !furnitureIds.has(placement.id) || seen.has(placement.id)
@@ -274,6 +283,14 @@ export function layoutRoute(from: FloorPoint, destination: FloorPoint, colliders
 /** Revalidates every built-in shelf and both checkout sides against one composed obstacle set. */
 export function validateShopLayoutReachability(layout: ShopLayout, obstacles: readonly LayoutCollider[]): LayoutValidation {
   const bounds = shopBounds(layout.expansion);
+  if (layout.workstation) {
+    const servicePoint = workstationServicePoint(layout.workstation);
+    const routeBounds = isFallbackWorkstation(layout.workstation) ? { ...bounds, minZ: -6.5 } : bounds;
+    if (!inside(servicePoint, routeBounds, LAYOUT_WALK_RADIUS) || !pointClear(servicePoint, obstacles, LAYOUT_WALK_RADIUS)
+      || layoutRoute(SHOP_ENTRANCE_POINT, servicePoint, obstacles, routeBounds) === null) {
+      return { valid: false, reason: "电脑桌前方无法到达，请留出使用电脑的通道。" };
+    }
+  }
   const targets = PRODUCT_ASSET_IDS.map((productId) => {
     const id = furnitureForProduct(productId);
     return { id, point: transformLayoutPoint(layout, id, PRODUCT_DISPLAYS[productId].approach),
@@ -314,6 +331,19 @@ function validateGeometry(layout: ShopLayout, extraObstacles: readonly LayoutCol
     }
     if (extraObstacles.some((obstacle) => overlaps(fixture.bounds, obstacle))) return fail(`${name}与地上的货箱重叠，请先移开货箱。`);
   }
+  if (layout.workstation) {
+    const computer = workstationBounds(layout.workstation);
+    const fallback = isFallbackWorkstation(layout.workstation);
+    if (!fallback && (!inside({ x: computer.minX, z: computer.minZ }, bounds) || !inside({ x: computer.maxX, z: computer.maxZ }, bounds))) {
+      return { valid: false, reason: "电脑桌需要摆在店内；仅门外左侧的原定安置点可作临时位置。" };
+    }
+    if (overlaps(computer, SHOP_ENTRANCE)) return { valid: false, reason: "电脑桌挡住了店门，请保留入口。" };
+    if (RESERVED_LAYOUT_AREAS.some((area) => overlaps(computer, area))) return { valid: false, reason: "电脑桌占用了卸货位，请保留卸货空间。" };
+    if (FIXED_LAYOUT_OBSTACLES.some((obstacle) => overlaps(computer, obstacle)) || fixtures.some((fixture) => overlaps(computer, fixture.bounds))) {
+      return { valid: false, reason: "电脑桌与现有家具或盆栽重叠，请分开放置。" };
+    }
+    if (extraObstacles.some((obstacle) => overlaps(computer, obstacle))) return { valid: false, reason: "电脑桌与地上的货箱重叠，请先移开货箱。" };
+  }
   if (extraObstacles.some((obstacle) => overlaps(obstacle, SHOP_ENTRANCE))) return { valid: false, reason: "货箱挡住了店门，请先清理入口。" };
   return validateShopLayoutReachability(layout, [...layoutColliders(layout), ...shopWallColliders(layout.expansion), ...extraObstacles]);
 }
@@ -328,7 +358,7 @@ export function validateShopLayout(value: unknown, extraObstacles: readonly Layo
     || [...extraObstacles].some((obstacle) => !finiteBounds(obstacle))) return { valid: false, reason: "货箱占位数据无效，暂时不能应用布局。" };
   if (extraObstacles.length) return validateGeometry(value, extraObstacles);
   // Content keys also detect in-place editor changes. A bounded cache avoids re-routing on each autosave.
-  const key = JSON.stringify([value.expansion, FURNITURE_IDS.map((id) => {
+  const key = JSON.stringify([value.expansion, value.workstation, FURNITURE_IDS.map((id) => {
     const placement = value.placements.find((entry) => entry.id === id)!;
     return [placement.x, placement.z, placement.rotation];
   })]);

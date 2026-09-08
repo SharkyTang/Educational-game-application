@@ -1,3 +1,4 @@
+import { receiveAllDeliveries } from "../helpers/sim3dDelivery";
 import { describe, expect, it, vi } from "vitest";
 import { asV13CashSnapshot } from "../helpers/sim3dLegacyCash";
 import {
@@ -44,7 +45,7 @@ function stock(state: SimState, productId: ProductId, quantity: number): SimStat
 function stocked(quantity = 4): SimState {
   let state = act(createFirstDayState(), { type: "PURCHASE_STOCK", orderId: "timed-opening",
     lines: [{ productId: "milk", quantity }, { productId: "bread", quantity }] });
-  state = act(state, { type: "RECEIVE_DELIVERY" });
+  state = receiveAllDeliveries(state);
   for (const productId of ["milk", "bread"] as const) state = stock(state, productId, quantity);
   return state;
 }
@@ -135,7 +136,7 @@ function v8Snapshot(state: SimState): SimStateV8 {
 describe("v9 active-time days and a lightweight clock path", () => {
   it("starts preparation at 08:30 with no customer-count target or running timer", () => {
     const state = createFirstDayState();
-    expect(state.schemaVersion).toBe(14);
+    expect(state.schemaVersion).toBe(15);
     expect(state.day).toMatchObject({ phase: "preparing", elapsedOpenMs: 0, nextCustomerAtMs: null, closeReason: null, targetCustomers: null });
     expect(getBusinessClock(state.day).timeLabel).toBe("08:30");
     expect(getDaySummary(state).targetCustomers).toBeNull();
@@ -196,8 +197,8 @@ describe("v9 active-time days and a lightweight clock path", () => {
   it("saturates huge finite deltas and produces the same clock for subdivided active steps", () => {
     const state = checkout(stocked());
     let stepped = state;
-    for (let step = 0; step < 1_200; step += 1) stepped = reduceSim(stepped, { type: "ADVANCE_BUSINESS_TIME", elapsedMs: 17.5 }).state;
-    const single = act(state, { type: "ADVANCE_BUSINESS_TIME", elapsedMs: 21_000 });
+    for (let step = 0; step < 1_200; step += 1) stepped = reduceSim(stepped, { type: "ADVANCE_BUSINESS_TIME", elapsedMs: 30 }).state;
+    const single = act(state, { type: "ADVANCE_BUSINESS_TIME", elapsedMs: 36_000 });
     expect(stepped.day).toEqual(single.day);
     const closing = act(single, { type: "ADVANCE_BUSINESS_TIME", elapsedMs: Number.MAX_VALUE });
     expect(closing.day).toMatchObject({ elapsedOpenMs: BUSINESS_DURATION_MS, phase: "closing", closeReason: "time", nextCustomerAtMs: null });
@@ -226,7 +227,7 @@ describe("v9 active-time days and a lightweight clock path", () => {
     state = act(state, { type: "ADVANCE_BUSINESS_TIME", elapsedMs: 15_000 });
     expect(state.day.nextCustomerAtMs).toBe(nextCustomerAtMs);
     state = act(state, { type: "PURCHASE_STOCK", orderId: "timed-restock", pairs: 1 });
-    state = act(state, { type: "RECEIVE_DELIVERY" });
+    state = receiveAllDeliveries(state);
     state = stock(state, "milk", 1);
     state = stock(state, "bread", 1);
     expect(canStartCustomer(state)).toBe(true);
@@ -283,14 +284,14 @@ describe("closing, zero-sale days and unfinished work", () => {
 
   it("allows a last customer to finish shopping and card payment after an early close", () => {
     let state = act(stocked(1), { type: "OPEN_STORE" });
-    state = act(state, { type: "ADVANCE_BUSINESS_TIME", elapsedMs: 21_000 });
+    state = act(state, { type: "ADVANCE_BUSINESS_TIME", elapsedMs: 36_000 });
     state = act(state, { type: "CLOSE_STORE" });
     expect(state.customer.phase).toBe("to-milk");
     expect(getBusinessClock(state.day).timeLabel).toBe("09:30");
     for (let stage = 0; stage < 3; stage += 1) state = act(state, { type: "CUSTOMER_ADVANCE" });
     for (const item of state.items.filter((entry) => entry.location.kind === "checkout")) state = act(state, { type: "SCAN", itemId: item.id });
     state = act(pay(state), { type: "CUSTOMER_ADVANCE" });
-    expect(state.day.elapsedOpenMs).toBe(21_000);
+    expect(state.day.elapsedOpenMs).toBe(36_000);
     expect(state.day.nextCustomerAtMs).toBeNull();
     state = act(state, { type: "SETTLE_DAY" });
     expect(getBusinessClock(state.day).timeLabel).toBe("09:30");
@@ -321,7 +322,7 @@ describe("closing, zero-sale days and unfinished work", () => {
     rejected(state, { type: "PURCHASE_STOCK", orderId: "too-late", pairs: 1 });
     rejected(state, { type: "SETTLE_DAY" });
     rejected(state, { type: "START_NEXT_DAY" });
-    state = act(state, { type: "RECEIVE_DELIVERY" });
+    state = receiveAllDeliveries(state);
     expect(state.cashPence).toBe(cash);
     expect(getDeliverySummary(state)).toMatchObject({ pendingOrders: 0, receivedToday: 1 });
     state = act(state, { type: "SETTLE_DAY" });
@@ -353,7 +354,7 @@ describe("strict v8 migration and persisted business time", () => {
     state = act(state, { type: "ADVANCE_BUSINESS_TIME", elapsedMs: 2345.75 });
     const storage = new MemoryStorage();
     saveSimState(state, storage);
-    expect(SIM_STORAGE_KEY).toBe("english-high-street:sim3d:v14");
+    expect(SIM_STORAGE_KEY).toBe("english-high-street:sim3d:v15");
     expect(SIM_WRITER_LOCK).toBe("english-high-street:sim3d:v4:writer");
     expect(loadSimState(storage)).toEqual({ source: "primary", state });
     expect(parseImportedSimState(JSON.stringify(state))).toEqual(state);

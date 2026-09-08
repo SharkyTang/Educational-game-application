@@ -1,3 +1,4 @@
+import { receiveAllDeliveries } from "../helpers/sim3dDelivery";
 import { describe, expect, it } from "vitest";
 import { asV13CashSnapshot } from "../helpers/sim3dLegacyCash";
 import {
@@ -113,7 +114,7 @@ describe("community cash-support ledger introduced in v11", () => {
     expect(state.cashPence).toBe(155);
     expect(rejected(state, { type: "SUPPORT_STREET_NEIGHBOUR", neighbourId, amountPence: 200 })).toContain("资金不足");
 
-    state = act(state, { type: "RECEIVE_DELIVERY" });
+    state = receiveAllDeliveries(state);
     state = act(state, { type: "CLOSE_STORE" });
     state = act(state, { type: "SETTLE_DAY" });
     expect(rejected(state, { type: "SUPPORT_STREET_NEIGHBOUR", neighbourId, amountPence: 100 })).toContain("已经日结");
@@ -147,8 +148,8 @@ describe("community cash-support ledger introduced in v11", () => {
 
 describe("read-only v10 to current v14 migration", () => {
   it("uses a new key, retains the writer lock and migrates v10 without changing cash or the old source", () => {
-    expect(SIM_STORAGE_KEY).toBe("english-high-street:sim3d:v14");
-    expect(SIM_BACKUP_KEY).toBe("english-high-street:sim3d:v14:backup");
+    expect(SIM_STORAGE_KEY).toBe("english-high-street:sim3d:v15");
+    expect(SIM_BACKUP_KEY).toBe("english-high-street:sim3d:v15:backup");
     expect(SIM_V10_STORAGE_KEY).toBe("english-high-street:sim3d:v10");
     expect(SIM_V10_BACKUP_KEY).toBe("english-high-street:sim3d:v10:backup");
     expect(SIM_WRITER_LOCK).toBe("english-high-street:sim3d:v4:writer");
@@ -158,7 +159,7 @@ describe("read-only v10 to current v14 migration", () => {
     storage.data.set(SIM_V10_STORAGE_KEY, raw);
     const loaded = loadSimState(storage);
     expect(loaded.source).toBe("v10");
-    expect(loaded.state).toMatchObject({ schemaVersion: 14, cashPence: old.cashPence, streetSupportRecords: [],
+    expect(loaded.state).toMatchObject({ schemaVersion: 15, cashPence: old.cashPence, streetSupportRecords: [],
       customer: { ...old.customer, contentVersion: 1 } });
     expect(loaded.state.settlements).toEqual([]);
     expect(storage.getItem(SIM_V10_STORAGE_KEY)).toBe(raw);
@@ -171,7 +172,7 @@ describe("read-only v10 to current v14 migration", () => {
   it("preserves the old active visitor on content v1 and upgrades only a newly begun visitor", () => {
     let current = createFirstDayState(); current.customerSeed = 77;
     current = act(current, { type: "PURCHASE_STOCK", orderId: "content-migration", lines: [{ productId: "water", quantity: 2 }] });
-    current = act(current, { type: "RECEIVE_DELIVERY" });
+    current = receiveAllDeliveries(current);
     current = act(current, { type: "PICK_CRATE", crateId: "water-crate" });
     current = act(current, { type: "STOCK", productId: "water", slot: 0 });
     current = act(current, { type: "DROP_HELD", position: current.crates.find((crate) => crate.productId === "water")!.position });
@@ -217,7 +218,7 @@ describe("read-only v10 to current v14 migration", () => {
     storage.data.set("english-high-street:sim3d:v9", "retained older source");
     const before = [...storage.data];
     const restored = loadSimState(storage);
-    expect(restored).toMatchObject({ source: "v10-backup", state: { schemaVersion: 14, cashPence: old.cashPence } });
+    expect(restored).toMatchObject({ source: "v10-backup", state: { schemaVersion: 15, cashPence: old.cashPence } });
     expect(restored.warning).toContain("当前设备、有限钱箱或社区存档不可恢复");
     expect([...storage.data]).toEqual(before);
 

@@ -1,3 +1,4 @@
+import { receiveAllDeliveries } from "../helpers/sim3dDelivery";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { NullEngine, PointLight, Scene, TransformNode, UniversalCamera, Vector3 } from "@babylonjs/core";
 import { createShop, type ShopEnvironment } from "../../src/sim3d/assets";
@@ -40,7 +41,7 @@ function stock(state: SimState, productId: ProductId, quantity: number): SimStat
 
 function preparedState(productId: ProductId = "milk", quantity = 3, initial = createFirstDayState()): SimState {
   let state = act(initial, { type: "PURCHASE_STOCK", orderId: `journey-stock-${initial.purchases.length}`, lines: [{ productId, quantity }] });
-  state = act(state, { type: "RECEIVE_DELIVERY" });
+  state = receiveAllDeliveries(state);
   return stock(state, productId, quantity);
 }
 
@@ -52,7 +53,7 @@ function fundedState(): SimState {
     let state = createFirstDayState();
     for (let day = 0; day < 4; day += 1) {
       state = act(state, { type: "PURCHASE_STOCK", orderId: `journey-funds-${day}`, pairs: 3 });
-      state = act(state, { type: "RECEIVE_DELIVERY" });
+      state = receiveAllDeliveries(state);
       state = stock(stock(state, "milk", 3), "bread", 3);
       for (let visit = 0; visit < 3; visit += 1) {
         state = act(state, { type: visit === 0 ? "OPEN_STORE" : "NEXT_CUSTOMER" });
@@ -75,7 +76,7 @@ function allCratesState(): SimState {
     type: "PURCHASE_STOCK", orderId: "journey-all-thirty",
     lines: PRODUCT_IDS.map((productId) => ({ productId, quantity: productId === "milk" ? 2 : 1 })),
   });
-  state = act(state, { type: "RECEIVE_DELIVERY" });
+  state = receiveAllDeliveries(state);
   state = stock(state, "milk", 1);
   return act(state, { type: "OPEN_STORE" });
 }
@@ -398,7 +399,7 @@ describe("customer journeys through the actual street and renovated shop", () =>
   it("replans after lifting and moving a real occupied crate without teleporting a visitor already walking outside", () => {
     let state = preparedState();
     state = act(state, { type: "PURCHASE_STOCK", orderId: "journey-moving-crate", lines: [{ productId: "bread", quantity: 1 }] });
-    state = act(state, { type: "RECEIVE_DELIVERY" });
+    state = receiveAllDeliveries(state);
     state = act(state, { type: "OPEN_STORE" });
     const view = harness(state); view.active = true;
     for (let frame = 0; frame < 20; frame += 1) view.updateCustomer(.05);
@@ -502,7 +503,7 @@ describe("customer journeys through the actual street and renovated shop", () =>
   it("does not repeat a physical entry announcement after crate replanning and rearms it for the next visitor", () => {
     let state = preparedState();
     state = act(state, { type: "PURCHASE_STOCK", orderId: "journey-entry-crate", lines: [{ productId: "bread", quantity: 1 }] });
-    state = act(state, { type: "RECEIVE_DELIVERY" });
+    state = receiveAllDeliveries(state);
     state = act(state, { type: "OPEN_STORE" });
     const beforeWalking = structuredClone(state);
     const view = harness(state); view.active = true;

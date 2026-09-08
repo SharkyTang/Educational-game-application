@@ -1,3 +1,5 @@
+import { migrateDeliveryState } from "../../src/sim3d/delivery";
+import { receiveAllDeliveries } from "../helpers/sim3dDelivery";
 import { describe, expect, it } from "vitest";
 import { asV13CashSnapshot } from "../helpers/sim3dLegacyCash";
 import {
@@ -29,7 +31,7 @@ function act(state: SimState, command: SimCommand): SimState {
 function stocked(): SimState {
   let state = createFirstDayState(); state.customerSeed = 239;
   state = act(state, { type: "PURCHASE_STOCK", orderId: "renovation-migration", pairs: 3 });
-  state = act(state, { type: "RECEIVE_DELIVERY" });
+  state = receiveAllDeliveries(state);
   for (const productId of ["milk", "bread"] as const) {
     state = act(state, { type: "PICK_CRATE", crateId: `${productId}-crate` });
     for (let slot = 0; slot < 3; slot += 1) state = act(state, { type: "STOCK", productId, slot });
@@ -116,8 +118,8 @@ function asV8(state: SimState): SimStateV8 {
 
 describe("renovation migration into current v14 without rewriting old cash or clocks", () => {
   it("uses a separate current key and retains the shared writer lock", () => {
-    expect(SIM_STORAGE_KEY).toBe("english-high-street:sim3d:v14");
-    expect(SIM_BACKUP_KEY).toBe("english-high-street:sim3d:v14:backup");
+    expect(SIM_STORAGE_KEY).toBe("english-high-street:sim3d:v15");
+    expect(SIM_BACKUP_KEY).toBe("english-high-street:sim3d:v15:backup");
     expect(SIM_V9_STORAGE_KEY).toBe("english-high-street:sim3d:v9");
     expect(SIM_WRITER_LOCK).toBe("english-high-street:sim3d:v4:writer");
   });
@@ -129,7 +131,8 @@ describe("renovation migration into current v14 without rewriting old cash or cl
     const openingDrawer = createDefaultCashDrawer();
     expect(current).toEqual({
       ...old,
-      schemaVersion: 14,
+      schemaVersion: 15, delivery: migrateDeliveryState(old.purchases),
+      day: { ...old.day, elapsedOpenMs: 34_567.25 },
       cashReservePence: 0, cashJournal: [],
       renovation: createFirstDayState().renovation,
       streetSupportRecords: [],
@@ -220,7 +223,7 @@ describe("renovation migration into current v14 without rewriting old cash or cl
       const raw = JSON.stringify(previous);
       expect(() => parseImportedSimState(raw), `v${previous.schemaVersion} import`).not.toThrow();
       const migrated = parseImportedSimState(raw);
-      expect(migrated.schemaVersion).toBe(14);
+      expect(migrated.schemaVersion).toBe(15);
       expect(migrated.renovation).toEqual(createFirstDayState().renovation);
       expect(migrated.cashPence).toBe(previous.cashPence);
       expect(migrated.items).toEqual(previous.items);
@@ -281,7 +284,7 @@ describe("v14 current saves, read-only recovery and cross-version conflicts", ()
     const before = [...storage.data]; const restored = loadSimState(storage);
     expect(restored.source).toBe("v9-backup");
     expect(restored.warning).toContain("最近的装修、扩建与营业进度可能丢失");
-    expect(restored.state.day).toEqual(old.day);
+    expect(restored.state.day).toEqual({ ...old.day, elapsedOpenMs: 34_567.25 });
     expect(restored.state.payment).toEqual(old.payment?.method === "cash"
       ? { ...old.payment, tenderedCash: cashPiecesForAmount(old.payment.tenderedPence), tenderedCashRecorded: false }
       : old.payment);
@@ -297,7 +300,7 @@ describe("v14 current saves, read-only recovery and cross-version conflicts", ()
     const restored = loadSimState(storage);
     expect(restored.source).toBe("v9");
     expect(restored.warning).not.toContain("09:00");
-    expect(restored.state.day.elapsedOpenMs).toBe(old.day.elapsedOpenMs);
+    expect(restored.state.day.elapsedOpenMs).toBe(34_567.25);
     expect(storage.getItem(SIM_STORAGE_KEY)).toBeNull();
   });
 

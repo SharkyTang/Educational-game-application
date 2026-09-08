@@ -1,3 +1,5 @@
+import { openSettings, openComputer, resumeScene, walkTo, facePoint } from "./helpers/sim3d-computer";
+import { receiveFixtureDeliveries } from "./helpers/sim3d-delivery";
 import { expect, test, type Page } from "@playwright/test";
 import { readFile } from "node:fs/promises";
 import {
@@ -8,6 +10,7 @@ import { cashChangeDuePence } from "../../src/sim3d/cashPayment";
 import { denominationLabel } from "../../src/sim3d/cashRegister";
 import { createDefaultShopLayout, transformLayoutPoint, type FurnitureId } from "../../src/sim3d/shopLayout";
 import { SHOP_EXPANSION_COST_PENCE } from "../../src/sim3d/shopDevelopment";
+import { beginNextFixtureCustomer } from "./helpers/sim3d-business-time";
 import { completeFixturePayment, payScannedCheckout, readBrowserSnapshot } from "./helpers/sim3d-payment";
 
 // Real disposable 3D browser contexts; setup uses audited reducer saves imported through the public UI.
@@ -32,7 +35,7 @@ function earnedCapitalFixture(customerSeed?: number): SimState {
     type: "PURCHASE_STOCK", orderId: "renovation-opening-stock",
     lines: [{ productId: "milk", quantity: 3 }, { productId: "bread", quantity: 3 }],
   });
-  state = step(state, { type: "RECEIVE_DELIVERY" });
+  state = receiveFixtureDeliveries(state);
   for (const productId of ["milk", "bread"] as const) {
     const crate = state.crates.find((entry) => entry.productId === productId)!;
     state = step(state, { type: "PICK_CRATE", crateId: crate.id });
@@ -40,7 +43,7 @@ function earnedCapitalFixture(customerSeed?: number): SimState {
     state = step(state, { type: "DROP_HELD", position: crate.position });
   }
   for (let visitor = 0; visitor < 3; visitor += 1) {
-    state = step(state, { type: visitor === 0 ? "OPEN_STORE" : "NEXT_CUSTOMER" });
+    state = visitor === 0 ? step(state, { type: "OPEN_STORE" }) : beginNextFixtureCustomer(state);
     while (["to-milk", "to-bread", "to-checkout"].includes(state.customer.phase)) state = step(state, { type: "CUSTOMER_ADVANCE" });
     for (const item of state.items.filter((entry) => entry.location.kind === "checkout")) state = step(state, { type: "SCAN", itemId: item.id });
     state = completeFixturePayment(state);
@@ -56,7 +59,7 @@ function expandedStockedFixture(customerSeed?: number): SimState {
   let state = step(earnedCapitalFixture(customerSeed), { type: "START_NEXT_DAY" });
   state = step(state, { type: "BUY_SPACE_EXPANSION" });
   state = step(state, { type: "PURCHASE_STOCK", orderId: "renovation-second-day-milk", lines: [{ productId: "milk", quantity: 1 }] });
-  state = step(state, { type: "RECEIVE_DELIVERY" });
+  state = receiveFixtureDeliveries(state);
   const crate = state.crates.find((entry) => entry.productId === "milk")!;
   state = step(state, { type: "PICK_CRATE", crateId: crate.id });
   state = step(state, { type: "STOCK", productId: "milk", slot: 0 });
@@ -97,7 +100,7 @@ async function start(page: Page): Promise<void> {
 }
 
 async function openManagement(page: Page): Promise<void> {
-  if (!(await page.locator("#s3-pause").isVisible())) await page.keyboard.press("b");
+  await openSettings(page);
   await expect(page.locator("#s3-pause")).toBeVisible();
 }
 
@@ -127,8 +130,7 @@ async function exportSnapshot(page: Page): Promise<SimState> {
 }
 
 async function openLayout(page: Page): Promise<void> {
-  if (await page.locator("#s3-pause").isVisible()) await page.locator("#s3-tab-layout").click();
-  else await page.keyboard.press("p");
+  await openComputer(page, "layout");
   await expect(page.locator("#s3-layout-map")).toBeVisible();
 }
 
@@ -159,11 +161,11 @@ test("shop renovation: initial funds, invalid drafts and keep/discard navigation
   const errors = runtimeErrors(page);
   await page.goto("/");
   await start(page);
-  await page.locator("#s3-open-layout").click();
+  await openComputer(page, "layout");
   await expect(page.locator("#s3-layout-map")).toBeVisible();
-  await expect(page.locator("#s3-layout-select option")).toHaveCount(11);
+  await expect(page.locator("#s3-layout-select option")).toHaveCount(12);
   await expect(page.locator("#s3-layout-room")).toContainText("尚未解锁");
-  await page.locator("#s3-tab-development").click();
+  await openComputer(page, "development");
   await expect(page.locator("#s3-buy-space")).toBeDisabled();
   await expect(page.locator("#s3-cash")).toHaveText(money(INITIAL_CAPITAL_PENCE));
   await openLayout(page);
@@ -188,9 +190,10 @@ test("shop renovation: initial funds, invalid drafts and keep/discard navigation
   await page.locator("#s3-layout-exit-keep").click();
   await expect(page.locator("#s3-layout-exit-confirm")).toBeHidden();
   await expect(page.locator("#s3-layout-z")).toHaveText("3.965 m");
-  await page.locator("#s3-tab-day").click();
+  await page.locator("#s3-computer-back").click();
   await expect(page.locator("#s3-layout-exit-confirm")).toBeVisible();
   await page.locator("#s3-layout-exit-discard").click();
+  await openComputer(page, "day");
   await expect(page.locator("#s3-panel-day")).toBeVisible();
   await openLayout(page);
   await expect(page.locator("#s3-layout-z")).toHaveText("4.065 m");
@@ -204,7 +207,7 @@ test("shop renovation: initial funds, invalid drafts and keep/discard navigation
 });
 
 test("shop renovation: one paid expansion updates the settled ledger, opens real floor and survives reload", async ({ page }, testInfo) => {
-  test.setTimeout(130_000);
+  test.setTimeout(180_000);
   const errors = runtimeErrors(page);
   const fixture = earnedCapitalFixture();
   expect(fixture.cashPence).toBe(1710);
@@ -212,8 +215,7 @@ test("shop renovation: one paid expansion updates the settled ledger, opens real
   await page.goto("/");
   await start(page);
   await importFixture(page, fixture);
-  await openManagement(page);
-  await page.locator("#s3-tab-development").click();
+  await openComputer(page, "development");
   await expect(page.locator("#s3-buy-space")).toBeEnabled();
   await page.locator("#s3-buy-space").click();
   await expect(page.locator("#s3-confirm-space")).toBeVisible();
@@ -224,7 +226,7 @@ test("shop renovation: one paid expansion updates the settled ledger, opens real
   await page.locator("#s3-confirm-space").click();
   await expect(page.locator("#s3-cash")).toHaveText(money(fixture.cashPence - SHOP_EXPANSION_COST_PENCE));
   await expect(page.locator("#s3-buy-space")).toBeDisabled();
-  await page.locator("#s3-tab-day").click();
+  await openComputer(page, "day");
   await expect(page.locator("#s3-day-expansion")).toHaveText("£15.00");
   await expect(page.locator("#s3-day-investment")).toHaveText("£0.00");
   await expect(page.locator("#s3-day-profit")).toHaveText(money(getDaySummary(fixture).grossProfitPence));
@@ -242,25 +244,28 @@ test("shop renovation: one paid expansion updates the settled ledger, opens real
   });
   await openLayout(page);
   await expect(page.locator("#s3-layout-room")).toContainText("扩建已完成");
-  await page.locator("#s3-resume").click();
+  await resumeScene(page);
   // Walk through the former rear wall: this verifies actual collision/floor expansion, not a badge alone.
+  await walkTo(page, { x: -1.7, z: 3.15 });
+  await facePoint(page, { x: -1.7, z: 6.5, y: 1.65 });
   await page.keyboard.down("w");
   await page.waitForTimeout(1600);
   await page.keyboard.up("w");
   const walked = await exportSnapshot(page);
   expect(walked.playerPose.z).toBeGreaterThan(4.7);
-  await page.locator("#s3-resume").click();
+  await resumeScene(page);
   await page.screenshot({ path: testInfo.outputPath("renovation-expanded-floor.png") });
   await page.reload();
   await start(page);
+  // Check the saved real pose before walking back to the computer changes it.
+  expect((await readBrowserSnapshot(page)).playerPose.z).toBeGreaterThan(4.7);
   await openLayout(page);
   await expect(page.locator("#s3-layout-room")).toContainText("扩建已完成");
-  await page.locator("#s3-tab-development").click();
+  await openComputer(page, "development");
   await expect(page.locator("#s3-buy-space")).toBeDisabled();
   const restored = await exportSnapshot(page);
   expect(restored.renovation).toEqual(expanded.renovation);
   expect(restored.cashPence).toBe(expanded.cashPence);
-  expect(restored.playerPose.z).toBeGreaterThan(4.7);
   expect(getDaySummary(restored).expansionSpendPence).toBe(SHOP_EXPANSION_COST_PENCE);
   expect(errors).toEqual([]);
 });
@@ -309,8 +314,10 @@ test("shop renovation: shelves, fridge and checkout rotate freely; applied merch
   expect(applied.transactions).toEqual(fixture.transactions);
   expect(applied.renovation.layout.placements.filter((placement) => placement.id !== "milk-fridge"))
     .toEqual(expandedDefaults.placements.filter((placement) => placement.id !== "milk-fridge"));
-  await page.locator("#s3-resume").click();
-  // The saved camera looks at the new location of the real stocked milk, not the former fridge position.
+  await resumeScene(page);
+  // Return from the physical computer and inspect the real stocked carton at its relocated shelf slot.
+  await walkTo(page, { x: -3.1, z: 6 });
+  await facePoint(page, transformLayoutPoint(applied.renovation.layout, "milk-fridge", { x: -.3, y: .94, z: 3.77 }));
   await expect(page.locator("#s3-target-label")).toContainText(/Milk|牛奶/, { timeout: 15_000 });
   await page.keyboard.press("f");
   await expect(page.locator("#s3-inspection")).toBeVisible();
@@ -422,7 +429,7 @@ test("shop renovation: a customer reaches the relocated counter and cash is acce
   const repeated = await exportSnapshot(page);
   expect(repeated.transactions).toEqual(paid.transactions);
   expect(repeated.cashPence).toBe(paid.cashPence);
-  await page.locator("#s3-resume").click();
+  await resumeScene(page);
   await page.screenshot({ path: testInfo.outputPath("renovation-relocated-counter-cash-paid.png") });
   expect(errors).toEqual([]);
 });

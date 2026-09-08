@@ -1,3 +1,4 @@
+import { receiveAllDeliveries } from "../helpers/sim3dDelivery";
 import { describe, expect, it, vi } from "vitest";
 import { createFirstDayState, reduceSim, validateSimState, type SimCommand, type SimState } from "../../src/sim3d/domain";
 import { cashDrawerValuePence } from "../../src/sim3d/cashDrawer";
@@ -55,7 +56,7 @@ function step(state: SimState, command: SimCommand): SimState {
 
 function paid(visitors: 1 | 2 = 1): SimState {
   let state = step(createFirstDayState(), { type: "PURCHASE_STOCK", orderId: "cash-panel", lines: [{ productId: "milk", quantity: visitors }, { productId: "bread", quantity: visitors }] });
-  state = step(state, { type: "RECEIVE_DELIVERY" });
+  state = receiveAllDeliveries(state);
   for (const productId of ["milk", "bread"] as const) {
     const crate = state.crates.find((entry) => entry.productId === productId)!;
     state = step(state, { type: "PICK_CRATE", crateId: crate.id });

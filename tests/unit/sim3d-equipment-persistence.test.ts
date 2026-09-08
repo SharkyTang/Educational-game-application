@@ -1,3 +1,4 @@
+import { receiveAllDeliveries } from "../helpers/sim3dDelivery";
 import { describe, expect, it } from "vitest";
 import { asV13CashSnapshot } from "../helpers/sim3dLegacyCash";
 import {
@@ -59,7 +60,7 @@ function partialCashSnapshot(): SimState {
   let state = createFirstDayState();
   state.customerSeed = 239;
   state = step(state, { type: "PURCHASE_STOCK", orderId: "equipment-v12-cash", pairs: 3 });
-  state = step(state, { type: "RECEIVE_DELIVERY" });
+  state = receiveAllDeliveries(state);
   for (const productId of ["milk", "bread"] as const) {
     state = step(state, { type: "PICK_CRATE", crateId: `${productId}-crate` });
     for (let slot = 0; slot < 3; slot += 1) state = step(state, { type: "STOCK", productId, slot });
@@ -155,8 +156,8 @@ function asV10(state = createFirstDayState()): SimStateV10 {
 
 describe("v14 equipment schema persistence", () => {
   it("uses the v14 namespace while retaining the shared v4 writer lock and read-only v12 namespace", () => {
-    expect(SIM_STORAGE_KEY).toBe("english-high-street:sim3d:v14");
-    expect(SIM_BACKUP_KEY).toBe("english-high-street:sim3d:v14:backup");
+    expect(SIM_STORAGE_KEY).toBe("english-high-street:sim3d:v15");
+    expect(SIM_BACKUP_KEY).toBe("english-high-street:sim3d:v15:backup");
     expect(SIM_V12_STORAGE_KEY).toBe("english-high-street:sim3d:v12");
     expect(SIM_V12_BACKUP_KEY).toBe("english-high-street:sim3d:v12:backup");
     expect(SIM_V11_STORAGE_KEY).toBe("english-high-street:sim3d:v11");
@@ -191,7 +192,7 @@ describe("v14 equipment schema persistence", () => {
 
     const loaded = loadSimState(storage);
     expect(loaded.source).toBe("v12");
-    expect(loaded.state.schemaVersion).toBe(14);
+    expect(loaded.state.schemaVersion).toBe(15);
     expect(loaded.state.payment).toEqual(legacy.payment);
     expect(loaded.state.transactions).toEqual(legacy.transactions);
     expect(loaded.state.cashDrawer).toEqual(legacy.cashDrawer);
@@ -216,7 +217,7 @@ describe("v14 equipment schema persistence", () => {
     const loaded = loadSimState(storage);
     expect(loaded.source).toBe("v11");
     expect(loaded.warning).toContain("设备仓库从空开始");
-    expect(loaded.state.schemaVersion).toBe(14);
+    expect(loaded.state.schemaVersion).toBe(15);
     expect(loaded.state.cashPence).toBe(legacy.cashPence);
     expect(loaded.state.equipment).toEqual({ instances: [], purchases: [], nextSequence: 1 });
     expect(loaded.state.renovation.layout.equipment).toEqual([]);

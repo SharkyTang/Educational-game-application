@@ -1,3 +1,4 @@
+import { receiveAllDeliveries } from "../helpers/sim3dDelivery";
 import { describe, expect, it } from "vitest";
 import { payScannedCheckout } from "../helpers/sim3dPayment";
 import { PRODUCT_ASSET_IDS, PRODUCT_ASSETS } from "../../src/sim3d/product-library/catalog";
@@ -47,7 +48,7 @@ function afterDays(days: number): SimState {
   let state = createFirstDayState();
   for (let day = 0; day < days; day += 1) {
     state = act(state, { type: "PURCHASE_STOCK", orderId: `startup-day-${day}`, pairs: 3 });
-    state = act(state, { type: "RECEIVE_DELIVERY" });
+    state = receiveAllDeliveries(state);
     state = stock(stock(state, "milk", 3), "bread", 3);
     for (let customer = 0; customer < 3; customer += 1) state = pay(checkout(state));
     state = act(state, { type: "CLOSE_STORE" });
@@ -82,7 +83,7 @@ describe("every product-library SKU in the real inventory and economy", () => {
     expect(getCustomerOrder(state)).toEqual([]);
     expect(canStartCustomer(state)).toBe(false);
     if (productId !== "milk" && productId !== "bread") expect(state.crates.some((crate) => crate.productId === productId)).toBe(false);
-    state = act(state, { type: "RECEIVE_DELIVERY" });
+    state = receiveAllDeliveries(state);
     const crate = state.crates.find((candidate) => candidate.productId === productId)!;
     expect(crate.id).toBe(`${productId}-crate`);
     expect(DELIVERY_DROP_POINTS).toContainEqual(crate.position);
@@ -120,7 +121,7 @@ describe("every product-library SKU in the real inventory and economy", () => {
   it("puts a new player's last-listed SKU close to the entrance instead of its catalogue index far down the street", () => {
     const productId = PRODUCT_IDS.at(-1)!;
     let state = order(createFirstDayState(), [{ productId, quantity: 1 }]);
-    state = act(state, { type: "RECEIVE_DELIVERY" });
+    state = receiveAllDeliveries(state);
     expect(state.crates.find((crate) => crate.productId === productId)?.position).toEqual(DELIVERY_DROP_POINTS[0]);
   });
 
@@ -132,7 +133,7 @@ describe("every product-library SKU in the real inventory and economy", () => {
     state = order(state, lines);
     expect(getDeliverySummary(state)).toMatchObject({ pendingUnits: 30, pendingOrders: 1 });
     expect(state.crates).toHaveLength(2);
-    state = act(state, { type: "RECEIVE_DELIVERY" });
+    state = receiveAllDeliveries(state);
     expect(state.crates).toHaveLength(30);
     expect(new Set(state.crates.map((crate) => `${crate.position.x}:${crate.position.z}`)).size).toBe(30);
     expect(state.cashPence).toBe(before - expectedCost);
@@ -186,7 +187,7 @@ describe("explicit selected purchase input and conserved reservations", () => {
   it("reserves each SKU's crate capacity across pending goods and a hand-held item's return", () => {
     let state = order(createFirstDayState(), [{ productId: "carrot", quantity: 8 }]);
     expect(getPurchaseOffer(state, [{ productId: "carrot", quantity: 1 }]).allowed).toBe(false);
-    state = act(state, { type: "RECEIVE_DELIVERY" });
+    state = receiveAllDeliveries(state);
     state = stock(state, "carrot", 4);
     state = order(state, [{ productId: "carrot", quantity: 4 }]);
     const item = state.items.find((candidate) => candidate.location.kind === "crate")!;
@@ -194,25 +195,25 @@ describe("explicit selected purchase input and conserved reservations", () => {
     expect(countAt(state, "carrot", "crate")).toBe(3);
     expect(getPurchaseOffer(state, [{ productId: "carrot", quantity: 1 }]).allowed).toBe(false);
     expect(getPurchaseOffer(state, [{ productId: "water", quantity: 1 }]).allowed).toBe(true);
-    expect(reduceSim(state, { type: "RECEIVE_DELIVERY" }).state).toBe(state);
+    expect(reduceSim(state, { type: "RECEIVE_DELIVERY", orderId: state.delivery.orderId ?? "already-received" }).state).toBe(state);
     state = act(state, { type: "RETURN_ITEM" });
-    state = act(state, { type: "RECEIVE_DELIVERY" });
+    state = receiveAllDeliveries(state);
     expect(countAt(state, "carrot", "crate")).toBe(CRATE_CAPACITY);
     expect(countAt(state, "carrot", "shelf")).toBe(4);
   });
 
   it("keeps empty box locations reserved so canceled single-SKU goods cannot reappear inside another box", () => {
     let state = order(createFirstDayState(), [{ productId: "carrot", quantity: 4 }]);
-    state = act(state, { type: "RECEIVE_DELIVERY" });
+    state = receiveAllDeliveries(state);
     state = stock(state, "carrot", 4);
     const emptyPosition = state.crates.find((crate) => crate.productId === "carrot")!.position;
     state = order(state, [{ productId: "soap", quantity: 1 }]);
-    state = act(state, { type: "RECEIVE_DELIVERY" });
+    state = receiveAllDeliveries(state);
     expect(state.crates.find((crate) => crate.productId === "soap")!.position).not.toEqual(emptyPosition);
     state = act(state, { type: "OPEN_STORE" });
     state = act(state, { type: "CUSTOMER_ADVANCE" });
     state = order(state, [{ productId: "carrot", quantity: 1 }]);
-    state = act(state, { type: "RECEIVE_DELIVERY" });
+    state = receiveAllDeliveries(state);
     state = stock(state, "carrot", 1);
     const beforeCash = state.cashPence;
     state = act(state, { type: "CANCEL_CUSTOMER" });
@@ -233,14 +234,14 @@ describe("explicit selected purchase input and conserved reservations", () => {
 describe("frozen current orders, variable checkout size and save validation", () => {
   it("keeps a chosen order through reload, later delivery and a temporarily emptied requested shelf", () => {
     let state = order(createFirstDayState(), [{ productId: "water", quantity: 1 }, { productId: "apple", quantity: 1 }, { productId: "soap", quantity: 1 }]);
-    state = act(state, { type: "RECEIVE_DELIVERY" });
+    state = receiveAllDeliveries(state);
     for (const id of ["water", "apple", "soap"] as const) state = stock(state, id, 1);
     state = act(state, { type: "OPEN_STORE" });
     const request = [...getCustomerOrder(state)];
     expect(request).toHaveLength(2);
     state = JSON.parse(JSON.stringify(state)) as SimState;
     state = order(state, [{ productId: "coffee", quantity: 1 }]);
-    state = act(state, { type: "RECEIVE_DELIVERY" });
+    state = receiveAllDeliveries(state);
     state = stock(state, "coffee", 1);
     expect(getCustomerOrder(state)).toEqual(request);
     const firstItem = state.items.find((item) => item.productId === request[0] && item.location.kind === "shelf")!;
@@ -273,7 +274,7 @@ describe("frozen current orders, variable checkout size and save validation", ()
 
   it("rejects a checkout re-labelled with a different shopping list and deletion of a sold SKU's reusable crate", () => {
     let state = order(createFirstDayState(), [{ productId: "soap", quantity: 1 }]);
-    state = act(state, { type: "RECEIVE_DELIVERY" });
+    state = receiveAllDeliveries(state);
     state = checkout(stock(state, "soap", 1));
     const relabelled = structuredClone(state);
     relabelled.customer.shoppingList = ["milk"];

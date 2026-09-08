@@ -1,3 +1,5 @@
+import { openSettings, openComputer } from "./helpers/sim3d-computer";
+import { receiveFixtureDeliveries } from "./helpers/sim3d-delivery";
 import { expect, test, type Page } from "@playwright/test";
 import {
   createFirstDayState,
@@ -16,6 +18,7 @@ import {
   getShopAchievements,
 } from "../../src/sim3d/shopDevelopment";
 import { shopBounds } from "../../src/sim3d/shopLayout";
+import { beginNextFixtureCustomer } from "./helpers/sim3d-business-time";
 import { completeFixturePayment, readBrowserSnapshot } from "./helpers/sim3d-payment";
 
 // The fixture is created only through the public reducer. The test then buys,
@@ -50,7 +53,7 @@ function firstExpansionWithEarnedCapital(): SimState {
       orderId: `equipment-growth-day-${state.day.number}`,
       lines: [{ productId: "bread", quantity: 3 }, { productId: "cereal", quantity: 3 }],
     });
-    state = step(state, { type: "RECEIVE_DELIVERY" });
+    state = receiveFixtureDeliveries(state);
     for (const productId of ["bread", "cereal"] as const) {
       const crate = state.crates.find((candidate) => candidate.productId === productId)!;
       state = step(state, { type: "PICK_CRATE", crateId: crate.id });
@@ -58,7 +61,7 @@ function firstExpansionWithEarnedCapital(): SimState {
       state = step(state, { type: "DROP_HELD", position: crate.position });
     }
     for (let visitor = 0; visitor < 3; visitor += 1) {
-      state = step(state, { type: visitor === 0 ? "OPEN_STORE" : "NEXT_CUSTOMER" });
+      state = visitor === 0 ? step(state, { type: "OPEN_STORE" }) : beginNextFixtureCustomer(state);
       while (["to-milk", "to-bread", "to-checkout"].includes(state.customer.phase)) {
         state = step(state, { type: "CUSTOMER_ADVANCE" });
       }
@@ -96,7 +99,7 @@ async function start(page: Page): Promise<void> {
 }
 
 async function openManagement(page: Page): Promise<void> {
-  if (!(await page.locator("#s3-pause").isVisible())) await page.keyboard.press("b");
+  await openSettings(page);
   await expect(page.locator("#s3-pause")).toBeVisible();
 }
 
@@ -128,9 +131,7 @@ test("equipment growth: buy, place and persist a real shelf before the £30 seco
   await page.goto("/");
   await start(page);
   await importFixture(page, fixture);
-  await openManagement(page);
-
-  await page.locator("#s3-tab-equipment").click();
+  await openComputer(page, "equipment");
   await expect(page.locator("#s3-panel-equipment")).toBeVisible();
   await expect(page.locator("#s3-equipment-title")).toHaveText("设备商店与仓库");
   await expect(page.locator(".s3-equipment-card")).toHaveCount(6);
@@ -173,7 +174,7 @@ test("equipment growth: buy, place and persist a real shelf before the £30 seco
   await page.locator("#s3-layout-apply").click();
   await expect(page.locator("#s3-layout-dirty")).toHaveText("已保存");
 
-  await page.locator("#s3-tab-equipment").click();
+  await openComputer(page, "equipment");
   await expect(page.locator("#s3-equipment-active")).toHaveText("1");
   await expect(page.locator("#s3-equipment-warehouse-count")).toHaveText("0");
   await expect(page.locator("#s3-equipment-warehouse-list")).toContainText("店内使用");
@@ -186,7 +187,7 @@ test("equipment growth: buy, place and persist a real shelf before the £30 seco
   expect(placed.items).toEqual(fixture.items);
   expect(placed.transactions).toEqual(fixture.transactions);
 
-  await page.locator("#s3-tab-development").click();
+  await openComputer(page, "development");
   await expect(page.locator("#s3-growth-area")).toHaveText("83.0 m²");
   await expect(page.locator("#s3-growth-stage")).toContainText("小卖铺扩建 1 / 3");
   await expect(page.locator("#s3-extension-title")).toContainText("第二次扩建");
@@ -205,7 +206,7 @@ test("equipment growth: buy, place and persist a real shelf before the £30 seco
   await expect(page.locator("#s3-buy-space")).toHaveText("本版两次扩建已完成");
   await expect(page.locator("#s3-achievement-second-extension")).toHaveAttribute("aria-label", /已达成/);
 
-  await page.locator("#s3-tab-day").click();
+  await openComputer(page, "day");
   await expect(page.locator("#s3-day-expansion")).toHaveText(money(SHOP_EXPANSION_COST_PENCE + SECOND_SHOP_EXPANSION_COST_PENCE));
   await expect(page.locator("#s3-day-equipment")).toHaveText(money(equipmentPrice));
   const completed = await readBrowserSnapshot(page);
@@ -226,11 +227,10 @@ test("equipment growth: buy, place and persist a real shelf before the £30 seco
   await page.screenshot({ path: testInfo.outputPath("equipment-placed-and-second-extension.png") });
   await page.reload();
   await start(page);
-  await openManagement(page);
-  await page.locator("#s3-tab-equipment").click();
+  await openComputer(page, "equipment");
   await expect(page.locator("#s3-equipment-active")).toHaveText("1");
   await expect(page.locator("#s3-equipment-warehouse-list")).toContainText("店内使用");
-  await page.locator("#s3-tab-development").click();
+  await openComputer(page, "development");
   await expect(page.locator("#s3-growth-area")).toHaveText("103.4 m²");
   const restored = await readBrowserSnapshot(page);
   expect(restored.renovation).toEqual(completed.renovation);

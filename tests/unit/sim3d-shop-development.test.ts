@@ -1,3 +1,4 @@
+import { receiveAllDeliveries } from "../helpers/sim3dDelivery";
 import { describe, expect, it } from "vitest";
 import {
   createFirstDayState, getDaySummary, getShopLayoutObstacles, isWalkablePosition, reduceSim, validateSimState,
@@ -27,7 +28,7 @@ function rejected(state: SimState, command: SimCommand): string {
 
 function prepared(state = createFirstDayState()): SimState {
   state = act(state, { type: "PURCHASE_STOCK", orderId: `renovation-day-${state.day.number}`, pairs: 3 });
-  state = act(state, { type: "RECEIVE_DELIVERY" });
+  state = receiveAllDeliveries(state);
   for (const productId of ["milk", "bread"] as const) {
     state = act(state, { type: "PICK_CRATE", crateId: `${productId}-crate` });
     for (let slot = 0; slot < 3; slot += 1) state = act(state, { type: "STOCK", productId, slot });
@@ -67,7 +68,7 @@ function movedMilk(state: SimState, rotation: 1 | 3 = 1): ShopLayout {
 describe("v14 staged shop expansion as a separate audited investment", () => {
   it("starts with the same capital and stock, with no purchased floor or layout achievement", () => {
     const state = createFirstDayState();
-    expect(state.schemaVersion).toBe(14);
+    expect(state.schemaVersion).toBe(15);
     expect(state.cashPence).toBe(1200);
     expect(state.items).toEqual([]);
     expect(state.renovation).toMatchObject(createInitialRenovation());

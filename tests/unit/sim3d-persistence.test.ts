@@ -1,3 +1,4 @@
+import { receiveAllDeliveries } from "../helpers/sim3dDelivery";
 import { describe, expect, it } from "vitest";
 import { asV13CashSnapshot } from "../helpers/sim3dLegacyCash";
 import { preCashTransactions } from "../helpers/sim3dPayment";
@@ -57,7 +58,7 @@ function pendingCashSnapshot(): SimState {
   let state = createFirstDayState();
   state.customerSeed = 239;
   state = fixtureStep(state, { type: "PURCHASE_STOCK", orderId: "v11-cash-migration", pairs: 3 });
-  state = fixtureStep(state, { type: "RECEIVE_DELIVERY" });
+  state = receiveAllDeliveries(state);
   for (const productId of ["milk", "bread"] as const) {
     state = fixtureStep(state, { type: "PICK_CRATE", crateId: `${productId}-crate` });
     for (let slot = 0; slot < 3; slot += 1) state = fixtureStep(state, { type: "STOCK", productId, slot });
@@ -125,7 +126,7 @@ function oldSnapshot(state = paidSnapshot()): LegacySimState {
 
 function v4Snapshot(): SimStateV4 {
   let state = reduceSim(createFirstDayState(), { type: "PURCHASE_STOCK", orderId: "v4-original", pairs: 3 }).state;
-  state = reduceSim(state, { type: "RECEIVE_DELIVERY" }).state;
+  state = receiveAllDeliveries(state);
   return {
     ...v5Snapshot(state), schemaVersion: 4,
     crates: state.crates.map((crate, index) => ({ ...crate, position: { ...SAFE_DROP_POINTS[index]! } })),
@@ -320,8 +321,8 @@ describe("safe crate placement around the player", () => {
 
 describe("audited v11 to v14 finite cash-drawer and equipment migration", () => {
   it("uses separate v14 keys while retaining both v11 keys as read-only migration sources", () => {
-    expect(SIM_STORAGE_KEY).toBe("english-high-street:sim3d:v14");
-    expect(SIM_BACKUP_KEY).toBe("english-high-street:sim3d:v14:backup");
+    expect(SIM_STORAGE_KEY).toBe("english-high-street:sim3d:v15");
+    expect(SIM_BACKUP_KEY).toBe("english-high-street:sim3d:v15:backup");
     expect(SIM_V11_STORAGE_KEY).toBe("english-high-street:sim3d:v11");
     expect(SIM_V11_BACKUP_KEY).toBe("english-high-street:sim3d:v11:backup");
     expect(SIM_WRITER_LOCK).toBe("english-high-street:sim3d:v4:writer");
@@ -345,7 +346,7 @@ describe("audited v11 to v14 finite cash-drawer and equipment migration", () => 
     expect(loaded.source).toBe("v11");
     expect(loaded.state).toEqual(expected);
     expect(parseImportedSimState(primary)).toEqual(expected);
-    expect(loaded.state.schemaVersion).toBe(14);
+    expect(loaded.state.schemaVersion).toBe(15);
     expect(loaded.state.cashPence).toBe(old.cashPence);
     expect(loaded.state.cashDrawerTransactionStart).toBe(old.transactions.length);
     expect(loaded.state.cashDrawerOpening).toEqual(loaded.state.cashDrawer);
@@ -431,7 +432,7 @@ describe("v14 snapshot persistence and read-only v3 migration", () => {
     const before = [...storage.data];
     expect(loadSimState(storage)).toEqual({ state: createFirstDayState(), source: "new" });
     expect([...storage.data]).toEqual(before);
-    expect(SIM_STORAGE_KEY).toBe("english-high-street:sim3d:v14");
+    expect(SIM_STORAGE_KEY).toBe("english-high-street:sim3d:v15");
   });
 
   it("migrates the valid v3 world once and leaves both original v3 keys byte-for-byte intact", () => {
@@ -445,7 +446,7 @@ describe("v14 snapshot persistence and read-only v3 migration", () => {
     expect(migrated.source).toBe("legacy");
     expect(migrated.warning).toContain("不会额外发放");
     expect(migrated.state.cashPence).toBe(400);
-    expect(migrated.state.schemaVersion).toBe(14);
+    expect(migrated.state.schemaVersion).toBe(15);
     expect(migrated.state.transactions).toEqual(oldSnapshot().transactions.map((transaction) => ({
       ...transaction, paymentMethod: "card", tenderedPence: transaction.amountPence, changePence: 0, tenderedCash: [], changeCash: [],
       tenderedCashRecorded: false, changeCashRecorded: false, cashDrawerTracked: false,
@@ -571,11 +572,11 @@ describe("v14 snapshot persistence and read-only v3 migration", () => {
     expect(restored.items).toHaveLength(6);
     expect(restored.cashPence).toBe(510);
     expect(getDeliverySummary(restored)).toMatchObject({ pendingOrders: 1, pendingUnits: 6, receivedToday: 0 });
-    const signed = reduceSim(restored, { type: "RECEIVE_DELIVERY" }).state;
+    const signed = receiveAllDeliveries(restored);
     session.save(signed);
     const reloaded = loadSimState(storage).state;
     expect(getDeliverySummary(reloaded)).toMatchObject({ pendingOrders: 0, receivedToday: 1 });
-    expect(reduceSim(reloaded, { type: "RECEIVE_DELIVERY" }).state).toBe(reloaded);
+    expect(reduceSim(reloaded, { type: "RECEIVE_DELIVERY", orderId: reloaded.delivery.orderId ?? "already-received" }).state).toBe(reloaded);
     expect(reloaded.cashPence).toBe(510);
     expect(reloaded.items.map((item) => item.id)).toEqual(restored.items.map((item) => item.id));
   });
@@ -610,7 +611,7 @@ describe("audited v4 migration and coexistence with an older page", () => {
     expect(loaded.state.customerSeed).toBe(123456);
     expect(loaded.state.purchases[0]?.receivedDay).toBe(1);
     expect(getDeliverySummary(loaded.state)).toMatchObject({ pendingOrders: 0, pendingUnits: 0, receivedToday: 1 });
-    expect(reduceSim(loaded.state, { type: "RECEIVE_DELIVERY" }).state).toBe(loaded.state);
+    expect(reduceSim(loaded.state, { type: "RECEIVE_DELIVERY", orderId: loaded.state.delivery.orderId ?? "already-received" }).state).toBe(loaded.state);
     expect([...storage.data]).toEqual(before);
     saveSimState(loaded.state, storage);
     expect(storage.getItem(SIM_V4_STORAGE_KEY)).toBe(primary);
@@ -685,7 +686,7 @@ describe("audited v4 migration and coexistence with an older page", () => {
 describe("strict v5 selected-stock migration to the current schema", () => {
   it("keeps the existing £5.10 and six received milk/bread units exactly intact", () => {
     const purchased = reduceSim(createFirstDayState(), { type: "PURCHASE_STOCK", orderId: "opening-six", pairs: 3 }).state;
-    const received = reduceSim(purchased, { type: "RECEIVE_DELIVERY" }).state;
+    const received = receiveAllDeliveries(purchased);
     const old = v5Snapshot(received);
     expect(old).not.toHaveProperty("recyclingBatches");
     expect(old).not.toHaveProperty("recyclingRecords");
@@ -697,7 +698,7 @@ describe("strict v5 selected-stock migration to the current schema", () => {
     expect(migrated.crates).toEqual(old.crates);
     expect(migrated.customer).toEqual({ phase: "outside", number: 1, shoppingList: [], contentVersion: 1 });
     expect(getDeliverySummary(migrated)).toMatchObject({ pendingOrders: 0, pendingUnits: 0, receivedToday: 1 });
-    expect(reduceSim(migrated, { type: "RECEIVE_DELIVERY" }).state).toBe(migrated);
+    expect(reduceSim(migrated, { type: "RECEIVE_DELIVERY", orderId: migrated.delivery.orderId ?? "already-received" }).state).toBe(migrated);
   });
 
   it("preserves paid sales, pending deliveries, outdoor pose and customer seed while leaving all older keys intact", () => {
@@ -715,7 +716,7 @@ describe("strict v5 selected-stock migration to the current schema", () => {
     const untouched = [...storage.data];
     const result = loadSimState(storage);
     expect(result.source).toBe("v5");
-    expect(result.state.schemaVersion).toBe(14);
+    expect(result.state.schemaVersion).toBe(15);
     expect(validateSimState(result.state)).toBe(true);
     expect(result.state.cashPence).toBe(old.cashPence);
     expect(result.state.items).toEqual(old.items);
@@ -735,11 +736,11 @@ describe("strict v5 selected-stock migration to the current schema", () => {
     expect(storage.getItem(SIM_V5_STORAGE_KEY)).toBe(original);
     expect(storage.getItem(SIM_V5_BACKUP_KEY)).toBe(backup);
     expect(loadSimState(storage).source).toBe("primary");
-    const received = reduceSim(result.state, { type: "RECEIVE_DELIVERY" }).state;
+    const received = receiveAllDeliveries(result.state);
     expect(received.cashPence).toBe(old.cashPence);
     expect(received.items).toHaveLength(old.items.length);
     expect(reduceSim(received, { type: "PURCHASE_STOCK", orderId: "still-on-van", pairs: 1 }).state).toBe(received);
-    expect(reduceSim(received, { type: "RECEIVE_DELIVERY" }).state).toBe(received);
+    expect(reduceSim(received, { type: "RECEIVE_DELIVERY", orderId: received.delivery.orderId ?? "already-received" }).state).toBe(received);
   });
 
   it("restores an in-progress two-product checkout and hand return ownership without changing an existing scan", () => {

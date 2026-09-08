@@ -428,13 +428,13 @@ describe("player elapsed-time and collision safety", () => {
     expect(distances[0]).toBeCloseTo(distances[1]!, 8);
   });
 
-  it("subdivides a 100 ms player frame and leaves the delivery truck timestep unchanged", () => {
+  it("subdivides a 100 ms player frame and does not advance the independently timed delivery vehicle", () => {
     const { world, frame, updateTruck } = createMovementWorld(["KeyW", "ShiftLeft"]);
     const movePlayer = vi.spyOn(world, "movePlayer");
     frame(100);
     expect(movePlayer.mock.calls.map(([dt]) => dt)).toEqual([.05, .05]);
     expect(world.camera.position.z + 12).toBeCloseTo(5.04 * .1, 10);
-    expect(updateTruck).toHaveBeenCalledExactlyOnceWith(.05);
+    expect(updateTruck).not.toHaveBeenCalled();
   });
 
   it("caps a stalled frame at 250 ms and each player collision step at 50 ms", () => {

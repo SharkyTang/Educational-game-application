@@ -1,3 +1,5 @@
+import { openSettings, openComputer, resumeScene, walkTo } from "./helpers/sim3d-computer";
+import { receiveFixtureDeliveries } from "./helpers/sim3d-delivery";
 import { expect, test, type Page } from "@playwright/test";
 import { createFirstDayState, reduceSim, validateSimState, type SimCommand, type SimState } from "../../src/sim3d/domain";
 import { customerProfileFor, customerSpeechFor } from "../../src/sim3d/customerSelection";
@@ -17,7 +19,7 @@ function command(state: SimState, action: SimCommand): SimState {
 
 function stockedFixture(): SimState {
   let state = command(createFirstDayState(), { type: "PURCHASE_STOCK", orderId: "e2e-first-delivery", lines: [{ productId: "milk", quantity: 3 }, { productId: "bread", quantity: 3 }] });
-  state = command(state, { type: "RECEIVE_DELIVERY" });
+  state = receiveFixtureDeliveries(state);
   for (const productId of ["milk", "bread"] as const) {
     state = command(state, { type: "PICK_CRATE", crateId: `${productId}-crate` });
     for (let slot = 0; slot < 3; slot += 1) state = command(state, { type: "STOCK", productId, slot });
@@ -66,9 +68,9 @@ async function startFresh(page: Page): Promise<void> {
 
 async function importFixture(page: Page, fixture: SimState): Promise<void> {
   expect(validateSimState(fixture)).toBe(true);
-  await page.keyboard.press("b");
+  await openSettings(page);
   await expect(page.locator("#s3-pause")).toBeVisible();
-  await page.getByText("存档与试玩管理", { exact: true }).click();
+  if (!(await page.locator("#s3-import").isVisible())) await page.getByText("存档与试玩管理", { exact: true }).click();
   const chooser = page.waitForEvent("filechooser");
   await page.locator("#s3-import").click();
   await (await chooser).setFiles({ name: "real-reducer-fixture.json", mimeType: "application/json", buffer: Buffer.from(JSON.stringify(fixture)) });
@@ -85,7 +87,7 @@ test("3D first day: procurement quotes, insufficient funds and upgrades are reac
   test.setTimeout(75_000);
   const errors = monitorRuntime(page);
   await startFresh(page);
-  await page.keyboard.press("b");
+  await openComputer(page, "supply");
   await expect(page.locator("#s3-panel-supply")).toBeVisible();
   await expect(page.locator("#s3-purchase")).toBeDisabled();
   await expect(page.locator("#s3-quantity-milk")).toHaveValue("0");
@@ -104,21 +106,21 @@ test("3D first day: procurement quotes, insufficient funds and upgrades are reac
   await expect(page.locator("#s3-cash")).toHaveText("£5.10");
   await expect(page.locator("#s3-sold")).toContainText("库存 6 件");
   await expect.poll(() => page.evaluate(() => document.pointerLockElement === null)).toBe(true);
-  // This is a normal DOM click after purchase, not a forced click through a locked cursor.
-  await page.locator("#s3-open-upgrade").click();
+  // Return to the real computer after purchase without forcing a click through a locked cursor.
+  await openComputer(page, "upgrade");
   await expect(page.locator("#s3-panel-upgrade")).toBeVisible();
   await expect(page.locator("#s3-upgrade")).toBeDisabled();
   await expect(page.locator("#s3-upgrade-status")).toContainText("还差 £2.90");
-  await page.locator("#s3-resume").click();
+  await resumeScene(page);
   await expect.poll(() => page.evaluate(() => document.pointerLockElement === null)).toBe(true);
   await expect(page.locator("#s3-drag-hint")).toContainText("鼠标可点击");
-  await page.keyboard.press("u");
+  await openComputer(page, "upgrade");
   await expect(page.locator("#s3-panel-upgrade")).toBeVisible();
   await expect(page.locator("#s3-cash")).toHaveText("£5.10");
   expect(errors).toEqual([]);
 });
 
-test("3D daily delivery: paid goods survive reload, require the real van and are received once at the doorstep", async ({ page }) => {
+test("3D order delivery: paid goods survive reload, require the real van and are received once without a remote procurement shortcut", async ({ page }) => {
   test.setTimeout(100_000);
   const errors = monitorRuntime(page);
   await startFresh(page);
@@ -126,30 +128,50 @@ test("3D daily delivery: paid goods survive reload, require the real van and are
   pending = command(pending, { type: "SAVE_POSE", pose: { x: 3, z: -6.9, yaw: Math.PI, pitch: .06 } });
   await importFixture(page, pending);
   await expect(page.locator("#s3-cash")).toHaveText("£5.10");
-  await expect(page.locator("#s3-target-action")).toContainText("签收 6 件", { timeout: 15_000 });
+  await expect(page.locator("#s3-target-action")).toContainText("签收本单 6 件", { timeout: 20_000 });
   await page.reload();
   await expect(page.locator("#s3-start-button")).toBeEnabled({ timeout: 40_000 });
   await page.locator("#s3-start-button").click();
-  await expect(page.locator("#s3-target-action")).toContainText("签收 6 件", { timeout: 15_000 });
+  await expect(page.locator("#s3-target-action")).toContainText("签收本单 6 件", { timeout: 20_000 });
   await page.keyboard.press("e");
-  await expect(page.locator("#s3-target-action")).toContainText("查看今日进货单");
+  await expect(page.locator("#s3-delivery-hud")).toContainText("本单已签收");
   await expect(page.locator("#s3-cash")).toHaveText("£5.10");
   await expect(page.locator("#s3-sold")).toContainText("库存 6 件");
   await expect(page.locator("#s3-shelf-stock")).toHaveText("货架 0 种 · 0 件");
   await expect(page.locator("#s3-crate-stock")).toHaveText("箱内 6 件");
-  // The same physical van opens the order form after receipt, never duplicating the previous delivery.
+  const received = await readBrowserSnapshot(page);
+  expect(received.purchases).toHaveLength(1);
+  expect(received.purchases[0]).toMatchObject({ id: "street-delivery", receivedDay: 1 });
+  expect(received.items).toHaveLength(6);
+  expect(received.items.every((item) => item.location.kind === "crate")).toBe(true);
+  // E at the signed-for van must neither reopen management nor duplicate goods.
   await page.keyboard.press("e");
+  await page.keyboard.press("b");
+  await expect(page.locator("#s3-pause")).toBeHidden();
+  await expect(page.locator("#s3-panel-supply")).toBeHidden();
+  const repeated = await readBrowserSnapshot(page);
+  expect(repeated.items).toEqual(received.items);
+  expect(repeated.purchases).toEqual(received.purchases);
+  expect(repeated.cashPence).toBe(received.cashPence);
+  // Return along the south side of both full cartons. The fixed recycling
+  // station blocks the shorter route north of the eastern receiving bay.
+  await walkTo(page, { x: 0, z: -7.2 });
+  await openComputer(page, "supply");
   await expect(page.locator("#s3-panel-supply")).toBeVisible();
   await expect(page.locator("#s3-supply-inventory-milk")).toHaveText("现货 3 · 架上 0");
   await expect(page.locator("#s3-supply-inventory-bread")).toHaveText("现货 3 · 架上 0");
   await expect(page.locator("#s3-quantity-milk")).toHaveValue("0");
   await expect(page.locator("#s3-quantity-bread")).toHaveValue("0");
   await expect(page.locator("#s3-cash")).toHaveText("£5.10");
-  await page.locator("#s3-resume").click();
+  await resumeScene(page);
   await page.reload();
   await expect(page.locator("#s3-start-button")).toBeEnabled({ timeout: 40_000 });
   await page.locator("#s3-start-button").click();
-  await expect(page.locator("#s3-target-action")).toContainText("查看今日进货单", { timeout: 15_000 });
+  await expect(page.locator("#s3-pause")).toBeHidden();
+  const restored = await readBrowserSnapshot(page);
+  expect(restored.purchases).toEqual(received.purchases);
+  expect(restored.items).toEqual(received.items);
+  await expect.poll(async () => (await readBrowserSnapshot(page)).delivery.phase, { timeout: 10_000 }).toBe("idle");
   await expect(page.locator("#s3-cash")).toHaveText("£5.10");
   await expect(page.locator("#s3-sold")).toContainText("库存 6 件");
   expect(errors).toEqual([]);
@@ -159,7 +181,7 @@ test("3D high street: venues show separate level and achievement gates, with hon
   test.setTimeout(90_000);
   const errors = monitorRuntime(page);
   await startFresh(page);
-  await page.keyboard.press("m");
+  await openComputer(page, "street");
   await expect(page.locator("#s3-panel-street")).toBeVisible();
   await expect(page.locator("#s3-street-level")).toHaveText("Lv. 1");
   for (const venue of ["cafe", "restaurant", "supermarket"]) {
@@ -167,23 +189,24 @@ test("3D high street: venues show separate level and achievement gates, with hon
     await expect(page.locator(`#s3-venue-detail-${venue}`)).toBeVisible();
     await expect(page.locator(`#s3-venue-detail-status-${venue}`)).toHaveText("暂未开放");
   }
-  await page.locator("#s3-resume").click();
+  await resumeScene(page);
   await importFixture(page, completedDayFixture());
-  await expect(page.locator("#s3-panel-day")).toBeVisible({ timeout: 12_000 });
-  await page.locator("#s3-tab-street").click();
+  await expect(page.locator("#s3-pause")).toBeHidden();
+  await openComputer(page, "day");
+  await openComputer(page, "street");
   await expect(page.locator("#s3-street-level")).toHaveText("Lv. 2");
   // Enough sales alone do not satisfy the separate first-settlement achievement.
   await expect(page.locator("#s3-venue-status-cafe")).toHaveText("暂未开放");
-  await page.locator("#s3-tab-day").click();
+  await openComputer(page, "day");
   await page.locator("#s3-settle-day").click();
-  await page.locator("#s3-tab-street").click();
+  await openComputer(page, "street");
   await expect(page.locator("#s3-venue-status-cafe")).toHaveText("条件已达成·筹备中");
   await expect(page.locator("#s3-venue-status-restaurant")).toHaveText("暂未开放");
   await expect(page.locator("#s3-venue-status-supermarket")).toHaveText("暂未开放");
   await page.reload();
   await expect(page.locator("#s3-start-button")).toBeEnabled({ timeout: 40_000 });
   await page.locator("#s3-start-button").click();
-  await page.keyboard.press("m");
+  await openComputer(page, "street");
   await expect(page.locator("#s3-venue-status-cafe")).toHaveText("条件已达成·筹备中");
   await expect(page.locator("#s3-street-record")).toContainText("完成日结 1 天");
   expect(errors).toEqual([]);
@@ -338,15 +361,16 @@ test("3D customer variety: three real visitors rotate models and voices, keep th
   expect(paymentMethods).toEqual(new Set(["card", "cash"]));
   // Three sales no longer end a day: explicitly close through the public confirmation.
   await expect(page.locator("#s3-pause")).toBeHidden();
-  await page.keyboard.press("b");
-  await page.locator("#s3-tab-day").click();
+  await openComputer(page, "day");
   await expect(page.locator("#s3-settle-day")).toBeDisabled();
   await page.locator("#s3-close-shop").click();
   await expect(page.locator("#s3-close-confirm")).toBeVisible();
   await page.locator("#s3-close-confirm-button").click();
   if (!(await page.locator("#s3-settle-day").isEnabled())) {
-    await page.locator("#s3-resume").click();
-    await expect(page.locator("#s3-panel-day")).toBeVisible({ timeout: 20_000 });
+    await resumeScene(page);
+    await expect.poll(async () => (await readBrowserSnapshot(page)).customer.phase, { timeout: 30_000 }).toBe("complete");
+    await expect(page.locator("#s3-pause")).toBeHidden();
+    await openComputer(page, "day");
   }
   await expect(page.locator("#s3-day-progress")).toContainText("已收款 3 单");
   await expect(page.locator("#s3-day-cash")).toHaveText("£17.10");
@@ -361,7 +385,8 @@ test("3D first day: a reducer-completed day settles, expands for £8 and persist
   // Separate from the real arrival/payment check above: this fixture saves time
   // while still deriving all three paid orders from the public domain reducer.
   await importFixture(page, completedDayFixture());
-  await expect(page.locator("#s3-pause")).toBeVisible({ timeout: 12_000 });
+  await expect(page.locator("#s3-pause")).toBeHidden();
+  await openComputer(page, "day");
   await expect(page.locator("#s3-panel-day")).toBeVisible();
   await expect(page.locator("#s3-day-progress")).toContainText("已收款 3 单");
   await expect(page.locator("#s3-day-revenue")).toHaveText("£12.00");
@@ -378,12 +403,12 @@ test("3D first day: a reducer-completed day settles, expands for £8 and persist
   await expect(page.locator("#s3-upgrade")).toBeDisabled();
   await expect(page.locator("#s3-capacity-now")).toHaveText("8");
   await expect(page.locator("#s3-cash")).toHaveText("£9.10");
-  await page.locator("#s3-tab-day").click();
+  await openComputer(page, "day");
   await expect(page.locator("#s3-day-investment")).toHaveText("£8.00");
   await page.locator("#s3-next-day").click();
   await expect(page.locator("#s3-panel-supply")).toBeVisible();
   await expect(page.locator("#s3-supply-cash")).toHaveText("£9.10");
-  await page.locator("#s3-tab-day").click();
+  await openComputer(page, "day");
   await expect(page.locator("#s3-day-title")).toContainText("第 2 天");
   await expect(page.locator("#s3-day-revenue")).toHaveText("£0.00");
   await expect(page.locator("#s3-day-investment")).toHaveText("£0.00");
@@ -396,7 +421,7 @@ test("3D first day: a reducer-completed day settles, expands for £8 and persist
   await page.locator("#s3-start-button").click();
   await expect(page.locator("#s3-sold")).toHaveText("今日 0 单 · 库存 0 件");
   await expect(page.locator("#s3-shelf-stock")).toHaveText("货架 0 种 · 0 件");
-  await page.keyboard.press("u");
+  await openComputer(page, "upgrade");
   await expect(page.locator("#s3-upgrade")).toBeDisabled();
   await expect(page.locator("#s3-upgrade")).toContainText("已扩容");
   expect(errors).toEqual([]);

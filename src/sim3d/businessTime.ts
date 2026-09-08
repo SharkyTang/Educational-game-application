@@ -4,12 +4,14 @@ export const BUSINESS_OPEN_MINUTE = 9 * 60;
 export const BUSINESS_CLOSE_MINUTE = 19 * 60;
 export const BUSINESS_WARNING_MINUTE = 18 * 60 + 30;
 
-/** Seven minutes of active play correspond to the ten-hour business day. */
-export const BUSINESS_DURATION_MS = 420_000;
+/** Old v9–v14 snapshots use this fixed duration during strict legacy validation. */
+export const LEGACY_BUSINESS_DURATION_MS = 420_000;
+/** Twelve minutes of active play correspond to the ten-hour business day. */
+export const BUSINESS_DURATION_MS = 720_000;
 const BUSINESS_MINUTES = BUSINESS_CLOSE_MINUTE - BUSINESS_OPEN_MINUTE;
 const MS_PER_BUSINESS_MINUTE = BUSINESS_DURATION_MS / BUSINESS_MINUTES;
-const MIN_ARRIVAL_DELAY_MS = 8_000;
-const MAX_ARRIVAL_DELAY_MS = 12_000;
+export const MIN_ARRIVAL_DELAY_MS = 2_000;
+export const MAX_ARRIVAL_DELAY_MS = 4_000;
 const DEFAULT_CUSTOMER_SEED = 31;
 
 export type BusinessPhase = "preparing" | "open" | "closing" | "settled";

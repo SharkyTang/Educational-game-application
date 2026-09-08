@@ -7,7 +7,10 @@ import {
 import { CustomerActors } from "./customerActors";
 import { StreetNeighbourActors } from "./streetNeighbourActors";
 import { STREET_NEIGHBOUR_PROFILES, type StreetNeighbourId } from "./streetNeighbourContent";
-import { CUSTOMER_EXIT_STOP_SECONDS, CUSTOMER_STOP_SECONDS, CUSTOMER_WALK_SPEED } from "./customerSelection";
+import { CUSTOMER_EXIT_STOP_SECONDS, CUSTOMER_STOP_SECONDS, CUSTOMER_WALK_SPEED, CUSTOMER_STREET_WALK_SPEED } from "./customerSelection";
+import { deliveryTruckX, DELIVERY_PREPARE_MS, DELIVERY_ARRIVE_MS, DELIVERY_DEPART_MS } from "./delivery";
+import { createWorkstation } from "./workstationAsset";
+import { WORKSTATION_ID, workstationServicePoint } from "./workstation";
 import { CUSTOMER_DOORSTEP, customerArrivalOrigins, customerJourneyRoute } from "./customerJourney";
 import { PointerAccess, type PointerMode } from "./pointerAccess";
 import { playerMovementSpeed } from "./playerMovement";
@@ -30,7 +33,7 @@ import {
 export type Quality = "standard" | "low";
 export interface InteractionTarget {
   id: string;
-  kind: "crate" | "shelf" | "item" | "counter" | "open-sign" | "drop-zone" | "delivery" | "venue" | "recycling" | "street-neighbour";
+  kind: "crate" | "shelf" | "item" | "counter" | "open-sign" | "drop-zone" | "delivery" | "venue" | "recycling" | "street-neighbour" | "computer";
   productId?: ProductId;
   /** Present for a purchased fixture; absent for the original built-in display. */
   equipmentId?: string;
@@ -81,6 +84,7 @@ export class ShopWorld {
   private readonly shop: ShopEnvironment;
   private readonly catalogFixtures: CatalogFixtures;
   private readonly equipmentFixtures: EquipmentSceneFixtures;
+  private readonly workstation: ReturnType<typeof createWorkstation>;
   private readonly expansionLight: PointLight;
   private readonly secondExpansionLight: PointLight;
   private readonly fixedColliders: Collider[] = [];
@@ -137,6 +141,10 @@ export class ShopWorld {
     this.engine = new Engine(canvas, true, { stencil: true, preserveDrawingBuffer: false, powerPreference: "high-performance" });
     this.engine.setHardwareScalingLevel(1 / Math.min(window.devicePixelRatio || 1, 1.5));
     this.scene = new Scene(this.engine);
+    // Our mouse listeners handle focus, drag-look and stocking. Cancelling
+    // pointerdown suppresses their compatibility mouse events in Chromium.
+    this.scene.preventDefaultOnPointerDown = false;
+    this.scene.preventDefaultOnPointerUp = false;
     this.productVisuals = new ProductVisuals(this.scene);
     this.scene.clearColor = Color4.FromHexString("#dceaf0ff");
     this.scene.fogMode = Scene.FOGMODE_LINEAR;
@@ -196,6 +204,9 @@ export class ShopWorld {
     this.colliders.push(...fixtures.colliders);
     this.equipmentFixtures = createEquipmentSceneFixtures(this.scene, initialState.equipment, initialState.renovation.layout.equipment);
     this.colliders.push(...this.equipmentFixtures.colliders);
+    this.workstation = createWorkstation(this.scene, initialState.renovation.layout.workstation);
+    this.colliders.push(this.workstation.collider);
+    this.tag(this.workstation.interactionMesh, { id: WORKSTATION_ID, kind: "computer" });
     this.street = createStreet(this.scene);
     this.colliders.push(...this.street.colliders);
     const recycling = createRecyclingStation(this.scene);
@@ -212,7 +223,7 @@ export class ShopWorld {
     }
     // A delivery is physical interaction with the stopped vehicle, not an invisible trigger.
     this.tag(this.street.truck, { id: "daily-delivery", kind: "delivery" });
-    this.resetTruck(initialState.day.phase === "settled" ? "away" : initialState.purchases.length > 0 || initialState.day.phase === "open" ? "parked" : "arriving");
+    this.syncDeliveryTruck();
     this.displays = this.createDisplays(initialState.renovation.layout);
     this.shelfSlots = Object.fromEntries(PRODUCT_IDS.map((id) => [id, this.displays[id].slots.map((point) => new Vector3(point.x, point.y, point.z))])) as Record<ProductId, Vector3[]>;
     for (const target of [...shop.targets, ...fixtures.targets, ...createReceivingPads(this.scene, SAFE_DROP_POINTS)]) {
@@ -295,17 +306,14 @@ export class ShopWorld {
   setState(state: SimState): void {
     const phaseChanged = this.customerPhase !== state.customer.phase;
     const newCustomer = this.state.customer.number !== state.customer.number;
-    const newDay = this.state.day.number !== state.day.number;
     const freshRun = state.revision < this.state.revision && state.purchases.length === 0 && state.transactions.length === 0;
-    const closed = this.state.day.phase !== "settled" && state.day.phase === "settled";
     const layoutChanged = !layoutEquals(this.state.renovation.layout, state.renovation.layout)
       || JSON.stringify(this.state.renovation.layout.equipment) !== JSON.stringify(state.renovation.layout.equipment);
     this.state = state;
     if (layoutChanged) this.syncShopLayout();
     this.customerActors.select(state);
     const streetNeighbourChanged = this.streetNeighbourActors?.select(state) ?? false;
-    if (newDay || freshRun) this.resetTruck(state.day.phase === "settled" ? "away" : "arriving");
-    else if (closed && this.truckPhase !== "away") this.truckPhase = "departing";
+    this.syncDeliveryTruck();
     this.syncInventory();
     const obstacles = this.crateObstacleSignature();
     const shoppingTargetChanged = this.shoppingTargetSignature() !== this.customerShoppingTargetSignature;
@@ -338,8 +346,9 @@ export class ShopWorld {
     this.shop.applyLayout(layout);
     this.catalogFixtures.applyLayout(layout);
     this.equipmentFixtures?.apply(this.state.equipment, layout.equipment);
+    this.workstation?.apply(layout.workstation);
     this.colliders.splice(0, this.colliders.length, ...this.shop.colliders, ...this.catalogFixtures.colliders,
-      ...(this.equipmentFixtures?.colliders ?? []), ...this.fixedColliders);
+      ...(this.equipmentFixtures?.colliders ?? []), ...(this.workstation ? [this.workstation.collider] : []), ...this.fixedColliders);
     const displays = this.createDisplays(layout);
     for (const productId of PRODUCT_IDS) {
       this.displays[productId] = displays[productId];
@@ -553,10 +562,46 @@ export class ShopWorld {
     setShelfCapacity(this.scene, state.upgraded);
   }
 
-  private resetTruck(phase: "arriving" | "parked" | "away"): void {
-    this.truckPhase = phase;
-    this.street.truck.position.set(phase === "arriving" ? -25 : phase === "away" ? 25 : 3, 0, -9.1);
-    this.street.truck.setEnabled(phase !== "away");
+  /** A lightweight clock update; avoid rebuilding shelves or selecting actors every frame. */
+  setDeliveryState(state: SimState): void {
+    const before = this.state.delivery;
+    this.state = state;
+    this.syncDeliveryTruck();
+    if (this.street && (before.phase !== state.delivery.phase || before.orderId !== state.delivery.orderId
+      || before.blocked !== state.delivery.blocked)) this.syncDeliveryStatus();
+  }
+
+  /** Sweep the next movement segment so a long frame cannot drive through the player. */
+  isDeliveryBlocked(elapsedMs: number): boolean {
+    let delivery = this.state.delivery;
+    if (!delivery || !Number.isFinite(elapsedMs) || elapsedMs <= 0) return false;
+    // A frame can finish preparation and already move into the road. Check
+    // that portion too, before committing either the clock or van position.
+    if (delivery.phase === "preparing") {
+      elapsedMs -= DELIVERY_PREPARE_MS - delivery.elapsedMs;
+      if (elapsedMs <= 0) return false;
+      delivery = { ...delivery, phase: "arriving", elapsedMs: 0 };
+    }
+    if (delivery.phase !== "arriving" && delivery.phase !== "departing") return false;
+    const duration = delivery.phase === "arriving" ? DELIVERY_ARRIVE_MS : DELIVERY_DEPART_MS;
+    const currentX = deliveryTruckX(delivery);
+    const nextX = deliveryTruckX({ ...delivery, elapsedMs: Math.min(duration, delivery.elapsedMs + Math.max(0, elapsedMs)) });
+    return Math.abs(this.camera.position.z + 9.1) < 1.45
+      && this.camera.position.x > Math.min(currentX, nextX) - 2.85
+      && this.camera.position.x < Math.max(currentX, nextX) + 2.85;
+  }
+
+  private syncDeliveryTruck(): void {
+    // Some renderer unit harnesses only construct the customer part of the scene.
+    if (!this.street || !this.state.delivery) return;
+    const delivery = this.state.delivery;
+    this.truckPhase = delivery.phase === "ready" ? "parked"
+      : delivery.phase === "arriving" || delivery.phase === "departing" ? delivery.phase : "away";
+    const x = deliveryTruckX(delivery);
+    const oldX = this.street.truck.position.x;
+    this.street.truck.position.set(x, 0, -9.1);
+    this.street.truck.setEnabled(this.truckPhase !== "away");
+    if (this.truckPhase !== "away") for (const wheel of this.street.wheels) wheel.rotation.z -= (x - oldX) / .38;
   }
 
   private syncStreet(): void {
@@ -565,29 +610,15 @@ export class ShopWorld {
       const conditions = progress.requirements.map((entry) => entry.label).join(" · ");
       setStreetVenueStatus(this.scene, venue.id, progress.statusText, conditions, progress.eligible);
     }
-    const delivery = getDeliverySummary(this.state);
-    setDeliveryTruckStatus(this.scene, `第 ${this.state.day.number} 天 · ${delivery.pendingUnits > 0 ? `${delivery.pendingUnits} 件待签收` : delivery.receivedToday > 0 ? "今日货物已签收" : "每日配送 · 按需订货"}`);
+    this.syncDeliveryStatus();
   }
 
-  private updateTruck(dt: number): void {
-    if (this.truckPhase !== "arriving" && this.truckPhase !== "departing") return;
-    const truck = this.street.truck;
-    const destination = this.truckPhase === "arriving" ? 3 : 25;
-    const step = Math.min(destination - truck.position.x, dt * 4.8);
-    const nextX = truck.position.x + step;
-    // Stop for the player instead of driving through them. The clear pavement stays accessible.
-    if (Math.abs(this.camera.position.x - nextX) < 2.85 && Math.abs(this.camera.position.z - truck.position.z) < 1.45) return;
-    truck.position.x = nextX;
-    for (const wheel of this.street.wheels) wheel.rotation.z -= step / .38;
-    if (Math.abs(destination - nextX) < .01) {
-      if (this.truckPhase === "arriving") {
-        this.truckPhase = "parked";
-        this.callbacks.onStatus(`第 ${this.state.day.number} 天的送货车到店了。按 B 订货，走近车身按 E 签收，再把门口的货箱搬上货架。`);
-      } else {
-        this.truckPhase = "away";
-        truck.setEnabled(false);
-      }
-    }
+  private syncDeliveryStatus(): void {
+    const delivery = getDeliverySummary(this.state);
+    setDeliveryTruckStatus(this.scene, delivery.phase === "ready"
+      ? `本单 ${delivery.readyUnits} 件待签收 · 后方 ${delivery.queuedOrders} 单`
+      : delivery.blocked ? "请让出车道 · 配送暂停"
+        : delivery.pendingOrders ? `配送中 · 共 ${delivery.pendingOrders} 单` : "按单配送 · 到店内电脑订货");
   }
 
   private setCustomerRoute(initial: boolean): void {
@@ -681,7 +712,8 @@ export class ShopWorld {
   }
 
   private playCustomerAnimation(walking: boolean): void {
-    this.customerActors.play(walking);
+    if (!walking) this.customerActors.play(false);
+    else this.customerActors.play(true, this.customer.position.z < -4.5 ? CUSTOMER_STREET_WALK_SPEED / CUSTOMER_WALK_SPEED : 1);
   }
 
   isCustomerApproaching(): boolean {
@@ -707,7 +739,8 @@ export class ShopWorld {
         this.customer.position.set(next.x, 0, next.z);
         this.routeIndex += 1;
       } else {
-        const step = Math.min(distance, dt * CUSTOMER_WALK_SPEED);
+        const speed = this.customer.position.z < -4.5 ? CUSTOMER_STREET_WALK_SPEED : CUSTOMER_WALK_SPEED;
+        const step = Math.min(distance, dt * speed);
         this.customer.position.x += dx / distance * step;
         this.customer.position.z += dz / distance * step;
         const yaw = Math.atan2(dx, dz);
@@ -1034,16 +1067,20 @@ export class ShopWorld {
       else action = this.state.scannedIds.length < getCustomerOrder(this.state).length ? "扫描下一件商品"
         : `${this.state.payment?.method === "cash" ? this.state.payment.received ? "现金 · 继续找零" : "现金收款" : "刷卡收款"} · £${(getCheckoutTotal(this.state) / 100).toFixed(2)}`;
       inspectable = false;
+    } else if (data.kind === "computer") {
+      label = "Shop computer · 店内电脑";
+      action = "打开电脑桌面";
+      inspectable = false;
     } else if (data.kind === "open-sign") {
       label = "Open / Closed · 营业牌";
-      action = this.state.day.phase === "settled" ? "查看日结 / 开始下一天"
-        : this.state.day.phase === "closing" ? canSettleDay(this.state) ? "完成日结并查看账目" : "查看打烊后的收尾事项"
-          : this.state.day.phase === "preparing" ? "开门营业 · 09:00 开始计时" : "查看营业时间 / 提前打烊";
+      action = this.state.day.phase === "settled" ? "今日已日结 · 到电脑开始下一天"
+        : this.state.day.phase === "closing" ? canSettleDay(this.state) ? "收尾完成 · 到电脑日结" : "打烊收尾中"
+          : this.state.day.phase === "preparing" ? "开门营业 · 09:00 开始计时" : "营业中 · 到电脑管理营业";
       inspectable = false;
     } else if (data.kind === "delivery") {
       const delivery = getDeliverySummary(this.state);
-      label = `Daily delivery · 第 ${this.state.day.number} 天送货车`;
-      action = delivery.pendingUnits > 0 ? delivery.canReceive ? `签收 ${delivery.pendingUnits} 件货物` : delivery.reason ?? "请先腾出收货空间" : "查看今日进货单";
+      label = `Order delivery · 第 ${this.state.day.number} 天配送`;
+      action = delivery.pendingUnits > 0 ? delivery.canReceive ? `签收本单 ${delivery.readyUnits} 件货物` : delivery.reason ?? "请先腾出收货空间" : "到店内电脑订货";
       inspectable = false;
     } else if (data.kind === "venue") {
       const venue = STREET_VENUES.find((entry) => entry.id === data.venueId);
@@ -1104,9 +1141,13 @@ export class ShopWorld {
     if (recycling.allowed) {
       point = RECYCLING_POINT;
       title = recycling.rewardPence > 0 ? `空箱回收点 · 按 E +£${(recycling.rewardPence / 100).toFixed(2)}` : "空箱回收点 · 按 E 清走";
-    } else if (state.day.phase === "settled" || canSettleDay(state)) {
-      this.callbacks.onGuide?.(state.day.phase === "settled" ? "今日已日结 · 点“营业 / 日结”开始下一天" : "打烊收尾已完成 · 点“营业 / 日结”查看今天的收支");
+    } else if (state.day.phase === "closing" && state.delivery.phase === "departing" && delivery.pendingOrders === 0
+      && ["outside", "complete"].includes(state.customer.phase)) {
+      this.callbacks.onGuide?.("最后一单已签收 · 货车驶离后到电脑日结");
       return;
+    } else if (state.day.phase === "settled" || canSettleDay(state)) {
+      point = workstationServicePoint(state.renovation.layout.workstation);
+      title = state.day.phase === "settled" ? "店内电脑 · 开始下一天" : "店内电脑 · 完成日结";
     } else if (state.customer.phase === "checkout" || state.customer.phase === "to-checkout") {
       point = transformLayoutPoint(state.renovation.layout, "checkout-counter", CHECKOUT_CLERK_POINT); title = "收银台内侧";
     } else if (state.held.kind === "crate") {
@@ -1116,20 +1157,22 @@ export class ShopWorld {
       point = this.shelfApproach(crate.productId, openSlot);
       title = `${PRODUCTS[crate.productId].nameEn} · ${this.shelfName(crate.productId, openSlot?.equipmentId)}`;
     } else if (delivery.pendingUnits > 0) {
-      if (this.truckPhase === "arriving") {
-        this.callbacks.onGuide?.(`送货车正在靠边 · ${delivery.pendingUnits} 件货待签收 · 请留出车道`);
+      if (delivery.phase !== "ready") {
+        this.callbacks.onGuide?.(delivery.blocked ? "送货车等待让行 · 请离开车道"
+          : delivery.phase === "departing" ? `货车正在驶离 · 后续 ${delivery.pendingOrders} 单排队`
+            : `本单配送中 · ${Math.ceil(delivery.remainingMs / 1000)} 秒后到店 · 后方 ${delivery.queuedOrders} 单`);
         return;
       }
       point = { x: this.street.truck.position.x, z: this.street.truck.position.z + 1 };
-      title = `门口送货车 · 按 E 签收 ${delivery.pendingUnits} 件`;
+      title = `门口送货车 · 按 E 签收本单 ${delivery.readyUnits} 件`;
     } else if (state.customer.phase === "outside" || state.customer.phase === "complete") {
       const productId = PRODUCT_IDS.find((id) => countAt(state, id, "crate") > 0 && countAt(state, id, "shelf") === 0);
       if (productId) {
         point = state.crates.find((crate) => crate.productId === productId)!.position;
         title = `${PRODUCTS[productId].nameZh}货箱 · 向下看`;
       } else if (!canStartCustomer(state)) {
-        this.callbacks.onGuide?.("按 B 选择商品进货 · 签收后至少上架一种商品，再开门接客");
-        return;
+        point = workstationServicePoint(state.renovation.layout.workstation);
+        title = "店内电脑 · 选择商品进货，签收后上架";
       } else if (state.day.phase === "open") {
         this.callbacks.onGuide?.("货架已备好 · 下一位顾客即将进店");
         return;
@@ -1158,7 +1201,6 @@ export class ShopWorld {
       // small step so sprinting cannot jump through counters, walls or crates.
       const playerSteps = Math.ceil(frameSeconds / .05);
       for (let step = 0; step < playerSteps; step += 1) this.movePlayer(frameSeconds / playerSteps);
-      this.updateTruck(dt);
       // Keep NPC metres/second at low FPS, with bounded steps for route changes
       // and player clearance. A stalled/background frame cannot skip the shop.
       const customerSteps = Math.ceil(frameSeconds / .05);

@@ -1,3 +1,4 @@
+import { receiveAllDeliveries, waitForDelivery } from "../helpers/sim3dDelivery";
 import { describe, expect, it } from "vitest";
 import { payScannedCheckout } from "../helpers/sim3dPayment";
 import {
@@ -17,7 +18,7 @@ function act(state: SimState, command: SimCommand): SimState {
 
 function buy(state: SimState, lines: PurchaseLine[], receive = true): SimState {
   state = act(state, { type: "PURCHASE_STOCK", orderId: `order-${state.purchases.length + 1}`, lines });
-  return receive ? act(state, { type: "RECEIVE_DELIVERY" }) : state;
+  return receive ? receiveAllDeliveries(state) : state;
 }
 
 function stock(state: SimState, productId: ProductId, quantity: number): SimState {
@@ -139,7 +140,7 @@ describe("recycling income follows paid box sources", () => {
     state = recycle(state, "carrot");
     expect(state.recyclingBatches).toHaveLength(1);
     expect(state.recyclingRecords[0]!.purchaseIds).toEqual(["order-1"]);
-    state = act(state, { type: "RECEIVE_DELIVERY" });
+    state = receiveAllDeliveries(state);
     state = recycle(stock(state, "carrot", 1), "carrot");
     expect(state.recyclingBatches.map((batch) => batch.purchaseIds)).toEqual([["order-1"], ["order-2"]]);
     expect(state.recyclingRecords.map((record) => record.batchId)).toEqual(["crate-batch-1", "crate-batch-2"]);
@@ -150,7 +151,7 @@ describe("recycling income follows paid box sources", () => {
     let state = buy(createFirstDayState(), [{ productId: "carrot", quantity: 1 }], false);
     state = buy(state, [{ productId: "carrot", quantity: 1 }], false);
     expect(state.recyclingBatches).toEqual([]);
-    state = act(state, { type: "RECEIVE_DELIVERY" });
+    state = receiveAllDeliveries(state);
     expect(state.recyclingBatches).toEqual([{ id: "crate-batch-1", productId: "carrot", purchaseIds: ["order-1", "order-2"] }]);
     state = recycle(stock(state, "carrot", 2), "carrot");
     expect(getRecyclingSummary(state)).toEqual({ recycledToday: 1, incomeTodayPence: 5 });
@@ -169,8 +170,9 @@ describe("recycling income follows paid box sources", () => {
     state = recycle(state, "milk");
     expect(state.recyclingRecords[0]!.purchaseIds).toEqual([]);
     expect(state.cashPence).toBe(1200 - PRODUCTS.milk.costPence);
+    state = waitForDelivery(state);
     expect(getDeliverySummary(state).canReceive).toBe(true);
-    state = act(state, { type: "RECEIVE_DELIVERY" });
+    state = receiveAllDeliveries(state);
     state = recycle(stock(state, "milk", 1), "milk");
     expect(state.recyclingRecords[1]!.purchaseIds).toEqual(["order-1"]);
     expect(getRecyclingSummary(state).incomeTodayPence).toBe(5);
