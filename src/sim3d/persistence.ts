@@ -1,12 +1,14 @@
 import { createFirstDayState, migrateLegacySimState, migrateV4SimState, migrateV5SimState, migrateV6SimState, migrateV7SimState, migrateV8SimState, migrateV9SimState,
-  migrateV10SimState, migrateV11SimState, migrateV12SimState, validateLegacySimState, validateSimState, validateV4SimState, validateV5SimState,
-  validateV6SimState, validateV7SimState, validateV8SimState, validateV9SimState, validateV10SimState, validateV11SimState, validateV12SimState,
+  migrateV10SimState, migrateV11SimState, migrateV12SimState, migrateV13SimState, validateLegacySimState, validateSimState, validateV4SimState, validateV5SimState,
+  validateV6SimState, validateV7SimState, validateV8SimState, validateV9SimState, validateV10SimState, validateV11SimState, validateV12SimState, validateV13SimState,
   type SimState } from "./domain";
 
 /** Deliberately separate from the older 2D storage namespace; never migrate/delete it. */
-export const SIM_STORAGE_KEY = "english-high-street:sim3d:v13";
+export const SIM_STORAGE_KEY = "english-high-street:sim3d:v14";
 export const SIM_BACKUP_KEY = `${SIM_STORAGE_KEY}:backup`;
 /** These old keys are read-only migration sources, never overwritten or removed. */
+export const SIM_V13_STORAGE_KEY = "english-high-street:sim3d:v13";
+export const SIM_V13_BACKUP_KEY = `${SIM_V13_STORAGE_KEY}:backup`;
 export const SIM_V12_STORAGE_KEY = "english-high-street:sim3d:v12";
 export const SIM_V12_BACKUP_KEY = `${SIM_V12_STORAGE_KEY}:backup`;
 export const SIM_V11_STORAGE_KEY = "english-high-street:sim3d:v11";
@@ -25,7 +27,7 @@ export const SIM_V5_STORAGE_KEY = "english-high-street:sim3d:v5";
 export const SIM_V5_BACKUP_KEY = `${SIM_V5_STORAGE_KEY}:backup`;
 export const SIM_V4_STORAGE_KEY = "english-high-street:sim3d:v4";
 export const SIM_V4_BACKUP_KEY = `${SIM_V4_STORAGE_KEY}:backup`;
-/** v4–v13 share one writer lock so an older open page cannot mutate a migration source. */
+/** v4–v14 share one writer lock so an older open page cannot mutate a migration source. */
 export const SIM_WRITER_LOCK = `${SIM_V4_STORAGE_KEY}:writer`;
 export const SIM_LEGACY_STORAGE_KEY = "english-high-street:sim3d:v3";
 export const SIM_LEGACY_BACKUP_KEY = `${SIM_LEGACY_STORAGE_KEY}:backup`;
@@ -38,7 +40,7 @@ export interface StorageLike {
 
 export interface SimLoadResult {
   state: SimState;
-  source: "primary" | "backup" | "v12" | "v12-backup" | "v11" | "v11-backup" | "v10" | "v10-backup" | "v9" | "v9-backup" | "v8" | "v8-backup" | "v7" | "v7-backup" | "v6" | "v6-backup" | "v5" | "v5-backup" | "v4" | "v4-backup" | "legacy" | "legacy-backup" | "new";
+  source: "primary" | "backup" | "v13" | "v13-backup" | "v12" | "v12-backup" | "v11" | "v11-backup" | "v10" | "v10-backup" | "v9" | "v9-backup" | "v8" | "v8-backup" | "v7" | "v7-backup" | "v6" | "v6-backup" | "v5" | "v5-backup" | "v4" | "v4-backup" | "legacy" | "legacy-backup" | "new";
   warning?: string;
 }
 
@@ -157,10 +159,19 @@ function parseV12Snapshot(raw: string | null): SimState | undefined {
   } catch { return undefined }
 }
 
-const PREVIOUS_KEYS = [SIM_V12_STORAGE_KEY, SIM_V12_BACKUP_KEY, SIM_V11_STORAGE_KEY, SIM_V11_BACKUP_KEY, SIM_V10_STORAGE_KEY, SIM_V10_BACKUP_KEY, SIM_V9_STORAGE_KEY, SIM_V9_BACKUP_KEY, SIM_V8_STORAGE_KEY, SIM_V8_BACKUP_KEY, SIM_V7_STORAGE_KEY, SIM_V7_BACKUP_KEY, SIM_V6_STORAGE_KEY, SIM_V6_BACKUP_KEY, SIM_V5_STORAGE_KEY, SIM_V5_BACKUP_KEY, SIM_V4_STORAGE_KEY, SIM_V4_BACKUP_KEY, SIM_LEGACY_STORAGE_KEY, SIM_LEGACY_BACKUP_KEY] as const;
+function parseV13Snapshot(raw: string | null): SimState | undefined {
+  if (raw === null) return undefined;
+  try {
+    const value: unknown = JSON.parse(raw);
+    return validateV13SimState(value) ? migrateV13SimState(value) : undefined;
+  } catch { return undefined }
+}
+
+const PREVIOUS_KEYS = [SIM_V13_STORAGE_KEY, SIM_V13_BACKUP_KEY, SIM_V12_STORAGE_KEY, SIM_V12_BACKUP_KEY, SIM_V11_STORAGE_KEY, SIM_V11_BACKUP_KEY, SIM_V10_STORAGE_KEY, SIM_V10_BACKUP_KEY, SIM_V9_STORAGE_KEY, SIM_V9_BACKUP_KEY, SIM_V8_STORAGE_KEY, SIM_V8_BACKUP_KEY, SIM_V7_STORAGE_KEY, SIM_V7_BACKUP_KEY, SIM_V6_STORAGE_KEY, SIM_V6_BACKUP_KEY, SIM_V5_STORAGE_KEY, SIM_V5_BACKUP_KEY, SIM_V4_STORAGE_KEY, SIM_V4_BACKUP_KEY, SIM_LEGACY_STORAGE_KEY, SIM_LEGACY_BACKUP_KEY] as const;
 type PreviousSnapshots = Record<(typeof PREVIOUS_KEYS)[number], string | null>;
 function readPreviousSnapshots(storage: StorageLike): PreviousSnapshots {
   return {
+    [SIM_V13_STORAGE_KEY]: storage.getItem(SIM_V13_STORAGE_KEY), [SIM_V13_BACKUP_KEY]: storage.getItem(SIM_V13_BACKUP_KEY),
     [SIM_V12_STORAGE_KEY]: storage.getItem(SIM_V12_STORAGE_KEY), [SIM_V12_BACKUP_KEY]: storage.getItem(SIM_V12_BACKUP_KEY),
     [SIM_V11_STORAGE_KEY]: storage.getItem(SIM_V11_STORAGE_KEY), [SIM_V11_BACKUP_KEY]: storage.getItem(SIM_V11_BACKUP_KEY),
     [SIM_V10_STORAGE_KEY]: storage.getItem(SIM_V10_STORAGE_KEY), [SIM_V10_BACKUP_KEY]: storage.getItem(SIM_V10_BACKUP_KEY),
@@ -189,16 +200,23 @@ function loadSnapshot(primaryRaw: string | null, backupRaw: string | null, previ
   if (backup) return {
     state: backup,
     source: "backup",
-    warning: "当前存档不可用，已恢复上一份有效快照；最近的设备购买、装修或其他操作可能需要重做。",
+    warning: "当前存档不可用，已恢复上一份有效快照；最近的退款、备用金配置、盘点、设备或装修操作可能需要重做。",
   };
   const currentProgressExists = primaryRaw !== null || backupRaw !== null;
+  const v13 = parseV13Snapshot(previous[SIM_V13_STORAGE_KEY]);
+  const v13Backup = v13 ? undefined : parseV13Snapshot(previous[SIM_V13_BACKUP_KEY]);
+  if (v13 || v13Backup) return {
+    state: (v13 ?? v13Backup)!, source: v13 ? "v13" : "v13-backup",
+    warning: `${currentProgressExists ? "当前现金管理存档不可恢复，已回到保留的 v13 进度；最近的退款、备用金配置与盘点进度可能丢失。" : v13Backup ? "旧 v13 主存档不可用，已从旧备份迁移；最近一次操作可能需要重做。" : "已迁移原有设备与现金收银进度。"}钱箱、交款与找零、交易、设备、扩建、资金、库存、营业时间与历史日结保持原样；退款、备用金调配与盘点记录从空开始，保管余额为零，不补发资金，旧档未修改。`,
+  };
+  const v13ProgressExists = currentProgressExists || previous[SIM_V13_STORAGE_KEY] !== null || previous[SIM_V13_BACKUP_KEY] !== null;
   const v12 = parseV12Snapshot(previous[SIM_V12_STORAGE_KEY]);
   const v12Backup = v12 ? undefined : parseV12Snapshot(previous[SIM_V12_BACKUP_KEY]);
   if (v12 || v12Backup) return {
     state: (v12 ?? v12Backup)!, source: v12 ? "v12" : "v12-backup",
-    warning: `${currentProgressExists ? "当前设备存档不可恢复，已回到保留的 v12 进度；最近的设备购买、摆放或第二次扩建进度可能丢失。" : v12Backup ? "旧 v12 主存档不可用，已从旧备份迁移；最近一次操作可能需要重做。" : "已迁移原有有限钱箱与经营进度。"}v12 中的钱箱面额、暂收现金、找零托盘、交易、营业时间、资金、装修、库存、订单、顾客、社区帮助及日结保持原样；设备仓库从空开始，第二次扩建尚未购买，不会补扣资金，旧档未修改。`,
+    warning: `${v13ProgressExists ? "当前现金管理或设备存档不可恢复，已回到保留的 v12 进度；最近的退款、盘点、设备购买、摆放或第二次扩建进度可能丢失。" : v12Backup ? "旧 v12 主存档不可用，已从旧备份迁移；最近一次操作可能需要重做。" : "已迁移原有有限钱箱与经营进度。"}v12 中的钱箱面额、暂收现金、找零托盘、交易、营业时间、资金、装修、库存、订单、顾客、社区帮助及日结保持原样；设备仓库从空开始，第二次扩建尚未购买，不会补扣资金，旧档未修改。`,
   };
-  const v12ProgressExists = currentProgressExists || previous[SIM_V12_STORAGE_KEY] !== null || previous[SIM_V12_BACKUP_KEY] !== null;
+  const v12ProgressExists = v13ProgressExists || previous[SIM_V12_STORAGE_KEY] !== null || previous[SIM_V12_BACKUP_KEY] !== null;
   const v11 = parseV11Snapshot(previous[SIM_V11_STORAGE_KEY]);
   const v11Backup = v11 ? undefined : parseV11Snapshot(previous[SIM_V11_BACKUP_KEY]);
   if (v11 || v11Backup) return {
@@ -277,6 +295,7 @@ export function parseImportedSimState(raw: string): SimState {
   try { value = JSON.parse(raw) }
   catch { throw new Error("文件不是可读取的 JSON，当前进度未改变。") }
   if (validateSimState(value)) return value;
+  if (validateV13SimState(value)) return migrateV13SimState(value);
   if (validateV12SimState(value)) return migrateV12SimState(value);
   if (validateV11SimState(value)) return migrateV11SimState(value);
   if (validateV10SimState(value)) return migrateV10SimState(value);
@@ -360,7 +379,7 @@ export class SimSaveSession {
     const previous = readPreviousSnapshots(this.storage);
     const result = loadSnapshot(raw, this.storage.getItem(SIM_BACKUP_KEY), previous);
     this.expectedRaw = raw;
-    this.expectedMigrationSources = ["v12", "v12-backup", "v11", "v11-backup", "v10", "v10-backup", "v9", "v9-backup", "v8", "v8-backup", "v7", "v7-backup", "v6", "v6-backup", "v5", "v5-backup", "v4", "v4-backup", "legacy", "legacy-backup"].includes(result.source) ? previous : null;
+    this.expectedMigrationSources = ["v13", "v13-backup", "v12", "v12-backup", "v11", "v11-backup", "v10", "v10-backup", "v9", "v9-backup", "v8", "v8-backup", "v7", "v7-backup", "v6", "v6-backup", "v5", "v5-backup", "v4", "v4-backup", "legacy", "legacy-backup"].includes(result.source) ? previous : null;
     this.loaded = true;
     return result;
   }

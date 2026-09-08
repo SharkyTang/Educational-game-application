@@ -1,4 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
+import { asV13CashSnapshot } from "../helpers/sim3dLegacyCash";
 import { readFile, writeFile } from "node:fs/promises";
 import {
   PRODUCTS, createFirstDayState, getDaySummary, reduceSim, validateSimState, validateV6SimState,
@@ -62,7 +63,7 @@ test("empty boxes: real recycling target, one reward, reload, separate ledger an
   const { payment: _payment, recyclingRecords: _records, recyclingBatches: _batches, settlements: _settlements,
     renovation: _renovation, streetSupportRecords: _streetSupportRecords, cashDrawer: _cashDrawer,
     cashDrawerOpening: _cashDrawerOpening, cashDrawerTransactionStart: _cashDrawerTransactionStart,
-    customer: currentCustomer, day: timedDay, ...oldFields } = full;
+    customer: currentCustomer, day: timedDay, ...oldFields } = asV13CashSnapshot(full);
   const { contentVersion: _contentVersion, ...oldCustomer } = currentCustomer;
   const { elapsedOpenMs: _elapsed, nextCustomerAtMs: _arrival, closeReason: _reason, ...oldDay } = timedDay;
   const v6: SimStateV6 = { ...oldFields, schemaVersion: 6, customer: oldCustomer,

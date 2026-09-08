@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { asV13CashSnapshot } from "../helpers/sim3dLegacyCash";
 import {
   createFirstDayState,
   reduceSim,
@@ -82,7 +83,7 @@ function completedCashSnapshot(): SimState {
 }
 
 function asV12(state = createFirstDayState()): SimStateV12 {
-  const snapshot = structuredClone(state);
+  const snapshot = asV13CashSnapshot(state);
   const {
     schemaVersion: currentSchemaVersion,
     equipment: currentEquipment,
@@ -152,10 +153,10 @@ function asV10(state = createFirstDayState()): SimStateV10 {
   };
 }
 
-describe("v13 equipment schema persistence", () => {
-  it("uses the v13 namespace while retaining the shared v4 writer lock and read-only v12 namespace", () => {
-    expect(SIM_STORAGE_KEY).toBe("english-high-street:sim3d:v13");
-    expect(SIM_BACKUP_KEY).toBe("english-high-street:sim3d:v13:backup");
+describe("v14 equipment schema persistence", () => {
+  it("uses the v14 namespace while retaining the shared v4 writer lock and read-only v12 namespace", () => {
+    expect(SIM_STORAGE_KEY).toBe("english-high-street:sim3d:v14");
+    expect(SIM_BACKUP_KEY).toBe("english-high-street:sim3d:v14:backup");
     expect(SIM_V12_STORAGE_KEY).toBe("english-high-street:sim3d:v12");
     expect(SIM_V12_BACKUP_KEY).toBe("english-high-street:sim3d:v12:backup");
     expect(SIM_V11_STORAGE_KEY).toBe("english-high-street:sim3d:v11");
@@ -163,7 +164,7 @@ describe("v13 equipment schema persistence", () => {
     expect(SIM_WRITER_LOCK).toBe("english-high-street:sim3d:v4:writer");
   });
 
-  it("round-trips complete v13 equipment ownership and backs up the previous valid v13 snapshot", () => {
+  it("round-trips complete v14 equipment ownership and backs up the previous valid v14 snapshot", () => {
     const storage = new MemoryStorage();
     const beforePurchase = createFirstDayState();
     const afterPurchase = purchaseEquipmentSnapshot();
@@ -190,7 +191,7 @@ describe("v13 equipment schema persistence", () => {
 
     const loaded = loadSimState(storage);
     expect(loaded.source).toBe("v12");
-    expect(loaded.state.schemaVersion).toBe(13);
+    expect(loaded.state.schemaVersion).toBe(14);
     expect(loaded.state.payment).toEqual(legacy.payment);
     expect(loaded.state.transactions).toEqual(legacy.transactions);
     expect(loaded.state.cashDrawer).toEqual(legacy.cashDrawer);
@@ -215,7 +216,7 @@ describe("v13 equipment schema persistence", () => {
     const loaded = loadSimState(storage);
     expect(loaded.source).toBe("v11");
     expect(loaded.warning).toContain("设备仓库从空开始");
-    expect(loaded.state.schemaVersion).toBe(13);
+    expect(loaded.state.schemaVersion).toBe(14);
     expect(loaded.state.cashPence).toBe(legacy.cashPence);
     expect(loaded.state.equipment).toEqual({ instances: [], purchases: [], nextSequence: 1 });
     expect(loaded.state.renovation.layout.equipment).toEqual([]);
@@ -263,7 +264,7 @@ describe("v13 equipment schema persistence", () => {
   it.each([
     ["v11 primary", SIM_V11_STORAGE_KEY, false],
     ["v11 backup", SIM_V11_BACKUP_KEY, true],
-  ] as const)("freezes a CAS session if its %s migration source changes before the first v13 save", async (_label, sourceKey, useBackup) => {
+  ] as const)("freezes a CAS session if its %s migration source changes before the first v14 save", async (_label, sourceKey, useBackup) => {
     const storage = new MemoryStorage();
     const raw = JSON.stringify(asV11());
     if (useBackup) storage.setItem(SIM_V11_STORAGE_KEY, "{broken-v11");

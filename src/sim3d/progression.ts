@@ -38,11 +38,12 @@ export interface VenueProgress {
 
 /** Business progress is derived from audited receipts, never from exposure or English mastery. */
 export function getStreetProgress(state: SimState): StreetProgress {
-  const experience = state.transactions.length * 10;
+  const paidOrders = state.transactions.length - state.cashJournal.filter((event) => event.kind === "refund").length;
+  const experience = paidOrders * 10;
   const level = 1 + Math.floor(experience / 30);
   return {
     level, experience, nextLevelExperience: level * 30, levelExperience: experience % 30,
-    experiencePerLevel: 30, paidOrders: state.transactions.length, settledDays: state.settlements.length,
+    experiencePerLevel: 30, paidOrders, settledDays: state.settlements.length,
     upgraded: state.upgraded,
   };
 }
@@ -56,7 +57,7 @@ export function getVenueProgress(state: SimState, id: VenueId): VenueProgress {
     id: requirementId, label, current, target, completed: current >= target,
   });
   const requirements = [requirement("level", `经营等级达到 Lv ${venue.requiredLevel}`, progress.level, venue.requiredLevel)];
-  if (id === "cafe") requirements.push(requirement("settlement", "完成首次有收款的营业日结", state.settlements.filter((day) => day.paidCustomers > 0).length, 1));
+  if (id === "cafe") requirements.push(requirement("settlement", "完成首次有收款的营业日结", state.settlements.filter((day) => day.paidCustomers > day.refundCount).length, 1));
   if (id === "restaurant") requirements.push(requirement("paid-orders", "累计完成 12 单收款", progress.paidOrders, 12));
   if (id === "supermarket") {
     requirements.push(requirement("upgrade", "完成小店货架扩容", progress.upgraded ? 1 : 0, 1));

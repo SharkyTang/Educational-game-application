@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { asV13CashSnapshot } from "../helpers/sim3dLegacyCash";
 import { preCashTransactions } from "../helpers/sim3dPayment";
 import { SAFE_DROP_POINTS, createFirstDayState, createInitialSimState, getDeliverySummary, migrateV4SimState, migrateV5SimState,
   migrateV11SimState, reduceSim, validateSimState, validateV4SimState, validateV5SimState, validateV11SimState,
@@ -91,7 +92,7 @@ function v11Snapshot(state: SimState = pendingCashSnapshot()): SimStateV11 {
     payment,
     transactions,
     ...previous
-  } = structuredClone(state);
+  } = asV13CashSnapshot(state);
   const { layout, secondExpansionDay: _secondExpansionDay, ...renovationRecord } = renovation;
   const { equipment: _placements, ...legacyLayout } = layout;
   if (legacyLayout.expansion > 1) throw new Error("v11 fixture cannot contain a second expansion");
@@ -133,7 +134,7 @@ function v4Snapshot(): SimStateV4 {
 }
 
 function v5Snapshot(state = reduceSim(createFirstDayState(), { type: "PURCHASE_STOCK", orderId: "v5-original", pairs: 3 }).state): SimStateV5 {
-  const { payment: _payment, recyclingBatches: _recyclingBatches, recyclingRecords: _recyclingRecords, settlements, ...previous } = structuredClone(state);
+  const { payment: _payment, recyclingBatches: _recyclingBatches, recyclingRecords: _recyclingRecords, settlements, ...previous } = asV13CashSnapshot(state);
   return {
     ...previous, schemaVersion: 5, customer: { phase: previous.customer.phase, number: previous.customer.number },
     day: {
@@ -317,10 +318,10 @@ describe("safe crate placement around the player", () => {
   });
 });
 
-describe("audited v11 to v13 finite cash-drawer and equipment migration", () => {
-  it("uses separate v13 keys while retaining both v11 keys as read-only migration sources", () => {
-    expect(SIM_STORAGE_KEY).toBe("english-high-street:sim3d:v13");
-    expect(SIM_BACKUP_KEY).toBe("english-high-street:sim3d:v13:backup");
+describe("audited v11 to v14 finite cash-drawer and equipment migration", () => {
+  it("uses separate v14 keys while retaining both v11 keys as read-only migration sources", () => {
+    expect(SIM_STORAGE_KEY).toBe("english-high-street:sim3d:v14");
+    expect(SIM_BACKUP_KEY).toBe("english-high-street:sim3d:v14:backup");
     expect(SIM_V11_STORAGE_KEY).toBe("english-high-street:sim3d:v11");
     expect(SIM_V11_BACKUP_KEY).toBe("english-high-street:sim3d:v11:backup");
     expect(SIM_WRITER_LOCK).toBe("english-high-street:sim3d:v4:writer");
@@ -335,7 +336,7 @@ describe("audited v11 to v13 finite cash-drawer and equipment migration", () => 
     const primary = JSON.stringify(old, null, 2);
     const backup = JSON.stringify(v11Snapshot(paidSnapshot()));
     const storage = new MemoryStorage();
-    storage.data.set(SIM_STORAGE_KEY, "{corrupt-v13");
+    storage.data.set(SIM_STORAGE_KEY, "{corrupt-v14");
     storage.data.set(SIM_V11_STORAGE_KEY, primary);
     storage.data.set(SIM_V11_BACKUP_KEY, backup);
     const before = [...storage.data];
@@ -344,7 +345,7 @@ describe("audited v11 to v13 finite cash-drawer and equipment migration", () => 
     expect(loaded.source).toBe("v11");
     expect(loaded.state).toEqual(expected);
     expect(parseImportedSimState(primary)).toEqual(expected);
-    expect(loaded.state.schemaVersion).toBe(13);
+    expect(loaded.state.schemaVersion).toBe(14);
     expect(loaded.state.cashPence).toBe(old.cashPence);
     expect(loaded.state.cashDrawerTransactionStart).toBe(old.transactions.length);
     expect(loaded.state.cashDrawerOpening).toEqual(loaded.state.cashDrawer);
@@ -382,7 +383,7 @@ describe("audited v11 to v13 finite cash-drawer and equipment migration", () => 
     expect([...storage.data]).toEqual(before);
   });
 
-  it.each([SIM_V11_STORAGE_KEY, SIM_V11_BACKUP_KEY])("freezes before the first v13 save when an old page changes %s", async (sourceKey) => {
+  it.each([SIM_V11_STORAGE_KEY, SIM_V11_BACKUP_KEY])("freezes before the first v14 save when an old page changes %s", async (sourceKey) => {
     const storage = new MemoryStorage();
     const old = v11Snapshot();
     storage.data.set(SIM_V11_STORAGE_KEY, JSON.stringify(old));
@@ -397,7 +398,7 @@ describe("audited v11 to v13 finite cash-drawer and equipment migration", () => 
     expect(storage.getItem(SIM_STORAGE_KEY)).toBeNull();
   });
 
-  it("rejects a forged v13 drawer and falls back read-only to a valid v11 source", () => {
+  it("rejects a forged v14 drawer and falls back read-only to a valid v11 source", () => {
     const forged = pendingCashSnapshot();
     forged.cashDrawer[50] -= 1;
     expect(validateSimState(forged)).toBe(false);
@@ -423,14 +424,14 @@ describe("audited v11 to v13 finite cash-drawer and equipment migration", () => 
   });
 });
 
-describe("v13 snapshot persistence and read-only v3 migration", () => {
+describe("v14 snapshot persistence and read-only v3 migration", () => {
   it("starts the new namespace with £12 and empty crates without rewriting unrelated 2D data", () => {
     const storage = new MemoryStorage();
     storage.data.set("english-high-street:save:v2", "legacy-2d-content");
     const before = [...storage.data];
     expect(loadSimState(storage)).toEqual({ state: createFirstDayState(), source: "new" });
     expect([...storage.data]).toEqual(before);
-    expect(SIM_STORAGE_KEY).toBe("english-high-street:sim3d:v13");
+    expect(SIM_STORAGE_KEY).toBe("english-high-street:sim3d:v14");
   });
 
   it("migrates the valid v3 world once and leaves both original v3 keys byte-for-byte intact", () => {
@@ -444,7 +445,7 @@ describe("v13 snapshot persistence and read-only v3 migration", () => {
     expect(migrated.source).toBe("legacy");
     expect(migrated.warning).toContain("不会额外发放");
     expect(migrated.state.cashPence).toBe(400);
-    expect(migrated.state.schemaVersion).toBe(13);
+    expect(migrated.state.schemaVersion).toBe(14);
     expect(migrated.state.transactions).toEqual(oldSnapshot().transactions.map((transaction) => ({
       ...transaction, paymentMethod: "card", tenderedPence: transaction.amountPence, changePence: 0, tenderedCash: [], changeCash: [],
       tenderedCashRecorded: false, changeCashRecorded: false, cashDrawerTracked: false,
@@ -714,7 +715,7 @@ describe("strict v5 selected-stock migration to the current schema", () => {
     const untouched = [...storage.data];
     const result = loadSimState(storage);
     expect(result.source).toBe("v5");
-    expect(result.state.schemaVersion).toBe(13);
+    expect(result.state.schemaVersion).toBe(14);
     expect(validateSimState(result.state)).toBe(true);
     expect(result.state.cashPence).toBe(old.cashPence);
     expect(result.state.items).toEqual(old.items);

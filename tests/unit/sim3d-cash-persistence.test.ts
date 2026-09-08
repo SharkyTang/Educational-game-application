@@ -9,6 +9,7 @@ import {
 } from "../../src/sim3d/persistence";
 import { cashPiecesForAmount, type LegacyPaymentState } from "../../src/sim3d/cashPayment";
 import { createDefaultCashDrawer } from "../../src/sim3d/cashDrawer";
+import { asV13CashSnapshot } from "../helpers/sim3dLegacyCash";
 
 const V7_PRIMARY = "english-high-street:sim3d:v7";
 const V7_BACKUP = `${V7_PRIMARY}:backup`;
@@ -68,7 +69,7 @@ function readyCash(): SimState {
 }
 
 function v8Snapshot(state: SimState = partialCash()): SimStateV8 {
-  const current = structuredClone(state);
+  const current = asV13CashSnapshot(state);
   const { cashDrawer: _cashDrawer, cashDrawerOpening: _cashDrawerOpening,
     cashDrawerTransactionStart: _cashDrawerTransactionStart, payment: currentPayment,
     transactions: currentTransactions, ...previous } = current;
@@ -99,10 +100,10 @@ function v7Snapshot(state: SimState = partialCash()): SimStateV7 {
   };
 }
 
-describe("v13 read-only migration of cash and pre-cash save sources", () => {
-  it("uses the current v13 namespace, preserving the cross-version writer lock", () => {
-    expect(SIM_STORAGE_KEY).toBe("english-high-street:sim3d:v13");
-    expect(SIM_BACKUP_KEY).toBe("english-high-street:sim3d:v13:backup");
+describe("v14 read-only migration of cash and pre-cash save sources", () => {
+  it("uses the current v14 namespace, preserving the cross-version writer lock", () => {
+    expect(SIM_STORAGE_KEY).toBe("english-high-street:sim3d:v14");
+    expect(SIM_BACKUP_KEY).toBe("english-high-street:sim3d:v14:backup");
     expect(SIM_WRITER_LOCK).toBe("english-high-street:sim3d:v4:writer");
   });
 
@@ -126,7 +127,7 @@ describe("v13 read-only migration of cash and pre-cash save sources", () => {
     const expectedPayment = old.payment?.method === "cash"
       ? { ...old.payment, tenderedCash: cashPiecesForAmount(old.payment.tenderedPence), tenderedCashRecorded: false } : old.payment;
     expect(loaded.state).toMatchObject({
-      schemaVersion: 13, customer: { ...current.customer, contentVersion: 1 }, payment: expectedPayment,
+      schemaVersion: 14, customer: { ...current.customer, contentVersion: 1 }, payment: expectedPayment,
       cashDrawer: createDefaultCashDrawer(), cashDrawerOpening: createDefaultCashDrawer(),
       cashDrawerTransactionStart: old.transactions.length,
     });
@@ -142,7 +143,7 @@ describe("v13 read-only migration of cash and pre-cash save sources", () => {
     for (const [key, value] of before) expect(storage.getItem(key)).toBe(value);
   });
 
-  it("keeps a migrated in-progress tender labelled as derived when it is confirmed in v13", () => {
+  it("keeps a migrated in-progress tender labelled as derived when it is confirmed in v14", () => {
     const migrated = parseImportedSimState(JSON.stringify(v8Snapshot(readyCash())));
     expect(migrated.payment).toMatchObject({ method: "cash", tenderedCashRecorded: false, selectedChange: [50, 50] });
     const paid = act(migrated, { type: "CONFIRM_CASH" });
@@ -194,7 +195,8 @@ describe("v13 read-only migration of cash and pre-cash save sources", () => {
     const loaded = loadSimState(storage);
     expect(loaded.source).toBe("v7");
     expect(loaded.state).toEqual({
-      ...old, schemaVersion: 13, renovation: createFirstDayState().renovation, payment: { method: "card" }, streetSupportRecords: [],
+      ...old, schemaVersion: 14, renovation: createFirstDayState().renovation, payment: { method: "card" }, streetSupportRecords: [],
+      cashReservePence: 0, cashJournal: [],
       cashDrawer: createDefaultCashDrawer(), cashDrawerOpening: createDefaultCashDrawer(), cashDrawerTransactionStart: old.transactions.length,
       customer: { ...old.customer, contentVersion: 1 },
       day: { ...old.day, targetCustomers: null, elapsedOpenMs: 0, nextCustomerAtMs: null, closeReason: null },
@@ -260,7 +262,7 @@ describe("v13 read-only migration of cash and pre-cash save sources", () => {
     expect(storage.getItem(SIM_STORAGE_KEY)).toBeNull();
   });
 
-  it("detects an old page changing the v7 migration source before this page can write v13", async () => {
+  it("detects an old page changing the v7 migration source before this page can write v14", async () => {
     const storage = new MemoryStorage();
     const old = v7Snapshot();
     storage.data.set(V7_PRIMARY, JSON.stringify(old));
@@ -336,7 +338,7 @@ describe("cash selection recovery, write failure and exactly-once saves", () => 
     await session.release();
   });
 
-  it("keeps the original v7 source intact if the initial migrated v13 write fails", async () => {
+  it("keeps the original v7 source intact if the initial migrated v14 write fails", async () => {
     const storage = new MemoryStorage();
     const raw = JSON.stringify(v7Snapshot());
     storage.data.set(V7_PRIMARY, raw);

@@ -2,6 +2,7 @@ import {
   PRODUCTS, PRODUCT_IDS, UPGRADE_COST_PENCE, capacityFor, countAt,
   createFirstDayState, getCheckoutTotal, getObjective, reduceSim,
   getDaySummary, getPaymentMethodSummary, getPurchaseOffer, getDeliverySummary, getCustomerOrder, getShoppingProduct,
+  getCashCountStatus,
   getRecyclingOffer, getRecyclingSummary, RECYCLING_REWARD_PENCE,
   canSettleDay, canStartCustomer, getShopLayoutObstacles, CRATE_CAPACITY, shelfCapacityAt,
   type PlayerPose, type ProductId, type PurchaseLine, type SimCommand, type SimState,
@@ -16,6 +17,7 @@ import { BusinessClockDriver, isBusinessTimeRunning } from "./businessClockDrive
 import { cashRegisterMarkup, denominationLabel } from "./cashRegister";
 import { CashRegisterController } from "./cashRegisterController";
 import { cashDrawerPieceCount, cashDrawerValuePence } from "./cashDrawer";
+import { CashManagementPanel } from "./cashManagementPanel";
 import { LayoutEditor } from "./layoutEditor";
 import { DevelopmentPanel } from "./developmentPanel";
 import { EquipmentStore } from "./equipmentStore";
@@ -29,14 +31,15 @@ import {
 } from "./streetNeighbourContent";
 import "./styles.css";
 import "./cashRegister.css";
+import "./cashManagementPanel.css";
 import "./businessTime.css";
 import "./developmentPanel.css";
 import "./streetNeighbourDialog.css";
 
 type ScreenMode = "loading" | "start" | "playing" | "paused" | "inspecting" | "cashier" | "street-dialogue" | "readonly" | "error";
-type ManagementSection = "supply" | "day" | "upgrade" | "development" | "equipment" | "layout" | "street";
+type ManagementSection = "supply" | "day" | "cash" | "upgrade" | "development" | "equipment" | "layout" | "street";
 type StreetVenueId = (typeof STREET_VENUES)[number]["id"];
-const MANAGEMENT_SECTIONS: readonly ManagementSection[] = ["supply", "day", "upgrade", "development", "equipment", "layout", "street"];
+const MANAGEMENT_SECTIONS: readonly ManagementSection[] = ["supply", "day", "cash", "upgrade", "development", "equipment", "layout", "street"];
 interface InteractionDecision {
   command?: SimCommand;
   message?: string;
@@ -200,6 +203,7 @@ export class App3D {
   private readonly events = new AbortController();
   private readonly shopAudio: ShopAudio;
   private readonly cashRegister: CashRegisterController;
+  private readonly cashManagement: CashManagementPanel;
   private readonly layoutEditor: LayoutEditor;
   private readonly developmentPanel: DevelopmentPanel;
   private readonly equipmentStore: EquipmentStore;
@@ -262,6 +266,9 @@ export class App3D {
       },
       speak: (clip, rate) => this.speak(clip, rate, undefined, true),
     }, this.events.signal);
+    this.cashManagement = new CashManagementPanel(this.el("s3-cash-management-host"), {
+      dispatch: (command) => this.mode === "paused" && this.dispatch(command),
+    });
     this.layoutEditor = new LayoutEditor(this.el("s3-layout-editor"), {
       onApply: (layout) => this.mode === "paused" && this.dispatch({ type: "APPLY_SHOP_LAYOUT", layout }),
       onDirtyChange: (dirty) => { if (!dirty) this.cancelLayoutExit(false) },
@@ -309,6 +316,7 @@ export class App3D {
         ? { ...snapshot.state, customerSeed: createCustomerSeed() }
         : snapshot.state;
       this.layoutEditor.setState(this.state.renovation.layout, { editable: false, resetDraft: true });
+      this.cashManagement.resetDrafts();
       this.cancelLayoutExit(false);
       this.loadedSession = snapshot.source !== "new";
       this.loadWarning = snapshot.warning ?? "";
@@ -496,6 +504,7 @@ export class App3D {
           <nav class="s3-management-tabs" aria-label="经营管理分类">
             <button id="s3-tab-supply" type="button" aria-pressed="true">进货</button>
             <button id="s3-tab-day" type="button" aria-pressed="false">营业与日结</button>
+            <button id="s3-tab-cash" type="button" aria-pressed="false">现金管理</button>
             <button id="s3-tab-upgrade" type="button" aria-pressed="false">普通扩容</button>
             <button id="s3-tab-development" type="button" aria-pressed="false">店铺成长</button>
             <button id="s3-tab-equipment" type="button" aria-pressed="false">设备商店</button>
@@ -535,17 +544,18 @@ export class App3D {
             <p id="s3-day-eyebrow" class="s3-eyebrow">TODAY AT THE CORNER SHOP</p><h3 id="s3-day-title">今天的小店</h3>
             <p id="s3-day-progress" class="s3-muted"></p>
             <p id="s3-day-clock" class="s3-day-clock"></p>
-            <dl class="s3-account-lines"><div><dt>今日营业收入</dt><dd id="s3-day-revenue"></dd></div><div><dt>现金付款</dt><dd id="s3-day-cash-sales"></dd></div><div><dt>刷卡付款</dt><dd id="s3-day-card-sales"></dd></div><div><dt>教学钱箱面额</dt><dd id="s3-day-drawer"></dd></div><div><dt>已售商品成本</dt><dd id="s3-day-cogs"></dd></div><div class="s3-account-result"><dt>商品毛利</dt><dd id="s3-day-profit"></dd></div><div><dt>空箱回收收入</dt><dd id="s3-day-recycling"></dd></div><div><dt>今日进货支出</dt><dd id="s3-day-procurement"></dd></div><div><dt>货架扩容支出</dt><dd id="s3-day-investment"></dd></div><div><dt>店面扩建支出</dt><dd id="s3-day-expansion"></dd></div><div><dt>设备购置支出</dt><dd id="s3-day-equipment"></dd></div><div><dt>社区现金帮助</dt><dd id="s3-day-community"></dd></div><div><dt>当前剩余资金</dt><dd id="s3-day-cash"></dd></div><div><dt>未售商品 / 成本价值</dt><dd id="s3-day-inventory"></dd></div></dl>
+            <dl class="s3-account-lines"><div><dt>今日销售金额</dt><dd id="s3-day-revenue"></dd></div><div><dt>今日整单退款</dt><dd id="s3-day-refunds"></dd></div><div><dt>退款后销售净额</dt><dd id="s3-day-net-revenue"></dd></div><div><dt>现金付款</dt><dd id="s3-day-cash-sales"></dd></div><div><dt>刷卡付款</dt><dd id="s3-day-card-sales"></dd></div><div><dt>教学钱箱面额</dt><dd id="s3-day-drawer"></dd></div><div><dt>现金保管余额</dt><dd id="s3-day-cash-reserve"></dd></div><div><dt>最新钱箱盘点</dt><dd id="s3-day-cash-count"></dd></div><div><dt>已售商品成本</dt><dd id="s3-day-cogs"></dd></div><div class="s3-account-result"><dt>商品毛利</dt><dd id="s3-day-profit"></dd></div><div><dt>空箱回收收入</dt><dd id="s3-day-recycling"></dd></div><div><dt>今日进货支出</dt><dd id="s3-day-procurement"></dd></div><div><dt>货架扩容支出</dt><dd id="s3-day-investment"></dd></div><div><dt>店面扩建支出</dt><dd id="s3-day-expansion"></dd></div><div><dt>设备购置支出</dt><dd id="s3-day-equipment"></dd></div><div><dt>社区现金帮助</dt><dd id="s3-day-community"></dd></div><div><dt>当前剩余资金</dt><dd id="s3-day-cash"></dd></div><div><dt>未售商品 / 成本价值</dt><dd id="s3-day-inventory"></dd></div></dl>
             <p id="s3-day-drawer-detail" class="s3-muted"></p>
             <p id="s3-day-recycling-count" class="s3-muted"></p>
-            <p class="s3-muted">商品毛利 = 营业收入 − 已售商品成本。回收收入单独记账，自愿现金帮助单独记为社区支出，不计经验或成就。进货中尚未卖出的部分仍是存货；扩容是投资，不把钱包余额当利润。</p>
+            <p class="s3-muted">商品毛利 = 退款后销售净额 − 净售出商品成本。退回的商品重新计入库存。回收收入单独记账，自愿现金帮助单独记为社区支出，不计经验或成就。进货中尚未卖出的部分仍是存货；扩容是投资，不把钱包余额当利润。</p>
             <p id="s3-day-reason" class="s3-inline-reason" role="status"></p>
-            <div class="s3-management-buttons"><button id="s3-close-shop" class="s3-secondary-button" type="button">提前打烊</button><button id="s3-settle-day" class="s3-primary-button" type="button" hidden>完成日结</button><button id="s3-next-day" class="s3-primary-button" type="button" hidden>开始下一天</button><button id="s3-day-to-upgrade" class="s3-secondary-button" type="button">看看 £8 普通扩容</button></div>
+            <div class="s3-management-buttons"><button id="s3-day-to-cash" class="s3-secondary-button" type="button">配置开店备用金</button><button id="s3-close-shop" class="s3-secondary-button" type="button">提前打烊</button><button id="s3-settle-day" class="s3-primary-button" type="button" hidden>完成日结</button><button id="s3-next-day" class="s3-primary-button" type="button" hidden>开始下一天</button><button id="s3-day-to-upgrade" class="s3-secondary-button" type="button">看看 £8 普通扩容</button></div>
             <div id="s3-close-confirm" class="s3-close-confirm" role="group" aria-label="确认提前打烊" hidden>
               <p>今天不再接新顾客或新采购。店里的顾客仍可完成购物，已付款配送仍可签收；收尾后才能日结。确认提前打烊吗？</p>
               <div class="s3-management-buttons"><button id="s3-close-confirm-button" class="s3-primary-button" type="button">确认打烊，开始收尾</button><button id="s3-close-cancel" class="s3-secondary-button" type="button">继续营业</button></div>
             </div>
           </section>
+          <section id="s3-panel-cash" class="s3-management-panel" aria-labelledby="s3-cash-management-title" hidden><div id="s3-cash-management-host"></div></section>
           <section id="s3-panel-upgrade" class="s3-management-panel" aria-labelledby="s3-upgrade-title" hidden>
             <p class="s3-eyebrow">MORE ROOM TO GROW</p><h3 id="s3-upgrade-title">让货架多一层空间</h3>
             <div id="s3-capacity-comparison" class="s3-capacity-comparison"><span><span id="s3-capacity-label">现在</span> <strong id="s3-capacity-now">4</strong> 个 / 每种</span><span id="s3-capacity-arrow" aria-hidden="true">→</span><span id="s3-capacity-next">扩容后 <strong>8</strong> 个 / 每种</span></div>
@@ -743,6 +753,7 @@ export class App3D {
       }
     });
     click("s3-day-to-upgrade", () => this.showManagementSection("upgrade"));
+    click("s3-day-to-cash", () => this.showManagementSection("cash"));
     click("s3-export", () => this.exportSave());
     click("s3-import", () => {
       if (!this.saveSession?.canWrite) return;
@@ -1096,6 +1107,7 @@ export class App3D {
     this.cancelLayoutExit(false);
     this.developmentPanel.cancelConfirmation();
     this.equipmentStore.cancelConfirmation();
+    this.cashManagement.cancelConfirmation();
     this.managementSection = section;
     this.closeConfirmation = false;
     for (const candidate of MANAGEMENT_SECTIONS) {
@@ -1161,6 +1173,7 @@ export class App3D {
       return;
     }
     this.equipmentStore.cancelConfirmation();
+    if (this.cashManagement.cancelConfirmation(true)) return;
     if (this.closeConfirmation) { this.cancelCloseConfirmation(); return }
     if (!this.el("s3-import-confirm").hidden) { this.cancelImport(); this.el("s3-resume").focus(); return }
     if (!this.el("s3-restart-confirm").hidden) {
@@ -1231,7 +1244,10 @@ export class App3D {
       const result = reduceSim(this.state, command);
       const requiresDurableCommit = command.type === "APPLY_SHOP_LAYOUT"
         || command.type === "BUY_SPACE_EXPANSION"
-        || command.type === "BUY_EQUIPMENT";
+        || command.type === "BUY_EQUIPMENT"
+        || command.type === "CONFIGURE_CASH_FLOAT"
+        || command.type === "REFUND_TRANSACTION"
+        || command.type === "RECORD_CASH_COUNT";
       // Keep the current room, warehouse and balance until the entire proposed
       // snapshot is safely stored. A quota failure must not spend cash or clear a draft.
       if (result.changed && requiresDurableCommit && !this.persist(result.state)) return false;
@@ -1437,6 +1453,7 @@ export class App3D {
     this.el("s3-pause").classList.toggle("s3-pause-development", this.managementSection === "development");
     this.el("s3-pause").classList.toggle("s3-pause-equipment", this.managementSection === "equipment");
     this.el("s3-pause").classList.toggle("s3-pause-layout", this.managementSection === "layout");
+    this.el("s3-pause").classList.toggle("s3-pause-cash", this.managementSection === "cash");
     for (const candidate of MANAGEMENT_SECTIONS) {
       this.el(`s3-panel-${candidate}`).hidden = candidate !== this.managementSection;
     }
@@ -1447,9 +1464,15 @@ export class App3D {
     for (const [suffix, value] of [["revenue", day.revenuePence], ["cogs", day.costOfGoodsPence], ["profit", day.grossProfitPence], ["recycling", day.recyclingIncomePence], ["procurement", day.procurementPence], ["investment", day.upgradeSpendPence], ["expansion", day.expansionSpendPence], ["equipment", day.equipmentSpendPence], ["community", day.communityCashPence], ["cash", day.closingCashPence]] as const) {
       this.text(`s3-day-${suffix}`, money(value));
     }
-    this.text("s3-day-cash-sales", `${paymentMethods.cashTransactions} 单 / ${money(paymentMethods.cashRevenuePence)}`);
-    this.text("s3-day-card-sales", `${paymentMethods.cardTransactions} 单 / ${money(paymentMethods.cardRevenuePence)}`);
+    this.text("s3-day-refunds", `${day.refundCount} 单 / ${money(day.refundPence)}`);
+    this.text("s3-day-net-revenue", money(day.netRevenuePence));
+    this.text("s3-day-cash-sales", `${paymentMethods.cashTransactions} 单 / ${money(paymentMethods.cashRevenuePence)}${paymentMethods.cashRefundCount ? ` · 退 ${money(paymentMethods.cashRefundPence)} · 净额 ${money(paymentMethods.cashNetRevenuePence)}` : ""}`);
+    this.text("s3-day-card-sales", `${paymentMethods.cardTransactions} 单 / ${money(paymentMethods.cardRevenuePence)}${paymentMethods.cardRefundCount ? ` · 退 ${money(paymentMethods.cardRefundPence)} · 净额 ${money(paymentMethods.cardNetRevenuePence)}` : ""}`);
     this.text("s3-day-drawer", `${cashDrawerPieceCount(this.state.cashDrawer)} 枚/张 · ${money(cashDrawerValuePence(this.state.cashDrawer))}`);
+    this.text("s3-day-cash-reserve", money(this.state.cashReservePence));
+    const cashCount = getCashCountStatus(this.state);
+    const countDenominationDifference = cashCount.record !== null && Object.values(cashCount.record.denominationDifferences).some((count) => count !== 0);
+    this.text("s3-day-cash-count", cashCount.status === "missing" ? "尚未盘点" : `${cashCount.status === "stale" ? "需重新盘点 · " : ""}实点 ${money(cashCount.record!.countedPence)} / 差额 ${cashCount.record!.differencePence < 0 ? "−" : cashCount.record!.differencePence > 0 ? "+" : ""}${money(Math.abs(cashCount.record!.differencePence))}${countDenominationDifference ? " · 面额有差异" : " · 各面额一致"}`);
     this.text("s3-day-drawer-detail", `面额库存：${[...Object.entries(this.state.cashDrawer)]
       .map(([denomination, count]) => `${denominationLabel(Number(denomination))} × ${count}`).join(" · ")}。这是找零教学库存，不重复计入小店资金。`);
     const recycling = getRecyclingSummary(this.state);
@@ -1457,6 +1480,7 @@ export class App3D {
     this.text("s3-day-inventory", `${day.remainingStockUnits} 件 / ${money(day.remainingInventoryValuePence)}`);
     const settled = this.state.day.phase === "settled";
     const closing = this.state.day.phase === "closing";
+    this.text("s3-day-to-cash", this.state.day.phase === "preparing" ? "配置开店备用金" : closing ? "打烊钱箱盘点" : settled ? "查看现金与盘点记录" : "退款 / 现金管理");
     const canSettle = canSettleDay(this.state);
     this.text("s3-day-reason", settled ? "今天的账已记好。下一天会保留资金、库存与扩容，不补发本金。零单日可以结束，但不计入有效经营日成就。" : delivery.pendingUnits > 0 ? `还有 ${delivery.pendingUnits} 件已付款商品待签收。请返回门口货车旁签收；打烊后仍可签收，完成收尾后才能日结。` : canSettle ? `收尾已完成，今天共收款 ${day.paidCustomers} 单。可以日结了，资金不会重复入账。` : closing ? this.state.customer.phase === "leaving" ? "最后一位顾客正在离店。请返回小店让顾客走完，再完成日结。" : "已停止接新客。请返回小店完成当前订单，或在存档与试玩管理中安全取消，再日结。" : this.state.day.phase === "preparing" ? "按 B 自选商品并签收，上架后到营业牌开门。准备时间不限；今天不营业也可以确认结束准备。" : "19:00 停止接客，营业期间没有三单上限。可以继续补货经营，也可以确认提前打烊。打开管理面板时营业钟暂停。");
     if (closing || settled) this.closeConfirmation = false;
@@ -1484,6 +1508,7 @@ export class App3D {
     this.el("s3-open-day").classList.toggle("s3-upgrade-ready", canSettle);
     this.renderStreet();
     this.developmentPanel.render(this.state, writable && this.mode === "paused");
+    this.cashManagement.render(this.state, writable && this.mode === "paused");
     const reason = !writable ? "此页面只读，不能修改设备布局。" : shopRenovationReason(this.state);
     this.equipmentStore.setState(this.state.equipment, this.state.renovation.layout.equipment, this.state.cashPence, {
       writable: writable && this.mode === "paused",
@@ -1620,6 +1645,8 @@ export class App3D {
   private renderReceipt(): void {
     const phase = this.state.customer.phase;
     const transaction = this.state.transactions.find((sale) => sale.customerNumber === this.state.customer.number);
+    const refund = transaction ? this.state.cashJournal.filter((record) => record.kind === "refund")
+      .find((record) => record.transactionId === transaction.id) : undefined;
     const atCheckout = phase === "checkout";
     const showPaid = !!transaction && (phase === "leaving" || phase === "complete");
     const shopping = ["to-milk", "to-bread", "to-checkout"].includes(phase);
@@ -1627,21 +1654,21 @@ export class App3D {
     const receipt = this.el<HTMLDetailsElement>("s3-receipt");
     receipt.hidden = !atCheckout && !showPaid && !shopping;
     if (atCheckout && this.receiptCustomer !== this.state.customer.number) { receipt.open = true; this.receiptCustomer = this.state.customer.number }
-    this.text("s3-receipt-title", showPaid ? "本单已收款" : atCheckout ? "顾客想结账" : approaching ? "顾客正从街上走来" : "顾客进店了");
-    this.text("s3-receipt-state", showPaid ? "实收" : "应收");
+    this.text("s3-receipt-title", showPaid ? refund ? refund.reason === "void" ? "本单已撤销" : "本单已退款" : "本单已收款" : atCheckout ? "顾客想结账" : approaching ? "顾客正从街上走来" : "顾客进店了");
+    this.text("s3-receipt-state", showPaid ? refund ? "原成交" : "实收" : "应收");
     const total = transaction?.amountPence ?? getCheckoutTotal(this.state);
-    this.text("s3-receipt-summary", shopping ? approaching ? "即将进店" : "听听问候" : money(total));
+    this.text("s3-receipt-summary", shopping ? approaching ? "即将进店" : "听听问候" : refund && showPaid ? `已退 ${money(refund.amountPence)}` : money(total));
     this.text("s3-receipt-total", money(total));
     const method = showPaid ? transaction?.paymentMethod : this.state.payment?.method;
     this.el("s3-payment-method").hidden = !method;
     this.el("s3-payment-method").setAttribute("data-method", method ?? "");
-    this.text("s3-payment-method", method === "cash" ? "现金付款 · CASH" : "刷卡付款 · CARD");
+    this.text("s3-payment-method", `${refund && showPaid ? "原" : ""}${method === "cash" ? "现金付款 · CASH" : "刷卡付款 · CARD"}${refund && showPaid ? " · 已退款" : ""}`);
     this.el("s3-receipt-cash-breakdown").hidden = !showPaid || method !== "cash";
     this.text("s3-receipt-cash-breakdown", showPaid && transaction?.paymentMethod === "cash"
       ? `交付 ${money(transaction.tenderedPence)}${transaction.tenderedCashRecorded
         ? `（${transaction.tenderedCash.map(denominationLabel).join(" + ")}）` : "（旧版未记录面额）"} · 找零 ${money(transaction.changePence)}${transaction.changePence === 0
         ? "（无需找零）" : transaction.changeCashRecorded
-          ? `（${transaction.changeCash.map(denominationLabel).join(" + ")}）` : "（旧版未记录面额）"} · 本单入账 ${money(transaction.amountPence)}`
+          ? `（${transaction.changeCash.map(denominationLabel).join(" + ")}）` : "（旧版未记录面额）"} · ${refund ? `原成交 ${money(transaction.amountPence)} · 已退 ${money(refund.amountPence)} · 本单净额 ${money(transaction.amountPence - refund.amountPence)}` : `本单入账 ${money(transaction.amountPence)}`}`
       : "");
     this.el("s3-receipt-items").hidden = !atCheckout && !showPaid;
     const receiptItems = transaction && showPaid
@@ -1670,7 +1697,7 @@ export class App3D {
     const cash = this.state.payment?.method === "cash" ? this.state.payment : null;
     this.el("s3-open-cash").hidden = !atCheckout || !allScanned || !cash;
     this.text("s3-open-cash", cash?.received ? "继续找零 · E" : "打开现金收银台 · E");
-    this.text("s3-receipt-help", showPaid ? "金额已入账，不会重复收费。可在营业账本中查看今天的收支。" : shopping ? `${shoppingProduct ? `顾客正在找 ${PRODUCTS[shoppingProduct].nameEn} / ${PRODUCTS[shoppingProduct].nameZh}。` : "顾客选好商品，正在走向收银台。"}R 可重听；Tab 释放鼠标。` : allScanned
+    this.text("s3-receipt-help", showPaid ? refund ? `已按原${transaction!.paymentMethod === "cash" ? "现金" : "刷卡"}渠道退还 ${money(refund.amountPence)}，本单净额 ${money(total - refund.amountPence)}。商品已退回库存，原小票留作记录，不会再次退款。` : "金额已入账，不会重复收费。可在营业账本中查看今天的收支。" : shopping ? `${shoppingProduct ? `顾客正在找 ${PRODUCTS[shoppingProduct].nameEn} / ${PRODUCTS[shoppingProduct].nameZh}。` : "顾客选好商品，正在走向收银台。"}R 可重听；Tab 释放鼠标。` : allScanned
       ? cash ? `${cash.received ? `已暂收 ${money(cash.tenderedPence)}，本单尚未入账。` : `本单 ${receiptItems.length} 件商品全部已扫描。`}看向身边的收银台按 E ${cash.received ? "继续找零" : "收下现金并找零"}。`
         : `本单 ${receiptItems.length} 件商品全部已扫描。靠近收银台按 E 启用刷卡机。`
       : `本单 ${receiptItems.length} 件商品，请在收银台内侧按 E 逐件扫描。鼠标已释放，可点击重听。`);
@@ -2121,6 +2148,7 @@ export class App3D {
       return;
     }
     this.state = fresh;
+    this.cashManagement.resetDrafts();
     this.layoutEditor.setState(fresh.renovation.layout, { editable: false, resetDraft: true });
     this.cancelLayoutExit(false);
     this.purchaseQuantities.clear();
@@ -2170,6 +2198,7 @@ export class App3D {
     this.layoutEditor.dispose();
     this.developmentPanel.dispose();
     this.equipmentStore.dispose();
+    this.cashManagement.dispose();
     this.releasePointer();
     this.world?.dispose();
     this.world = null;

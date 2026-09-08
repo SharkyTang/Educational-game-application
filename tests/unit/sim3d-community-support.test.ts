@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { asV13CashSnapshot } from "../helpers/sim3dLegacyCash";
 import {
   createFirstDayState, getDaySummary, migrateV10SimState, reduceSim,
   validateSimState, validateV10SimState, type SimCommand, type SimState, type SimStateV10,
@@ -44,7 +45,7 @@ function asV10(state: SimState): SimStateV10 {
     transactions,
     settlements,
     ...base
-  } = structuredClone(state);
+  } = asV13CashSnapshot(state);
   if (_support.length) throw new Error("v10 fixtures cannot contain community support");
   const { layout, secondExpansionDay: _secondExpansionDay, ...renovationRecord } = renovation;
   const { equipment: _placements, ...legacyLayout } = layout;
@@ -144,10 +145,10 @@ describe("community cash-support ledger introduced in v11", () => {
   });
 });
 
-describe("read-only v10 to current v13 migration", () => {
+describe("read-only v10 to current v14 migration", () => {
   it("uses a new key, retains the writer lock and migrates v10 without changing cash or the old source", () => {
-    expect(SIM_STORAGE_KEY).toBe("english-high-street:sim3d:v13");
-    expect(SIM_BACKUP_KEY).toBe("english-high-street:sim3d:v13:backup");
+    expect(SIM_STORAGE_KEY).toBe("english-high-street:sim3d:v14");
+    expect(SIM_BACKUP_KEY).toBe("english-high-street:sim3d:v14:backup");
     expect(SIM_V10_STORAGE_KEY).toBe("english-high-street:sim3d:v10");
     expect(SIM_V10_BACKUP_KEY).toBe("english-high-street:sim3d:v10:backup");
     expect(SIM_WRITER_LOCK).toBe("english-high-street:sim3d:v4:writer");
@@ -157,7 +158,7 @@ describe("read-only v10 to current v13 migration", () => {
     storage.data.set(SIM_V10_STORAGE_KEY, raw);
     const loaded = loadSimState(storage);
     expect(loaded.source).toBe("v10");
-    expect(loaded.state).toMatchObject({ schemaVersion: 13, cashPence: old.cashPence, streetSupportRecords: [],
+    expect(loaded.state).toMatchObject({ schemaVersion: 14, cashPence: old.cashPence, streetSupportRecords: [],
       customer: { ...old.customer, contentVersion: 1 } });
     expect(loaded.state.settlements).toEqual([]);
     expect(storage.getItem(SIM_V10_STORAGE_KEY)).toBe(raw);
@@ -209,14 +210,14 @@ describe("read-only v10 to current v13 migration", () => {
   it("uses a valid v10 backup before older schemas and detects a v10 writer changing the migration source", async () => {
     const old = asV10(createFirstDayState()); const raw = JSON.stringify(old);
     const storage = new MemoryStorage();
-    storage.data.set(SIM_STORAGE_KEY, "{broken-v13");
+    storage.data.set(SIM_STORAGE_KEY, "{broken-v14");
     storage.data.set(SIM_BACKUP_KEY, "null");
     storage.data.set(SIM_V10_STORAGE_KEY, "{broken-v10");
     storage.data.set(SIM_V10_BACKUP_KEY, raw);
     storage.data.set("english-high-street:sim3d:v9", "retained older source");
     const before = [...storage.data];
     const restored = loadSimState(storage);
-    expect(restored).toMatchObject({ source: "v10-backup", state: { schemaVersion: 13, cashPence: old.cashPence } });
+    expect(restored).toMatchObject({ source: "v10-backup", state: { schemaVersion: 14, cashPence: old.cashPence } });
     expect(restored.warning).toContain("当前设备、有限钱箱或社区存档不可恢复");
     expect([...storage.data]).toEqual(before);
 

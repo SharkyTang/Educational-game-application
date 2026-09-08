@@ -184,7 +184,8 @@ describe("saved customer variety and scene-specific shuffle bags", () => {
 
   it.each([4, 5])("accepts original v%i saves without inventing cash, stock, or a new random choice on load", (schemaVersion) => {
     const current = createFirstDayState();
-    const { payment: _payment, recyclingBatches: _batches, recyclingRecords: _records, day, ...previous } = structuredClone(current);
+    const { payment: _payment, recyclingBatches: _batches, recyclingRecords: _records,
+      cashJournal: _cashJournal, cashReservePence: _cashReservePence, day, ...previous } = structuredClone(current);
     const old = {
       ...previous, schemaVersion,
       customer: { phase: current.customer.phase, number: current.customer.number },

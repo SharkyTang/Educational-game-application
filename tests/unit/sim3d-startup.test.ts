@@ -156,6 +156,7 @@ class ElementDouble extends EventTarget {
       ?? null;
   }
   querySelectorAll(): ElementDouble[] { return [] }
+  replaceChildren(): void { this.innerHTML = "" }
   setAttribute(name: string, value: string): void { this.attributes.set(name, value) }
   getAttribute(name: string): string | null { return this.attributes.get(name) ?? null }
   click(): void { if (!this.disabled) this.dispatchEvent(new Event("click")) }
@@ -1787,6 +1788,59 @@ function cashCheckoutState(scanned = true): SimState {
 function counterTarget(distance = 1): InteractionTarget {
   return { id: "counter", kind: "counter", label: "收银台", action: "现金收款", inspectable: false, distance };
 }
+
+describe("durable cash management app wiring", () => {
+  it("retains the float draft and world until a failed save can be retried successfully", async () => {
+    const view = await readyGame();
+    view.element("s3-open-day").click();
+    view.element("s3-tab-cash").click();
+    const control = (suffix: string) => view.root.querySelector(`#s3-cash-management-${suffix}`)!;
+    const before = savedState();
+    control("float-200").value = "4";
+    control("float-200").dispatchEvent(new Event("input"));
+    const failure = vi.spyOn(storage, "setItem").mockImplementation(() => { throw new Error("QuotaExceededError") });
+    control("float-save").click();
+    expect(savedState()).toEqual(before);
+    expect(control("float-200").value).toBe("4");
+    expect(control("drawer").textContent).toBe("£31.60");
+    expect(control("reserve").textContent).toBe("£0.00");
+    expect(control("notice").textContent).toContain("尚未更改");
+    failure.mockRestore();
+    control("float-save").click();
+    expect(savedState().cashJournal).toHaveLength(1);
+    expect(savedState().cashReservePence).toBe(200);
+    expect(savedState().cashPence).toBe(before.cashPence);
+    expect(control("drawer").textContent).toBe("£29.60");
+  });
+
+  it("refunds only after durable save and updates the retained receipt without replaying payment audio", async () => {
+    const state = act(paidSnapshot(), { type: "CUSTOMER_ADVANCE" });
+    const view = await readyGame(state);
+    view.element("s3-open-day").click();
+    view.element("s3-tab-cash").click();
+    const control = (suffix: string) => view.root.querySelector(`#s3-cash-management-${suffix}`)!;
+    const before = savedState();
+    const transaction = before.transactions.at(-1)!;
+    control(`refund-${transaction.id}`).click();
+    expect(control("refund-confirm").hidden).toBe(false);
+    view.shopAudio.playEffect.mockClear();
+    const failure = vi.spyOn(storage, "setItem").mockImplementation(() => { throw new Error("QuotaExceededError") });
+    control("refund-confirm-button").click();
+    expect(savedState()).toEqual(before);
+    expect(control("refund-confirm").hidden).toBe(false);
+    expect(view.element("s3-receipt-title").textContent).toBe("本单已收款");
+    failure.mockRestore();
+    control("refund-confirm-button").click();
+    expect(savedState().cashJournal).toHaveLength(1);
+    expect(savedState().cashPence).toBe(before.cashPence - transaction.amountPence);
+    expect(savedState().transactions).toEqual(before.transactions);
+    expect(control("refund-confirm").hidden).toBe(true);
+    expect(view.element("s3-receipt-title").textContent).toContain("退款");
+    expect(view.shopAudio.playEffect).not.toHaveBeenCalled();
+    control("refund-confirm-button").dispatchEvent(new Event("click"));
+    expect(savedState().cashJournal).toHaveLength(1);
+  });
+});
 
 describe("cash checkout app wiring and recoverable interaction", () => {
   it("requires both scans and a nearby counter, then commits one cash sale and one payment sound", async () => {

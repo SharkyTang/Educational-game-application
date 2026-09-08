@@ -1,5 +1,6 @@
 import { createDefaultCashDrawer } from "../../src/sim3d/cashDrawer";
 import { describe, expect, it } from "vitest";
+import { asV13CashSnapshot } from "../helpers/sim3dLegacyCash";
 import { payScannedCheckout, preCashTransactions } from "../helpers/sim3dPayment";
 import {
   RECYCLING_REWARD_PENCE, createFirstDayState, getDaySummary, getDeliverySummary, getRecyclingSummary,
@@ -78,7 +79,7 @@ function v6Snapshot(state = heldEmptyCrate()): SimStateV6 {
     customer,
     settlements,
     ...previous
-  } = structuredClone(state);
+  } = asV13CashSnapshot(state);
   const { contentVersion: _contentVersion, ...oldCustomer } = customer;
   return {
     ...previous, schemaVersion: 6,
@@ -128,7 +129,8 @@ describe("read-only v6 migration into the recycling ledger", () => {
     expect(loaded.source).toBe("v6");
     expect(loaded.warning).toContain("不会额外发钱");
     expect(loaded.state).toEqual({
-      ...old, schemaVersion: 13, renovation: createFirstDayState().renovation, payment: null, recyclingRecords: [], streetSupportRecords: [],
+      ...old, schemaVersion: 14, renovation: createFirstDayState().renovation, payment: null, recyclingRecords: [], streetSupportRecords: [],
+      cashReservePence: 0, cashJournal: [],
       cashDrawer: createDefaultCashDrawer(), cashDrawerOpening: createDefaultCashDrawer(), cashDrawerTransactionStart: 0,
       customer: { ...old.customer, contentVersion: 1 },
       day: { ...old.day, targetCustomers: null, elapsedOpenMs: 0, nextCustomerAtMs: null, closeReason: null },
@@ -172,6 +174,7 @@ describe("read-only v6 migration into the recycling ledger", () => {
     expect(restored.settlements).toEqual(old.settlements.map((record) => ({
       ...record, recycledCrates: 0, recyclingIncomePence: 0, expansionSpendPence: 0,
       communitySupportCount: 0, communityCashPence: 0,
+      refundCount: 0, refundPence: 0, netRevenuePence: record.revenuePence,
     })));
     expect(reduceSim(restored, { type: "SETTLE_DAY" }).state).toBe(restored);
     const recycled = act(restored, { type: "RECYCLE_CRATE" });

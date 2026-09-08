@@ -64,10 +64,10 @@ function movedMilk(state: SimState, rotation: 1 | 3 = 1): ShopLayout {
   return layout;
 }
 
-describe("v13 staged shop expansion as a separate audited investment", () => {
+describe("v14 staged shop expansion as a separate audited investment", () => {
   it("starts with the same capital and stock, with no purchased floor or layout achievement", () => {
     const state = createFirstDayState();
-    expect(state.schemaVersion).toBe(13);
+    expect(state.schemaVersion).toBe(14);
     expect(state.cashPence).toBe(1200);
     expect(state.items).toEqual([]);
     expect(state.renovation).toMatchObject(createInitialRenovation());

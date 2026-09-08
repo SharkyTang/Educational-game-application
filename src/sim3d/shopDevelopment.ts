@@ -97,7 +97,8 @@ export function getShopExpansionOffer(state: RenovationContext & { cashPence: nu
 
 interface AchievementContext {
   transactions: readonly unknown[];
-  settlements: readonly { paidCustomers: number }[];
+  settlements: readonly { paidCustomers: number; refundCount?: number }[];
+  cashJournal?: readonly { kind: string }[];
   items: readonly { productId: ProductAssetId; location: { kind: string } }[];
   upgraded: boolean;
   recyclingRecords: readonly unknown[];
@@ -116,11 +117,12 @@ export interface ShopAchievement {
 /** Badges are derived from saved actions. They neither mint cash nor assert English mastery. */
 export function getShopAchievements(state: AchievementContext): ShopAchievement[] {
   const soldKinds = new Set(state.items.filter((item) => item.location.kind === "sold").map((item) => item.productId)).size;
+  const paidOrders = state.transactions.length - (state.cashJournal?.filter((event) => event.kind === "refund").length ?? 0);
   const entries: Array<Omit<ShopAchievement, "completed">> = [
-    { id: "first-sale", name: "开张大吉", description: "完成第一笔真实收款", category: "经营", current: state.transactions.length, target: 1 },
-    { id: "ten-sales", name: "渐入佳境", description: "累计完成 10 笔收款", category: "经营", current: state.transactions.length, target: 10 },
-    { id: "thirty-sales", name: "街坊小店", description: "累计完成 30 笔收款", category: "经营", current: state.transactions.length, target: 30 },
-    { id: "first-day", name: "完整的一天", description: "完成至少有一笔收款的营业日结", category: "经营", current: state.settlements.filter((day) => day.paidCustomers > 0).length, target: 1 },
+    { id: "first-sale", name: "开张大吉", description: "完成第一笔真实收款", category: "经营", current: paidOrders, target: 1 },
+    { id: "ten-sales", name: "渐入佳境", description: "累计完成 10 笔收款", category: "经营", current: paidOrders, target: 10 },
+    { id: "thirty-sales", name: "街坊小店", description: "累计完成 30 笔收款", category: "经营", current: paidOrders, target: 30 },
+    { id: "first-day", name: "完整的一天", description: "完成至少有一笔收款的营业日结", category: "经营", current: state.settlements.filter((day) => day.paidCustomers > (day.refundCount ?? 0)).length, target: 1 },
     { id: "five-products", name: "丰富货架", description: "实际售出 5 种不同商品", category: "经营", current: soldKinds, target: 5 },
     { id: "shelf-capacity", name: "多一层空间", description: "购买原有的货架容量升级", category: "建设", current: Number(state.upgraded), target: 1 },
     { id: "first-extension", name: "小店长大了", description: "完成第一次实体店面扩建", category: "建设", current: state.renovation.layout.expansion, target: 1 },

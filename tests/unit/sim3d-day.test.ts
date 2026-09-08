@@ -75,7 +75,7 @@ describe("first-day paired purchasing and conserved goods", () => {
   it("opens with £12 capital, two empty reusable crates and no free merchandise", () => {
     const state = createFirstDayState();
     expect(validateSimState(state)).toBe(true);
-    expect(state.schemaVersion).toBe(13);
+    expect(state.schemaVersion).toBe(14);
     expect(state.cashPence).toBe(INITIAL_CAPITAL_PENCE);
     expect(state.items).toEqual([]);
     expect(state.crates).toHaveLength(2);
@@ -203,6 +203,7 @@ describe("a complete business day and continued operation", () => {
     expect(getDaySummary(state)).toEqual({
       dayNumber: 1, paidCustomers: 3, targetCustomers: null, openingCashPence: 1200,
       revenuePence: 1200, procurementPence: 690, costOfGoodsPence: 690, grossProfitPence: 510,
+      refundCount: 0, refundPence: 0, netRevenuePence: 1200,
       upgradeSpendPence: 0, expansionSpendPence: 0, equipmentSpendPence: 0,
       closingCashPence: 1710, remainingStockUnits: 0, remainingInventoryValuePence: 0,
       recycledCrates: 0, recyclingIncomePence: 0,

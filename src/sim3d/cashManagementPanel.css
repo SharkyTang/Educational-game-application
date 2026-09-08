@@ -1,0 +1,36 @@
+.s3-pause.s3-pause-cash { width: min(790px, calc(100vw - 32px)); }
+.s3-cash-management-heading h3 { margin: 5px 0 10px; }
+.s3-cash-management-heading h3:focus { outline: 2px solid #6b8f67; outline-offset: 5px; }
+.s3-cash-management-balances { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 9px; margin: 17px 0 10px; }
+.s3-cash-management-balances > div { padding: 12px; border: 1px solid #cdd9c1; border-radius: 8px; background: #eef3e6; }
+.s3-cash-management-balances dt { color: #56654e; font-size: 12px; }
+.s3-cash-management-balances dd { margin: 5px 0 0; color: #284b37; font-size: 22px; font-weight: 700; overflow-wrap: anywhere; }
+.s3-cash-management-card { margin-top: 22px; padding: 17px; border: 1px solid #d8dbc9; border-radius: 9px; background: #fffdf5; }
+.s3-cash-management-card h4 { margin: 0 0 10px; font-size: 16px; }
+.s3-cash-management-card h4 > span { display: inline-block; margin-left: 7px; color: #758267; font-size: 12px; font-weight: 400; }
+.s3-cash-management-counts { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 9px; margin: 15px 0; }
+.s3-cash-management-denomination { display: flex; min-width: 0; flex-direction: column; gap: 6px; }
+.s3-cash-management-denomination > span { color: #3b5340; font-weight: 650; }
+.s3-cash-management-denomination small { color: #73806a; font-size: 11px; font-weight: 400; }
+.s3-cash-management-denomination input { box-sizing: border-box; width: 100%; min-width: 0; min-height: 42px; padding: 8px; border: 1px solid #b9c5ad; border-radius: 5px; color: #2f4432; background: #fff; font: inherit; }
+.s3-cash-management-denomination input:disabled, .s3-cash-management-note textarea:disabled { color: #707666; background: #f1f1e8; }
+.s3-cash-management-preview { margin: 12px 0; color: #31523a; line-height: 1.7; font-weight: 600; overflow-wrap: anywhere; }
+.s3-cash-management-transaction { padding: 13px 0; border-bottom: 1px solid #e2e4d6; }
+.s3-cash-management-transaction > div:first-child { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 8px; }
+.s3-cash-management-transaction > div:first-child span { color: #6d7863; font-size: 12px; }
+.s3-cash-management-transaction:last-child { border-bottom: 0; }
+.s3-cash-management-note { display: flex; flex-direction: column; gap: 7px; color: #3b5340; font-size: 13px; }
+.s3-cash-management-note > span { color: #74806a; font-size: 12px; }
+.s3-cash-management-note textarea { box-sizing: border-box; width: 100%; min-height: 78px; padding: 10px; border: 1px solid #b9c5ad; border-radius: 5px; font: inherit; resize: vertical; }
+.s3-cash-management-history article { margin-top: 10px; padding: 11px; border-left: 3px solid #a7bd96; background: #f0f4e9; overflow-wrap: anywhere; }
+.s3-cash-management-history h5 { margin: 20px 0 8px; font-size: 13px; }
+.s3-cash-management-history p { margin: 5px 0 0; color: #64705b; font-size: 12px; line-height: 1.6; }
+@media (max-width: 540px) {
+  .s3-pause.s3-pause-cash { width: calc(100vw - 24px); }
+  .s3-cash-management-card { padding: 13px; }
+  .s3-cash-management-balances { grid-template-columns: 1fr; gap: 6px; }
+  .s3-cash-management-balances > div { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+  .s3-cash-management-balances dd { margin: 0; font-size: 18px; }
+  .s3-cash-management-counts { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .s3-cash-management-card .s3-management-buttons > button { flex: 1 1 100%; }
+}

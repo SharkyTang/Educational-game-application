@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { asV13CashSnapshot } from "../helpers/sim3dLegacyCash";
 import {
   canSettleDay, canStartCustomer, createFirstDayState, getCheckoutTotal, getDaySummary, getDeliverySummary,
   migrateV8SimState, reduceSim, validateSimState, validateV8SimState,
@@ -99,7 +100,7 @@ function v8Snapshot(state: SimState): SimStateV8 {
     settlements,
     day: currentDay,
     ...current
-  } = structuredClone(state);
+  } = asV13CashSnapshot(state);
   const { contentVersion: _contentVersion, ...oldCustomer } = customer;
   const oldPayment: SimStateV8["payment"] = payment?.method === "cash"
     ? { method: "cash", tenderedPence: payment.tenderedPence, received: payment.received, selectedChange: [...payment.selectedChange] }
@@ -134,7 +135,7 @@ function v8Snapshot(state: SimState): SimStateV8 {
 describe("v9 active-time days and a lightweight clock path", () => {
   it("starts preparation at 08:30 with no customer-count target or running timer", () => {
     const state = createFirstDayState();
-    expect(state.schemaVersion).toBe(13);
+    expect(state.schemaVersion).toBe(14);
     expect(state.day).toMatchObject({ phase: "preparing", elapsedOpenMs: 0, nextCustomerAtMs: null, closeReason: null, targetCustomers: null });
     expect(getBusinessClock(state.day).timeLabel).toBe("08:30");
     expect(getDaySummary(state).targetCustomers).toBeNull();
@@ -352,7 +353,7 @@ describe("strict v8 migration and persisted business time", () => {
     state = act(state, { type: "ADVANCE_BUSINESS_TIME", elapsedMs: 2345.75 });
     const storage = new MemoryStorage();
     saveSimState(state, storage);
-    expect(SIM_STORAGE_KEY).toBe("english-high-street:sim3d:v13");
+    expect(SIM_STORAGE_KEY).toBe("english-high-street:sim3d:v14");
     expect(SIM_WRITER_LOCK).toBe("english-high-street:sim3d:v4:writer");
     expect(loadSimState(storage)).toEqual({ source: "primary", state });
     expect(parseImportedSimState(JSON.stringify(state))).toEqual(state);
@@ -416,6 +417,7 @@ describe("strict v8 migration and persisted business time", () => {
     expect(state.day).toMatchObject({ phase: "settled", closeReason: "legacy", elapsedOpenMs: 0, targetCustomers: null });
     expect(state.settlements).toEqual(old.settlements.map((record) => ({
       ...record, expansionSpendPence: 0, communitySupportCount: 0, communityCashPence: 0,
+      refundCount: 0, refundPence: 0, netRevenuePence: record.revenuePence,
     })));
     expect(getDaySummary(state).targetCustomers).toBeNull();
     rejected(state, { type: "SETTLE_DAY" });
@@ -454,7 +456,7 @@ describe("strict v8 migration and persisted business time", () => {
   it("prefers current backup, then v8 backup, and preserves every old source while warning about missing clocks", () => {
     const old = v8Snapshot(serve(stocked(2)));
     const storage = new MemoryStorage();
-    storage.setItem(SIM_STORAGE_KEY, "{corrupt-v13");
+    storage.setItem(SIM_STORAGE_KEY, "{corrupt-v14");
     storage.setItem(SIM_V8_STORAGE_KEY, "{corrupt-v8");
     storage.setItem(SIM_V8_BACKUP_KEY, JSON.stringify(old, null, 2));
     const before = [...storage.values];
